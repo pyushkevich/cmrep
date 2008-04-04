@@ -1,0 +1,1 @@
+BoundaryJacobianDistortionPenaltyTerm.ReferenceModel = @CMREP_SOURCE_DIR@/testing/t001_template_brute.cmrep

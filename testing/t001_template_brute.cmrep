@@ -1,0 +1,7 @@
+Grid.Model.Atom.SubdivisionLevel = 2
+Grid.Model.Coefficient.FileName = t001_template_brute.vtk
+Grid.Model.Coefficient.FileType = VTK
+Grid.Model.SolverType = BruteForce
+Grid.Model.Coefficient.ConstantRadius.Inside = 2.0
+Grid.Model.Coefficient.ConstantRadius.Boundary = 1.8
+Grid.Type = LoopSubdivision
