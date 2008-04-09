@@ -20,7 +20,7 @@ BruteForceSubdivisionMedialModel
   SubdivisionMedialModel::SetMesh(mesh, C, u, v, nAtomSubs, nCoeffSubs);
 
   // Pass the mesh to the loop scheme
-  xLoopScheme.SetMeshLevel(&mlAtom);
+  xLoopScheme.SetMesh(&mlAtom);
 
   // Compute the sparse matrix that gives u and v derivatives of 
   // functions/vectors over the mesh. These are going to be derivatives
@@ -100,9 +100,15 @@ BruteForceSubdivisionMedialModel
     for( ; !it.IsAtEnd(); ++it)
       {
       size_t j = it.Column() << 2; double w = it.Value();
-      a.X += w * xCoefficients.extract(3, j);
-      a.R += w * xCoefficients[j+3];
+      a.X[0] += w * xCoefficients[j];
+      a.X[1] += w * xCoefficients[j+1];
+      a.X[2] += w * xCoefficients[j+2];
+      a.R    += w * xCoefficients[j+3];
       }
+
+    // Negative R should be disallowed
+    if(a.R < 0.0)
+      throw MedialModelException("Negative R in BruteForceModel");
 
     // Set F = R^2
     a.F = a.R * a.R;
@@ -158,6 +164,9 @@ BruteForceSubdivisionMedialModel
     a.ComputeNormalVector();
     a.ComputeBoundaryAtoms(!mlAtom.IsVertexInternal(i));
 
+    if(!a.flagValid)
+      throw MedialModelException("Invalid Atom in BruteForceModel");
+
     // Turned off since we are not using this anywhere
     // a.ComputeBoundaryCurvature();
     }
@@ -205,21 +214,26 @@ BruteForceSubdivisionMedialModel
         !it.IsAtEnd(); ++it)
         {
         // Get the index of the neighbor in the variation
-        size_t j = it.Column() << 2; 
+        size_t j = it.Column() << 2; double w = it.Value();
 
-        // Get the neighbor's X and R combined, scale by the neighbor's weight
-        SMLVec4d XR = it.Value() * xVariation.extract(4,j);
+        // Get the corresponding coefficients
+        double x0 = xVariation[j];
+        double x1 = xVariation[j+1];
+        double x2 = xVariation[j+2];
+        double r  = xVariation[j+3];
 
         // Check if there is any contribution from the variation to atom i
-        if(XR.squared_magnitude() > 0.0)
+        if(x0 != 0.0 || x1 != 0.0 || x2 != 0.0 || r != 0.0)
           {
           // Set the atom's order to 0 (it's set to 3 by default)
           vTerms[i].order = 0;
           nc++;
           }
 
-        vTerms[i].X += XR.extract(3);
-        vTerms[i].R += XR[3];
+        vTerms[i].X[0] += w * x0;
+        vTerms[i].X[1] += w * x1;
+        vTerms[i].X[2] += w * x2;
+        vTerms[i].R    += w * r;
         }
       }
 

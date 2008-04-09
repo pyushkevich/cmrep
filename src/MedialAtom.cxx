@@ -70,7 +70,7 @@ bool MedialAtom::ComputeBoundaryAtoms(bool flagEdgeAtom)
   SMLVec3d xGradPhi = Xu * Cu + Xv * Cv;
 
   // Compute the radius of the atom
-  R = sqrt(F);
+  // R = sqrt(F);
 
   // Compute the Riemannian gradient of R
   xGradR = 0.5 * xGradPhi / R;

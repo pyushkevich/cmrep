@@ -4,6 +4,7 @@
 #include "CartesianMedialModel.h"
 #include "OptimizationTerms.h"
 #include "DiffeomorphicEnergyTerm.h"
+#include "JacobianDistortionPenaltyTerm.h"
 #include "CoefficientMapping.h"
 #include "MedialAtomGrid.h"
 #include "PrincipalComponents.h"
@@ -24,7 +25,7 @@
 using namespace std;
 using namespace medialpde;
 
-void TestTetGen(GenericMedialModel *model);
+// void TestTetGen(GenericMedialModel *model);
 
 string dirWork = "/home/pauly/data2005/Stanley/data/";
 // string dirWork = "/mnt/data2/PUBLIC/Data/Input/StanleySchizophrenia/";
@@ -67,7 +68,7 @@ public:
     {
     double z = (x - C).two_norm();
     double u = ( R - z ) / sigma;
-    double a = 2.0 * exp(-u * u) / sqrt(M_PI);
+    double a = 2.0 * exp(-u * u) / sqrt(vnl_math::pi);
     
     g[0] = a * (- (x[0] - C[0]) / z) / sigma;
     g[1] = a * (- (x[1] - C[1]) / z) / sigma;
@@ -78,7 +79,7 @@ public:
   double IntegratePositiveVoxels()
     {
     // This is a hack!
-    return 4.0 * M_PI * R * R * R / 3.0;
+    return 4.0 * vnl_math::pi * R * R * R / 3.0;
     }
 
 private:
@@ -108,7 +109,7 @@ void ExportBoundaryMeshToVTK(
 int TestVolumeComputation(const char *file)
 {
   // The number of cuts at which to test
-  size_t i,j,k,nCuts = 5;
+  size_t i,nCuts = 5;
  
   // Success code
   bool flagSuccess = true;
@@ -746,7 +747,7 @@ struct TermInfo
     }
 };
 
-int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *fnRefMPDE = NULL)
+int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *params = NULL)
 {
   // Return Code
   int iReturn = 0;
@@ -783,30 +784,35 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *fn
     rad[i] = model->GetAtomArray()[i].R * randy.drand32(0.9, 1.1);
     }
 
-  // If the reference model is supplied, load it
-  MedialPDE *ref = NULL;
-  if(fnRefMPDE)
-    ref = new MedialPDE(fnRefMPDE);
+  // If the parameter file is supplied, it will be used to initialize 
+  // all of the terms
+  OptimizationParameters opar;
+  if(params)
+    {
+    Registry reg(params);    
+    opar.ReadFromRegistry(reg);
+    }
 
   // Create an array of image match terms
   vector<TermInfo> vt;
-  if(ref)
+
+  // Create the new jacobian distortion term
+  if(params)
     {
-    vector<GenericMedialModel *> refvec;
-    refvec.push_back(ref->GetMedialModel());
-    vt.push_back(TermInfo(
-        "", new LocalDistanceDifferenceEnergyTerm(model, refvec), 0.1));
+    EnergyTerm *tjac = new BoundaryJacobianDistortionPenaltyTerm(model);
+    tjac->SetParameters(opar.xTermParameters[OptimizationParameters::BND_JACOBIAN_DISTORTION]);
+    vt.push_back(TermInfo("", tjac, 0.1));
     }
+
+  // Push the other terms
   vt.push_back(TermInfo(
-      "", new DiffeomorphicEnergyTerm(model), 0.1));
+      "", new BoundaryCurvaturePenalty(model), 0.1));
   vt.push_back(TermInfo(
       "", new RadiusPenaltyTerm(0.01, 4, 100, 10), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryImageMatchTerm(model, img), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryJacobianEnergyTerm(), 1.0e-4));
-  vt.push_back(TermInfo(
-      "", new BoundaryCurvaturePenalty(model), 0.1));
   vt.push_back(TermInfo(
       "", new MedialCurvaturePenalty(), 0.1));
   vt.push_back(TermInfo(
@@ -825,6 +831,8 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *fn
       "", new MedialRegularityTerm(model), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryGradRPenaltyTerm(), 0.1));
+  vt.push_back(TermInfo(
+      "", new DiffeomorphicEnergyTerm(model), 0.1));
 
   // Create an array of masks
   vector<CoefficientMapping *> vm;
@@ -850,10 +858,13 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *fn
     // Set up the test
     // MedialOptimizationProblem mop(model, vm[j]);
     MedialOptimizationProblem mop(mp1.GetMedialModel(), vm[j]);
+    mop.QuietOn();
     mop.AddEnergyTerm(vt[i].et, 1.0);
     iReturn += TestOptimizerGradientComputation(
       mop, *vm[j], mp1.GetMedialModel(), vt[i].step, vt[i].et->GetShortName().c_str(), nm[j]);
     // iReturn += TestOptimizerGradientComputation(mop, *vm[j], model, stepsize[i]);
+
+    cout << flush;
     }
 
   // Delete both pointers
@@ -1108,25 +1119,33 @@ int main(int argc, char *argv[])
     return TestDerivativesNoImage(argv[2]);
   else if(0 == strcmp(argv[1], "DERIV2") && argc > 2)
     {
+    // Try loading the image
     FloatImage *image = NULL;
-    if(argc > 4)
+    if(argc > 3) 
       {
       try
         {
+        BinaryImage ibin;
+        ibin.LoadFromFile(argv[3]);
         image = new FloatImage();
-        image->LoadFromPath(argv[3], argv[4]);
+        cout << "Smoothing image... " << flush;
+        image->SetToBlurredBinary(&ibin, 1.2);
+        cout << "done." << endl;
+        image->SetOutsideValue(-1.0);      
         }
       catch(...)
         {
+        cerr << string("Unable to read image ") + argv[3];
         image = NULL;
-        cerr << "Couldn't load image; proceeding without" << endl;
         }
       }
-    const char *refmod = NULL;
-    if(argc > 5)
-      refmod = argv[5];
 
-    return TestDerivativesWithImage(argv[2],image,refmod);
+    // Get the parameter file
+    const char *fnparam = NULL;
+    if(argc > 4)
+      fnparam = argv[4];
+
+    return TestDerivativesWithImage(argv[2],image,fnparam);
     }
   else if(0 == strcmp(argv[1], "DERIV3") && argc > 2)
     return TestBasisFunctionVariation(argv[2]);
@@ -1151,11 +1170,13 @@ int main(int argc, char *argv[])
       }
     return TestSmoothedImageSampler(argv[2]);
     }
+  /*
   else if(0 == strcmp(argv[1], "TETGEN"))
     {
     MedialPDE mp(argv[2]);
     TestTetGen(mp.GetMedialModel());
     }
+  */
 
   else 
     return usage();

@@ -31,6 +31,7 @@ OptimizationParameters
   xPenaltyTermRegMap.AddPair(CROSS_CORRELATION, "CrossCorrelation");
   xPenaltyTermRegMap.AddPair(LOCAL_DISTANCE, "LocalDistancePenaltyTerm");
   xPenaltyTermRegMap.AddPair(DIFFEOMORPHIC, "DiffeomorphicPenaltyTerm");
+  xPenaltyTermRegMap.AddPair(BND_JACOBIAN_DISTORTION, "BoundaryJacobianDistortionPenaltyTerm");
 
   xCTFSettingsRegMap.AddPair(COSINE_BASIS_PDE, "CosineBasisPDE");
   xCTFSettingsRegMap.AddPair(LOOP_SUBDIVISION_PDE, "LoopSubdivisionPDE");
@@ -48,6 +49,7 @@ OptimizationParameters
   xTermDefaultWeights[CROSS_CORRELATION] = 0.0;
   xTermDefaultWeights[LOCAL_DISTANCE] = 0.0;
   xTermDefaultWeights[DIFFEOMORPHIC] = 0.0;
+  xTermDefaultWeights[BND_JACOBIAN_DISTORTION] = 0.0;
 
   // Clear the settings pointer
   xCTFSettings = NULL;
@@ -74,7 +76,7 @@ OptimizationParameters
   xMapping = R["Mapping"].GetEnum(xMappingRegMap, IDENTITY);
 
   // Read the parameters of different methods
-  for(size_t i = 0; i < NTERMS; i++)
+  for(size_t i = 0; i < N_PENALTY_TERMS; i++)
     {
     // The current penalty term
     PenaltyTerm pt = static_cast<PenaltyTerm>(BOUNDARY_JACOBIAN + i);

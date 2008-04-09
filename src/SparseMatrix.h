@@ -14,8 +14,20 @@
 #include <vector>
 #include <stdexcept>
 
+class AbstractImmutableSparseArray
+{
+public:
+  virtual size_t *GetRowIndex() = 0;
+  virtual size_t *GetColIndex() = 0;
+  virtual const size_t *GetRowIndex() const = 0;
+  virtual const size_t *GetColIndex() const = 0;
+  virtual size_t GetNumberOfColumns() const = 0;
+  virtual size_t GetNumberOfRows() const = 0;
+  virtual size_t GetNumberOfSparseValues() const = 0;
+};
+
 template<class TVal>
-class ImmutableSparseArray
+class ImmutableSparseArray : public AbstractImmutableSparseArray
 {
 public:
   // Typedefs
@@ -45,6 +57,23 @@ public:
   // relinquish the control of the pointers to the sparse matrix, which will
   // delete the data at some point
   void SetArrays(size_t rows, size_t cols, size_t *xRowIndex, size_t *xColIndex, TVal *data);
+
+  // Assignment that uses another such array as a reference. The other array can
+  // have a different data type, pass in the default to initialize the data values
+  void SetFromReference(const AbstractImmutableSparseArray &ref, const TVal &defval)
+    {
+    // Create a copy of the row index
+    size_t nr = ref.GetNumberOfRows();
+    size_t nc = ref.GetNumberOfColumns();
+    size_t nv = ref.GetNumberOfSparseValues();
+    size_t *xRowIndex = new size_t[nr + 1];
+    size_t *xColIndex = new size_t[nv];
+    TVal *data = new TVal[nv];
+    std::copy(ref.GetRowIndex(), ref.GetRowIndex()+nr+1, xRowIndex);
+    std::copy(ref.GetColIndex(), ref.GetColIndex()+nv, xColIndex);
+    std::fill(data, data+nv, defval);
+    this->SetArrays(nr, nc, xRowIndex, xColIndex, data);
+    }
 
   // Pointers to the data stored inside the matrix
   size_t *GetRowIndex() { return xRowIndex; }

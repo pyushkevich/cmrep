@@ -305,7 +305,7 @@ int main(int argc, char *argv[])
         {
         cout << "Gaussian smoothing with sigma = " << stages[i].blur << endl;
         imgfloat.SetToBlurredBinary(&img, stages[i].blur);
-        imgfloat.SetOutsideValue(0.0);
+        imgfloat.SetOutsideValue(-1.0);
         }
 
       // Subdivide the model if necessary

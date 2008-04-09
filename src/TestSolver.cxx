@@ -44,15 +44,27 @@ public:
   void Update(const std::string &s, double dv, double v1, double v2, double eps)
     {
     double eabs = fabs(dv - (v1 - v2) * 0.5 / eps);
-    double erel = eabs / (fabs(0.5 * (v1 + v2)) + eps);
+    double rms = sqrt((dv * dv + ((v1 - v2) * 0.5 / eps) * ((v1 - v2) * 0.5 / eps)) / 2);
+    double erel = eabs / (rms + eps);
     this->Update(s, xAbsError, eabs); 
     this->Update(s, xRelError, erel); 
     }
 
   void Update(const std::string &s, SMLVec3d dv, SMLVec3d v1, SMLVec3d v2, double eps)
     {
+    // Absolute error
     double eabs = (dv - (v1 - v2) * 0.5 / eps).two_norm();
-    double erel = eabs / (0.5 * (v1 + v2).two_norm() + eps);
+
+    // Get the RMS of analytical and numerical gradients
+    double rms = 
+      sqrt((((v1 - v2) * 0.5 / eps).squared_magnitude() + dv.squared_magnitude()) / 6);
+
+    // Get the relative error
+    double erel = eabs / (rms + eps);
+    
+    // The way to compute e-rel below is wrong! comparing derivative
+    // to the function value
+    // double erel = eabs / (0.5 * (v1 + v2).two_norm() + eps);
     this->Update(s, xAbsError, eabs); 
     this->Update(s, xRelError, erel); 
     }
@@ -98,7 +110,7 @@ int TestGradientComputation(
   CodeTimer tCentral, tAnalytic, tInitialSolver;
   
   // The epsilon for central difference tests
-  double eps = 0.0001;
+  double master_eps = 0.0001;
 
   // The number of atoms in the solver
   size_t nAtoms = xSolver->GetNumberOfAtoms();
@@ -126,6 +138,17 @@ int TestGradientComputation(
   // The initial coefficient vector is C0
   vnl_vector<double> C0 = xSolver->GetCoefficientArray();
 
+  // Create mixed variations
+  for(size_t i = 0; i < nRandVar; i++)
+    {    
+    vnl_vector<double> dx(nParams);
+    for(size_t j = 0; j < nParams; j++)
+      dx[j] = rand() * 2.0 / RAND_MAX - 1.0;
+
+    xVariationNames.push_back(" Random Variation ");
+    xVariationalBasisPS.set_row(i, dx);
+   }
+
   // Create the per-component variations
   size_t iComp;
   for( iComp = 0; iComp < nParams; iComp++)
@@ -136,19 +159,9 @@ int TestGradientComputation(
     vnl_vector<double> xParamVariation(nParams, 0.0); xParamVariation[iComp] = 1.0;
     
     xVariationNames.push_back(oss.str());
-    xVariationalBasisPS.set_row(iComp, xParamVariation);
+    xVariationalBasisPS.set_row(nRandVar + iComp, xParamVariation);
     }
 
-  // Create mixed variations
-  for(size_t i = 0; i < nRandVar; i++)
-    {    
-    vnl_vector<double> dx(nParams);
-    for(size_t j = 0; j < nParams; j++)
-      dx[j] = rand() * 2.0 / RAND_MAX - 1.0;
-
-    xVariationNames.push_back(" Random Variation ");
-    xVariationalBasisPS.set_row(nParams + i, dx);
-   }
 
   // Compute the variations in coefficient space
   for(iVar = 0; iVar < nVar; iVar++)
@@ -206,15 +219,36 @@ int TestGradientComputation(
     // Get the current variation in parameter space
     vnl_vector<double> xVar = xVariationalBasisPS.get_row(iVar);
 
-    // Solve for the forward difference
-    xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + eps * xVar));
-    tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
-    std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A1);
+    // Too big of an epsilon can cause us to break the atoms, so we
+    // play to stay in legal range
+    double eps = master_eps;
 
-    // Solve for the backward difference
-    xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - eps * xVar));
-    tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
-    std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A2);
+    while(eps > 1.0e-9)
+      {
+      try 
+        {
+        // Solve for the forward difference
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + eps * xVar));
+        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A1);
+
+        // Solve for the backward difference
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - eps * xVar));
+        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A2);
+
+        // Exit loop 
+        break;
+        }
+      catch(MedialModelException &)
+        {
+        // Epsilon is too large
+        eps = 0.5 * eps;
+
+        // Print a message
+        cout << "Scaling eps to " << eps << endl;
+        }
+      }
 
     // Define an accumulator for all atom-wise errors
     DerivativeTestQuantities dtq;
@@ -239,6 +273,14 @@ int TestGradientComputation(
       dtq.Update("Atom's Fu", a0.Fu, a1.Fu, a2.Fu, eps);
       dtq.Update("Atom's Fv", a0.Fv, a1.Fv, a2.Fv, eps);
       dtq.Update("Atom's N", a0.N, a1.N, a2.N, eps);
+
+      if(fabs(a0.R - 0.5 * (a1.R - a2.R) / eps) > 0.01)
+        {
+        cerr << "Got a weird one!" << endl;
+        }
+
+
+
 
       // Look at the difference in the specific terms of metric tensor
       for(size_t u = 0; u < 2; u++) for(size_t v = 0; v < 2; v++)
@@ -331,6 +373,12 @@ int TestGradientComputation(
         GetBoundaryPoint(it, A1).N,
         GetBoundaryPoint(it, A2).N, eps);
 
+      double eN = (GetBoundaryPoint(it, dAtoms).N - 0.5 * (GetBoundaryPoint(it, A1).N - GetBoundaryPoint(it, A2).N) / eps).squared_magnitude();
+      if(eN > 1.0)
+        {
+        cerr << "Problem with node, bnd =  " << dAtoms[it.GetAtomIndex()].flagCrest << endl;
+        }
+
       dtq.Update("Boundary Mean Curv",
         GetBoundaryPoint(it, dAtoms).curv_mean,
         GetBoundaryPoint(it, A1).curv_mean,
@@ -341,10 +389,12 @@ int TestGradientComputation(
         GetBoundaryPoint(it, A1).curv_gauss,
         GetBoundaryPoint(it, A2).curv_gauss, eps);
 
+      /* UNCOMMENT LATER! 
       dtq.Update("Integration Weights",
         pdsd.xInteriorVolumeElement[it.GetIndex()],
         sd1.xInteriorVolumeElement[it.GetIndex()],
         sd2.xInteriorVolumeElement[it.GetIndex()], eps);
+      */
       }
 
     // Print the report
@@ -386,9 +436,9 @@ int TestGradientComputation(
 
   // Describe what happened
   if(flagPass)
-    cout << "TEST PASSED! (No error exceeds " << eps << ")" << endl;
+    cout << "TEST PASSED! (Relative errors < 1.0)" << endl;
   else
-    cout << "TEST FAILED! (Errors exceed " << eps << ")" << endl;
+    cout << "TEST FAILED! (Relative errors > 1.0)" << endl;
   cout << "========================================" << endl;
 
   // Return value
@@ -413,7 +463,7 @@ int TestOptimizerGradientComputation(
   // We do not want to only perform the test at P = 0 because that may not
   // detect problems for other P values. So instead, we can move along the
   // gradient a certain direction.
-  mop.ComputeGradient(P.data_block(), xGradient.data_block());
+  // mop.ComputeGradient(P.data_block(), xGradient.data_block());
   // cout << "GRADIENT AT 0 " << xGradient << endl;
   // P += xStepSize * xGradient;
 

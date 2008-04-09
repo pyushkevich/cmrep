@@ -12,6 +12,7 @@
 #include "PDESubdivisionMedialModel.h"
 #include "BruteForceSubdivisionMedialModel.h"
 #include "DiffeomorphicEnergyTerm.h"
+#include "JacobianDistortionPenaltyTerm.h"
 
 #include "itkImageRegionConstIteratorWithIndex.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
@@ -34,6 +35,9 @@
 #include <iostream>
 #include <algorithm>
 #include <fstream>
+
+#include "vtkPolyData.h"
+#include "vtkPolyDataWriter.h"
 
 // References to FORTRAN code
 extern "C" {
@@ -91,7 +95,6 @@ struct DiscreteAtom
 MedialPDE::MedialPDE()
 {
   // Set default values of attributes
-  xStepSize = 0.1;
   xMeshDumpImprovementPercentage = 0.0;
   flagIntensityPresent = false;
   xMedialModel = NULL;
@@ -100,7 +103,6 @@ MedialPDE::MedialPDE()
 MedialPDE::MedialPDE(const char *file)
 {
   // Set default values of attributes
-  xStepSize = 0.1;
   xMeshDumpImprovementPercentage = 0.0;
   flagIntensityPresent = false;
   xMedialModel = NULL;
@@ -273,14 +275,45 @@ void GradientDescentOptimization(MedialOptimizationProblem *xProblem,
   // ofstream fdump("conjgrad.txt",ios_base::out);
   // fdump << "CONJUGATE GRADIENT OPTIMIZER DUMP" << endl;
 
+  // Compute the 'last' value
+  double xLastValue = xProblem->Evaluate(xSolution.data_block());
+
   // Iterate, moving in the gradient direction
   for(unsigned int p = 0; p < nSteps; p++)
     {
     // Compute the gradient and the image match
     double xMatch =
       xProblem->ComputeGradient( xSolution.data_block(), xGradient.data_block());
+    xProblem->DumpGradientMesh();
 
-    // Move in the gradient direction
+    // Take a step in the gradient direction
+    vnl_vector<double> xTentativeSolution = xSolution - xStep * xGradient;
+
+    // Compute the new solution
+    double val = xProblem->Evaluate(xTentativeSolution.data_block());
+
+    // Check if it got worse
+    if(val > xLastValue)
+      {
+      while(val > xLastValue && xStep > 0.0001)
+        {
+        xStep = 0.5 * xStep;
+        cout << "Step adjusted to " << xStep << endl;
+        cout << "Gradient Magnitude " << xGradient.magnitude() << endl;
+        xTentativeSolution = xSolution - xStep * xGradient;
+        val = xProblem->Evaluate(xTentativeSolution.data_block());
+        }
+      if(val > xLastValue)
+        break;
+      }
+    else
+      {
+      cout << "Step adjusted to " << xStep << endl;
+      xStep *= 2;
+      }
+
+    // Store the last value
+    xLastValue = val;
     xSolution -= xStep * xGradient;
 
     cout << "STEP " << p << "\t match " << xMatch << endl;
@@ -408,7 +441,11 @@ void my_calcg(int &n, double *x, int &nf, double *g, int *, double *, void *info
 
   // Try to evaluate at this point, and if we fail return 0 in nf (request
   // smaller step from the solver, this is a nice feature of toms611)
-  try { mop->ComputeGradient(x, g); }
+  try 
+    { 
+    mop->ComputeGradient(x, g); 
+    mop->DumpGradientMesh();
+    }
   catch(MedialModelException &exc) 
     {
     cout << " [BAD SOLN (calcg) " << exc.what() << "]" << endl;
@@ -502,14 +539,9 @@ void MedialPDE
     }
 }
 
-
-void MedialPDE
-::RunOptimization(
-  FloatImage *image, size_t nSteps, Registry &folder, FloatImage *imgGray, bool flag_test)
+CoefficientMapping *
+MedialPDE::GenerateCoefficientMapping(OptimizationParameters &p)
 {
-  // Read the optimization parameters from the file
-  OptimizationParameters p; p.ReadFromRegistry(folder);
-
   // Create the coefficient mapping
   CoefficientMapping *xMapping = NULL;
 
@@ -532,6 +564,8 @@ void MedialPDE
       // Read principal components from the file
       vnl_matrix<double> pcaMatrix;
       ReadMatrixFile(pcaMatrix, p.xPCAFileName.c_str());
+
+      // TODO: this must be deleted somewhere!!!
       pca = new PrincipalComponents(pcaMatrix);
 
       // Create the PCA/Affine optimizer
@@ -587,6 +621,105 @@ void MedialPDE
     {
     throw ModelIOException("Unknown coefficient mapping specified");
     }
+  
+  return xMapping;
+}
+
+void MedialPDE::ConfigureEnergyTerms(
+  MedialOptimizationProblem &xProblem,                                     
+  OptimizationParameters &p,
+  FloatImage *image, 
+  FloatImage *imgGray)
+{
+  // Configure the image match term (TODO: these should be treated same as
+  // penalty terms
+  EnergyTerm *xTermImage = NULL;
+  switch(p.xImageMatch)
+    {
+    case OptimizationParameters::VOLUME:
+      xTermImage = new VolumeOverlapEnergyTerm(xMedialModel, image, 8);
+      break;
+
+    case OptimizationParameters::BOUNDARY:
+      xTermImage = new BoundaryImageMatchTerm(xMedialModel, image);
+      break;
+
+    case OptimizationParameters::RADIUS_VALUES:
+      {
+      vnl_vector<double> xRadius(xMedialModel->GetNumberOfAtoms());
+      for(size_t i = 0; i < xRadius.size(); i++)
+        xRadius[i] = xMedialModel->GetAtomArray()[i].R;
+      xTermImage = new DistanceToRadiusFieldEnergyTerm(xMedialModel, xRadius.data_block());
+      }
+      break;
+
+    default:
+      throw MedialModelException("Unknown energy term specified");
+    }
+
+  // Add the energy term to the problem
+  xProblem.AddEnergyTerm(xTermImage, 1.0);
+
+  // Add all the penalty terms
+  for(size_t iTerm = 0; iTerm < OptimizationParameters::N_PENALTY_TERMS; iTerm++)
+    {
+    // Ignore all terms with zero weights
+    OptimizationParameters::PenaltyTerm pt = 
+      static_cast<OptimizationParameters::PenaltyTerm>(iTerm);
+
+    if(p.xTermWeights[pt] == 0.0)
+      continue;
+
+    // Create the energy term    
+    EnergyTerm *xTermPenalty;
+    switch(pt)
+      {
+      case OptimizationParameters::BOUNDARY_JACOBIAN:
+        xTermPenalty = new BoundaryJacobianEnergyTerm(); break;
+      case OptimizationParameters::ATOM_BADNESS:
+        xTermPenalty = new AtomBadnessTerm(); break;
+      case OptimizationParameters::BOUNDARY_GRAD_R:
+        xTermPenalty = new BoundaryGradRPenaltyTerm(); break;
+      case OptimizationParameters::BND_JACOBIAN_DISTORTION:
+        xTermPenalty = new BoundaryJacobianDistortionPenaltyTerm(xMedialModel); break;
+      case OptimizationParameters::MEDIAL_REGULARITY:
+        xTermPenalty = new MedialRegularityTerm(xMedialModel); break;
+      case OptimizationParameters::MEDIAL_ANGLES:
+        xTermPenalty = new MedialAnglesPenaltyTerm(xMedialModel); break;
+      case OptimizationParameters::MEDIAL_CURVATURE:
+        xTermPenalty = new MedialCurvaturePenalty(); break;
+      case OptimizationParameters::BND_CURVATURE:
+        xTermPenalty = new BoundaryCurvaturePenalty(xMedialModel); break;
+      case OptimizationParameters::RADIUS:
+        xTermPenalty = new RadiusPenaltyTerm(); break;
+      case OptimizationParameters::DIFFEOMORPHIC:
+        xTermPenalty = new DiffeomorphicEnergyTerm(xMedialModel); break;
+      case OptimizationParameters::CROSS_CORRELATION:
+        xTermPenalty = new CrossCorrelationImageMatchTerm(xMedialModel, imgGray); break;
+      case OptimizationParameters::LOCAL_DISTANCE:
+        xTermPenalty = new LocalDistanceDifferenceEnergyTerm(xMedialModel); break;
+      default:
+        throw MedialModelException("Unknown Penalty Term");
+      }
+
+    // Configure the energy term's parameters
+    xTermPenalty->SetParameters(p.xTermParameters[pt]);
+
+    // Add the penalty term to the optimization problem
+    xProblem.AddEnergyTerm(xTermPenalty, p.xTermWeights[pt]); 
+    }
+}
+
+
+void MedialPDE
+::RunOptimization(
+  FloatImage *image, size_t nSteps, Registry &folder, FloatImage *imgGray, bool flag_test)
+{
+  // Read the optimization parameters from the file
+  OptimizationParameters p; p.ReadFromRegistry(folder);
+
+  // Create the coefficient mapping
+  CoefficientMapping *xMapping = GenerateCoefficientMapping(p);
 
   // Create the initial solution (all zeros)
   vnl_vector<double> xSolution(xMapping->GetNumberOfParameters(), 0.0);
@@ -597,177 +730,8 @@ void MedialPDE
   // Create the optimization problem
   MedialOptimizationProblem xProblem(xMedialModel, xMapping);
 
-  // Create an image match term and a jacobian term
-  EnergyTerm *xTermImage = NULL;
-  if(p.xImageMatch == OptimizationParameters::VOLUME)
-    xTermImage = new VolumeOverlapEnergyTerm(xMedialModel, image, 8);
-  else if(p.xImageMatch == OptimizationParameters::BOUNDARY)
-    xTermImage = new BoundaryImageMatchTerm(xMedialModel, image);
-  else if(p.xImageMatch == OptimizationParameters::RADIUS_VALUES)
-    {
-    vnl_vector<double> xRadius(xMedialModel->GetNumberOfAtoms());
-    for(size_t i = 0; i < xRadius.size(); i++)
-      xRadius[i] = xMedialModel->GetAtomArray()[i].R;
-    xTermImage = new DistanceToRadiusFieldEnergyTerm(xMedialModel, xRadius.data_block());
-    }
-  else throw MedialModelException("Unknown energy term specified");
-
-  // Create the penalty terms
-  BoundaryJacobianEnergyTerm xTermJacobian;
-  AtomBadnessTerm xTermBadness;
-  BoundaryGradRPenaltyTerm xTermGradR;
-  MedialRegularityTerm xTermRegularize(xMedialModel);
-  MedialBendingEnergyTerm xTermBending(xMedialModel);
-  MedialAnglesPenaltyTerm xTermAngles(xMedialModel);
-  MedialCurvaturePenalty xTermCurvature;
-  BoundaryCurvaturePenalty xTermBndCurvature(xMedialModel);
-  RadiusPenaltyTerm xTermRadius;
-  DiffeomorphicEnergyTerm xTermDiffeo(xMedialModel);
-
-  // This is unfortunate, but some terms have to be created 'on demand'
-  CrossCorrelationImageMatchTerm *xCrossCorr = NULL;
-  LocalDistanceDifferenceEnergyTerm *xLocalDist = NULL;
-
-  // TODO: do this better
-  // MeshRegularizationPenaltyTerm xMeshRegTerm(xMedialModel, 6, 6);
-
-  // Add the terms to the problem
-  xProblem.AddEnergyTerm(xTermImage, 1.0);
-
-  // xProblem.AddEnergyTerm(&xMeshRegTerm, 1.0);
-
-  // Add the boundary Jacobian term
-  if(p.xTermWeights[OptimizationParameters::BOUNDARY_JACOBIAN] > 0.0)
-    {
-    xTermJacobian.SetParameters(p.xTermParameters[OptimizationParameters::BOUNDARY_JACOBIAN]);
-    xProblem.AddEnergyTerm(
-      &xTermJacobian, p.xTermWeights[OptimizationParameters::BOUNDARY_JACOBIAN]);
-    }
-
-  // Add the atom badness term
-  if(p.xTermWeights[OptimizationParameters::ATOM_BADNESS] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermBadness, p.xTermWeights[OptimizationParameters::ATOM_BADNESS]);
-
-  // Add the atom badness term
-  if(p.xTermWeights[OptimizationParameters::BOUNDARY_GRAD_R] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermGradR, p.xTermWeights[OptimizationParameters::BOUNDARY_GRAD_R]);
-
-  // Add the regularization term
-  if(p.xTermWeights[OptimizationParameters::MEDIAL_REGULARITY] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermRegularize, p.xTermWeights[OptimizationParameters::MEDIAL_REGULARITY]);
-
-  // Add the curvature term
-  if(p.xTermWeights[OptimizationParameters::MEDIAL_CURVATURE] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermCurvature, p.xTermWeights[OptimizationParameters::MEDIAL_CURVATURE]);
-
-  // Add the curvature term
-  if(p.xTermWeights[OptimizationParameters::BND_CURVATURE] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermBndCurvature, p.xTermWeights[OptimizationParameters::BND_CURVATURE]);
-
-  // Add the radius penalty term
-  if(p.xTermWeights[OptimizationParameters::RADIUS] > 0.0)
-    {
-    xTermRadius.SetParameters(p.xTermParameters[OptimizationParameters::RADIUS]);
-    xProblem.AddEnergyTerm(
-      &xTermRadius, p.xTermWeights[OptimizationParameters::RADIUS]);
-    }
-
-  // Add the angle penalty term
-  if(p.xTermWeights[OptimizationParameters::MEDIAL_ANGLES] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermAngles, p.xTermWeights[OptimizationParameters::MEDIAL_ANGLES]);
-
-  // Add the diffeomorhic term
-  if(p.xTermWeights[OptimizationParameters::DIFFEOMORPHIC] > 0.0)
-    xProblem.AddEnergyTerm(
-      &xTermDiffeo, p.xTermWeights[OptimizationParameters::DIFFEOMORPHIC]);
-
-
-  // Add the cross-correlation energy term
-  if(p.xTermWeights[OptimizationParameters::CROSS_CORRELATION] > 0.0)
-    {
-    // Get the registry associated with the term
-    Registry &r = p.xTermParameters[OptimizationParameters::CROSS_CORRELATION];
-    
-    // Get the reference image filename
-    r.WriteToFile("laputa.txt");
-    std::string fnRefImage = r["ReferenceImage"][""];
-    std::string fnRefModel = r["ReferenceModel"][""];
-
-    // If the references don't exist, throw an exception
-    if(!fnRefModel.length())
-      throw MedialModelException("Missing reference model in CrossCorrelation term");
-
-    if(!fnRefImage.length())
-      throw MedialModelException("Missing reference image in CrossCorrelation term");
-
-    if(imgGray == NULL)
-      throw MedialModelException("Missing target image in CrossCorrelation term");
-
-    // Load the reference image
-    FloatImage refImage;
-    refImage.LoadFromFile(fnRefImage.c_str());
-
-    // Load the reference model
-    MedialPDE refModel(fnRefModel.c_str());
-
-    // Get the number of cuts and the extent of the cross-correlation model
-    size_t nCuts = r["NumberOfCuts"][16];
-    double xiMax = r["MaximumXi"][2.0];
-
-    // Create smoothing functions for source and target images
-    // ImageSmoothSamplingEuclideanFunction *fReference = 
-    //   new ImageSmoothSamplingEuclideanFunction(&refImage, 2.0, 3.5);
-    // ImageSmoothSamplingEuclideanFunction *fTarget = 
-    //   new ImageSmoothSamplingEuclideanFunction(imgGray, 2.0, 3.5);
-
-    FloatImageEuclideanFunctionAdapter *fReference = 
-      new FloatImageEuclideanFunctionAdapter(&refImage);
-    FloatImageEuclideanFunctionAdapter *fTarget = 
-      new FloatImageEuclideanFunctionAdapter(imgGray);
-
-    // Create a new cross-correlation term
-    xCrossCorr = new CrossCorrelationImageMatchTerm(
-      fTarget, xMedialModel, fReference, refModel.GetMedialModel(), nCuts, xiMax);
-
-    // Add the cross-correlation term to the optimization
-    xProblem.AddEnergyTerm(
-      xCrossCorr, p.xTermWeights[OptimizationParameters::CROSS_CORRELATION]);
-    }
-
-  // Add the cross-correlation energy term
-  if(p.xTermWeights[OptimizationParameters::LOCAL_DISTANCE] > 0.0)
-    {
-    // Get the registry associated with the term
-    Registry &r = p.xTermParameters[OptimizationParameters::LOCAL_DISTANCE];
-    
-    // Get the array of reference models
-    Registry &mdlarray = r.Folder("ReferenceModel");
-    if(!mdlarray.GetArraySize())
-      throw MedialModelException("Missing reference model array in LocalDistancePenaltyTerm term");
-
-    // Load the reference models
-    vector<string> fnRef = mdlarray.GetArray(string(""));
-    vector<GenericMedialModel *> ref;
-    for(size_t q = 0; q < fnRef.size(); q++)
-      {
-      // TODO: delete me!!!
-      MedialPDE *refModel = new MedialPDE(fnRef[q].c_str());
-      ref.push_back(refModel->GetMedialModel());
-      }
-
-    // Create a new term
-    xLocalDist = new LocalDistanceDifferenceEnergyTerm(xMedialModel, ref);
-
-    // Add the cross-correlation term to the optimization
-    xProblem.AddEnergyTerm(
-      xLocalDist, p.xTermWeights[OptimizationParameters::LOCAL_DISTANCE]);
-    }
+  // Add all terms to the optimization problem
+  ConfigureEnergyTerms(xProblem, p, image, imgGray);
 
   // Initial solution report
   cout << "INITIAL SOLUTION REPORT: " << endl;
@@ -794,6 +758,9 @@ void MedialPDE
       }
     }
 
+  // Get the step size for optimization
+  double xStepSize = folder["StepSize"][10.0];
+
   // At this point, split depending on the method
   if(p.xOptimizer == OptimizationParameters::CONJGRAD)
     ConjugateGradientOptimizationTOMS(&xProblem, xSolution, nSteps, xStepSize);
@@ -811,22 +778,12 @@ void MedialPDE
   xMedialModel->SetCoefficientArray(xMapping->Apply(xInitialCoeff, xSolution));
   xMedialModel->ComputeAtoms();
 
-  // Delete dynamic terms (this is stupid, should all be dynamic, generated 
-  // using a factory class or something like that)
-  if(xCrossCorr)
-    {
-    delete xCrossCorr->GetReferenceFunction();
-    delete xCrossCorr->GetTargetFunction();
-    delete xCrossCorr;
-    }
-
-  if(xLocalDist)
-    delete xLocalDist;
-
   // Delete the mapping
   delete xMapping;
-  delete xTermImage;
-  if(pca) delete pca;
+  
+  // Delete all the energy terms
+  for(size_t i = 0; i < xProblem.GetEnergyTerms().size(); i++)
+    delete xProblem.GetEnergyTerms()[i];
 }
 
 
@@ -1506,6 +1463,73 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
   // Set the new mesh to replace the old mesh
   this->SetMedialModel(smmNew);
 }
+
+
+
+void SubdivisionMPDE::Remesh()
+  {
+  // Get the subdivision surface medial model that is currently available
+  SubdivisionMedialModel *smm = dynamic_cast<SubdivisionMedialModel *>(xMedialModel);
+  if(!smm)
+    throw MedialModelException(
+      "SubdivisionMPDE given a cmrep not based on subdivision surfaces");
+
+  // Get the coefficient-level mesh
+  SubdivisionSurface::MeshLevel mlCoeffOld = smm->GetCoefficientMesh(); 
+
+  // Check for triangles with all three vertices on the boundary
+  for(size_t p = 0; p < mlCoeffOld.triangles.size(); p++)
+    {
+    size_t *v = mlCoeffOld.triangles[p].vertices;
+    if(
+      smm->GetAtomArray()[v[0]].flagCrest &&
+      smm->GetAtomArray()[v[1]].flagCrest &&
+      smm->GetAtomArray()[v[2]].flagCrest)
+      cout << "BAD TRIANGLE BEFORE REMESHING" << endl;
+    }
+
+  // We need to get a list of coordinates for remeshing
+  typedef vnl_vector_fixed<double, 3> Vec;
+  Vec *X = new Vec[mlCoeffOld.nVertices];
+  for(size_t i = 0; i < mlCoeffOld.nVertices; i++)
+    for(size_t k = 0; k < 3; k++)
+      X[i][k] = smm->GetCoefficient(i * 4 + k);
+
+  // Apply remeshing to the coefficient mesh
+  mlCoeffOld.MakeDelaunay(X);
+
+  // Second run (to be sure)
+  cout << "RUN 2" << endl;
+  mlCoeffOld.MakeDelaunay(X);
+
+  // Check consistency
+  SubdivisionSurface::CheckMeshLevel(mlCoeffOld);
+
+  for(size_t p = 0; p < mlCoeffOld.triangles.size(); p++)
+    {
+    size_t *v = mlCoeffOld.triangles[p].vertices;
+    if(
+      smm->GetAtomArray()[v[0]].flagCrest &&
+      smm->GetAtomArray()[v[1]].flagCrest &&
+      smm->GetAtomArray()[v[2]].flagCrest)
+      cout << "BAD TRIANGLE AFTER REMESHING" << endl;
+    }
+
+  // Apply subdivision to the refined mesh
+  try 
+    {
+    smm->SetMesh(mlCoeffOld, 
+      smm->GetCoefficientArray(), smm->GetCoefficientU(), 
+      smm->GetCoefficientV(), smm->GetSubdivisionLevel(), 0);
+    }
+  catch(...)
+    {
+    cerr << "Bad triangles encountered" << endl;
+    }
+
+  // Clean up
+  delete X;
+  }
 
 void SubdivisionMPDE::BruteForceToPDE()
 {

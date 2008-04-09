@@ -449,24 +449,53 @@ BoundaryImageMatchTerm::~BoundaryImageMatchTerm()
  ********************************************************************************/
 LocalDistanceDifferenceEnergyTerm
 ::LocalDistanceDifferenceEnergyTerm(
-  GenericMedialModel *model,
-  vector<GenericMedialModel *> &mdlReference)
+  GenericMedialModel *model)
 {
+  // Store the model
+  this->xModel = model;
+
   // Set the size of arrays
   xRefDistData.resize(model->GetNumberOfTriangles());
   xDistData.resize(model->GetNumberOfTriangles());
+}
 
-  // Compute the reference data (for speed)
-  InitializeReferenceData(mdlReference);
+void
+LocalDistanceDifferenceEnergyTerm
+::SetParameters(Registry &r)
+{
+  // Get the array of reference models
+  Registry &mdlarray = r.Folder("ReferenceModel");
+  if(!mdlarray.GetArraySize())
+    throw MedialModelException("Missing reference model array in LocalDistancePenaltyTerm term");
 
+  // Load the reference models
+  vector<string> fnRef = mdlarray.GetArray(string(""));
+  vector<MedialPDE *> xReference;
+  vector<GenericMedialModel *> xReferenceModel;
+  for(size_t q = 0; q < fnRef.size(); q++)
+    {
+    MedialPDE *refModel = new MedialPDE(fnRef[q].c_str());
+    
+    // Check the model
+    if(refModel->GetMedialModel()->GetNumberOfAtoms() != xModel->GetNumberOfAtoms())
+      throw MedialModelException("Reference Model Incompatibility in LocalDistanceDET");
+    
+    xReference.push_back(refModel);
+    xReferenceModel.push_back(refModel->GetMedialModel());    
+    }
+
+  // Initialize what we need from the reference data
+  InitializeReferenceData(xReferenceModel);
+
+  // Delete the reference models
+  for(size_t q = 0; q < fnRef.size(); q++)
+    delete xReference[q];
 }
 
 void
 LocalDistanceDifferenceEnergyTerm
 ::InitializeReferenceData(vector<GenericMedialModel *> &mdlReference)
 {
-  assert(mdlReference.size());
-
   // Iterate over all boundary triangles
   size_t n = mdlReference.size();
   for(MedialTriangleIterator mit(mdlReference[0]->GetIterationContext()); 
@@ -485,9 +514,10 @@ LocalDistanceDifferenceEnergyTerm
 
       for(size_t z = 0; z < mdlReference.size(); z++)
         {
-        MedialAtom &A0 = mdlReference[z]->GetAtomArray()[mit.GetAtomIndex(i)];
-        MedialAtom &A1 = mdlReference[z]->GetAtomArray()[mit.GetAtomIndex(j1)];
-        MedialAtom &A2 = mdlReference[z]->GetAtomArray()[mit.GetAtomIndex(j2)];
+        MedialAtom *refatoms = mdlReference[z]->GetAtomArray();
+        MedialAtom &A0 = refatoms[mit.GetAtomIndex(i)];
+        MedialAtom &A1 = refatoms[mit.GetAtomIndex(j1)];
+        MedialAtom &A2 = refatoms[mit.GetAtomIndex(j2)];
 
         dm += (A1.X-A2.X).magnitude();
         db0 += (A1.xBnd[0].X-A2.xBnd[0].X).magnitude();
@@ -615,20 +645,60 @@ LocalDistanceDifferenceEnergyTerm
 /*********************************************************************************
  * CROSS-CORRELATION ENERGY TERM
  ********************************************************************************/
-CrossCorrelationImageMatchTerm::
-CrossCorrelationImageMatchTerm(
-  EuclideanFunction *fTarget, GenericMedialModel *model,
-  EuclideanFunction *fReference, GenericMedialModel *mdlReference,
-  size_t nCuts, double xiMax)
+CrossCorrelationImageMatchTerm
+::CrossCorrelationImageMatchTerm(GenericMedialModel *model, FloatImage *xGrayImage)
 {
-  // Copy the target image
-  this->fTarget = fTarget;
-  this->fReference = fReference;
+  this->fTarget = new FloatImageEuclideanFunctionAdapter(xGrayImage);
+  this->fReference = NULL;
+  this->xModel = model;
+}
+
+CrossCorrelationImageMatchTerm
+::~CrossCorrelationImageMatchTerm()
+{
+  delete fTarget;
+  if(fReference)
+    delete fReference;
+}
+
+void 
+CrossCorrelationImageMatchTerm::
+SetParameters(Registry &r)
+{
+  // Get the reference image filename
+  std::string fnRefImage = r["ReferenceImage"][""];
+  std::string fnRefModel = r["ReferenceModel"][""];
+
+  // If the references don't exist, throw an exception
+  if(!fnRefModel.length())
+    throw MedialModelException("Missing reference model in CrossCorrelation term");
+
+  if(!fnRefImage.length())
+    throw MedialModelException("Missing reference image in CrossCorrelation term");
+
+  // Load the reference image
+  FloatImage refImage;
+  refImage.LoadFromFile(fnRefImage.c_str());
+
+  // Load the reference model
+  MedialPDE ref(fnRefModel.c_str());
+  GenericMedialModel *xRefModel = ref.GetMedialModel();
+
+  // Make sure the number of points matches
+  if(xRefModel->GetNumberOfAtoms() != xModel->GetNumberOfAtoms())
+    throw MedialModelException("Model mismatch in CrossCorrelationPenaltyTerm");
+
+  // Get the number of cuts and the extent of the cross-correlation model
+  size_t nCuts = r["NumberOfCuts"][16];
+  double xiMax = r["MaximumXi"][2.0];
+
+  // Create the sampling functions
+  fReference = new FloatImageEuclideanFunctionAdapter(&refImage);
 
   // Initialize the profile array
   nSamplesPerAtom = nCuts + 2;
   xProfile.resize(
-    model->GetNumberOfBoundaryPoints(), 
+    xModel->GetNumberOfBoundaryPoints(), 
     ProfileData(nSamplesPerAtom));
 
   // Compute the sample point values along xi
@@ -639,7 +709,7 @@ CrossCorrelationImageMatchTerm(
     }
 
   // Init the reference data
-  InitializeReferenceData(fReference, mdlReference);
+  InitializeReferenceData(fReference, xRefModel);
 }
 
 void
@@ -1234,6 +1304,15 @@ BoundaryGradRPenaltyTerm
       saGradR.Update(S->xAtoms[i].xGradRMagSqr);
       saPenalty.Update(penalty); 
       }
+    else
+      {
+      // For atoms that aren't at the medial edge, we want to keep gradR
+      // from being anywhere near 1, since that will make the derivatives
+      // of the boundary nodes go to infinity, killing the optimizer. So 
+      // we let the penalty be of the form alpha / sqrt(1-(gradR^2))
+      double penalty = 0.01 * (1.0 / S->xAtoms[i].xNormalFactor - 1);
+      saPenalty.Update(penalty);
+      }
     }
 
   // Return the mean penalty
@@ -1252,12 +1331,22 @@ ComputePartialDerivative(
   size_t nAtoms = S->xAtomGrid->GetNumberOfAtoms();
   for(size_t i = 0; i < nAtoms; i++)
     {
-    if(S->xAtoms[i].flagCrest && dS->xAtoms[i].order <= 1)
+    if(dS->xAtoms[i].order <= 1)
       {
-      double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
-      double ddevn = - dS->xAtoms[i].xGradRMagSqr;
-      double d_penalty = 2 * xScale * devn * ddevn; 
-      dTotalPenalty += d_penalty;
+      if(S->xAtoms[i].flagCrest)
+        {
+        double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
+        double ddevn = - dS->xAtoms[i].xGradRMagSqr;
+        double d_penalty = 2 * xScale * devn * ddevn; 
+        dTotalPenalty += d_penalty;
+        }
+      else
+        {
+        double d_penalty = 
+          - 0.01 * dS->xAtoms[i].xNormalFactor / 
+          (S->xAtoms[i].xNormalFactor * S->xAtoms[i].xNormalFactor);
+        dTotalPenalty += d_penalty;
+        }
       }
     }
 
@@ -1607,7 +1696,12 @@ BoundaryCurvaturePenalty
 double
 BoundaryCurvaturePenalty
 ::ComputeEnergy(SolutionData *S)
-{
+{  
+  double xTest = 0.0;
+
+  saDenom.Reset();
+  saCurv.Reset();
+
   // Set all the curvature vectors to zero
   std::fill(xMeanCurvVec.begin(), xMeanCurvVec.end(), SMLVec3d(0.0));
 
@@ -1629,6 +1723,10 @@ BoundaryCurvaturePenalty
       SMLVec3d AxB = vnl_cross_3d(A, B);
       double magAxB = AxB.magnitude();
       double cotAlphaJ = AB / magAxB;
+      
+      xTest += magAxB;
+
+      saDenom.Update(magAxB);      
 
       // Compute the contribution to the normal vector
       SMLVec3d xcontr = (Xj2 - Xj1) * cotAlphaJ;
@@ -1644,8 +1742,10 @@ BoundaryCurvaturePenalty
     {
     size_t ib = ip.GetIndex();
     double w = S->xBoundaryWeights[ib];
-    xIntegralSqrMeanCrv += 
-      xMeanCurvVec[ib].squared_magnitude() / (3.0 * w);
+    double mc2 = xMeanCurvVec[ib].squared_magnitude();
+    xIntegralSqrMeanCrv += mc2 / (3.0 * w);
+    // cout << mc2 << " " << w << " " << mc2 / (w * w) << endl;
+    saCurv.Update(mc2 / (w * w));
 
     // We must also subtract one of the principal curvatures along the boundary
     // which is just 1/r
@@ -1661,7 +1761,9 @@ BoundaryCurvaturePenalty
 
   xPenalty = (4 * xIntegralSqrMeanCrv - xCrestCurvatureTerm) 
     / S->xBoundaryArea;
-  return xPenalty;
+  // return xPenalty;
+
+  return xTest;
 }
 
 double 
@@ -1669,6 +1771,8 @@ BoundaryCurvaturePenalty
 ::ComputePartialDerivative(
   SolutionData *S, PartialDerivativeSolutionData *dS)
 {
+  double dTest = 0.0;
+
   // Set all the curvature vectors to zero
   std::fill(dMeanCurvVec.begin(), dMeanCurvVec.end(), SMLVec3d(0.0));
 
@@ -1700,6 +1804,8 @@ BoundaryCurvaturePenalty
 
         double magAxB = AxB.magnitude();
         double d_magAxB = dot_product(AxB, d_AxB) / magAxB;
+
+        dTest += d_magAxB;
 
         double cotAlphaJ = AB / magAxB;
         double d_cotAlphaJ = (dAB * magAxB - AB * d_magAxB) / (magAxB * magAxB);
@@ -1744,17 +1850,24 @@ BoundaryCurvaturePenalty
   // TURN OFF CREST RADIUS TERM
   dCrestCurvatureTerm = 0;
 
+  /*
   return
     ((4 * dIntegralSqrMeanCrv - dCrestCurvatureTerm) - xPenalty * dS->xBoundaryArea)
-    / S->xBoundaryArea;
+    / S->xBoundaryArea; */
+
+  return dTest;
 }
 
 void BoundaryCurvaturePenalty
 ::PrintReport(ostream &sout)
 {
   sout << "  Boundary Curvature Penalty: " << endl;
-  sout << "    int sqr mean curv : " << xIntegralSqrMeanCrv << endl;
-  sout << "    int crest kappa1  : " << xCrestCurvatureTerm << endl;
+  sout << "    int sqr mean curv           : " << xIntegralSqrMeanCrv << endl;
+  sout << "    int crest kappa1            : " << xCrestCurvatureTerm << endl;
+  sout << "    mean curv sq (min/mean/max) : " << saCurv.GetMin() 
+    << " / " << saCurv.GetMean() << " / " << saCurv.GetMax() << endl;
+  sout << "    magAxB (min/mean/max) : " << saDenom.GetMin() 
+    << " / " << saDenom.GetMean() << " / " << saDenom.GetMax() << endl;
   sout << "    total penalty     : " << xPenalty << endl;
 }
 
@@ -2076,12 +2189,10 @@ double RadiusPenaltyTerm::ComputeEnergy(SolutionData *S)
     double r = S->xAtoms[i].R;
     saRadius.Update(r);
 
+    // Set the inverse radius penalty
+    saPenLow.Update(1.0 / r);
+
     // Compare to min and max
-    if(r < rMin)
-      {
-      double dr = r - rMin;
-      saPenLow.Update(dr * dr);
-      }
     if(r > rMax)
       {
       double dr = r - rMax;
@@ -2106,10 +2217,8 @@ double RadiusPenaltyTerm
       double d_r = dS->xAtoms[i].R;
 
       // Compare to min and max
-      if(r < rMin)
-        {
-        dLower += (r - rMin) * d_r;
-        }
+      dLower += - d_r / (r * r);
+      
       if(r > rMax)
         {
         dUpper += (r - rMax) * d_r;
@@ -2117,7 +2226,7 @@ double RadiusPenaltyTerm
       }
     }
 
-  return 2 * (sUpper * dUpper + sLower * dLower);
+  return 2 * (sUpper * dUpper) + sLower * dLower;
 }  
 
 void RadiusPenaltyTerm::PrintReport(ostream &sout)
@@ -2466,6 +2575,7 @@ MedialOptimizationProblem
   S = new SolutionData(xMedialModel->GetIterationContext(), xMedialModel->GetAtomArray());
   dS = new PartialDerivativeSolutionData(S, dAtoms);
 
+  flagQuiet = false;
 }
 
 MedialOptimizationProblem
@@ -2483,6 +2593,7 @@ void MedialOptimizationProblem::AddEnergyTerm(EnergyTerm *term, double xWeight)
   xTerms.push_back(term);
   xTimers.push_back(CodeTimer());
   xGradTimers.push_back(CodeTimer());
+  xLastGradientPerTerm.push_back(vnl_vector<double>(nCoeff, 0.0));
 }
 
 
@@ -2624,19 +2735,22 @@ MedialOptimizationProblem
   // Compute the integration weights
   S->ComputeIntegrationWeights();
 
-  // Print header line
-  if((nGradCalls % 10) == 0)
-    {
-    printf("\nGRAD   EVAL  ");
-    for(iTerm = 0; iTerm < xTerms.size(); iTerm++)
-      {
-      printf("   %7s ",xTerms[iTerm]->GetShortName().c_str());
-      }
-    printf("   |  TOTAL\n");
-    }
 
-  printf("%4d   %4d   ",++nGradCalls,nEvalCalls);
-  
+  // Verbose reporting
+  if(!flagQuiet)
+    {
+    // Print header line
+    if((nGradCalls % 10) == 0)
+      {
+      printf("\nGRAD   EVAL  ");
+      for(iTerm = 0; iTerm < xTerms.size(); iTerm++)
+        printf("   %7s ",xTerms[iTerm]->GetShortName().c_str());
+      printf("   |  TOTAL\n");
+      }
+
+    printf("%4d   %4d   ",++nGradCalls,nEvalCalls);
+    }
+    
   // Begin the gradient computation for each of the energy terms
   xLastSolutionValue = 0.0;
   if(xLastGradEvalTermValues.size() == 0)
@@ -2648,10 +2762,15 @@ MedialOptimizationProblem
     xLastGradEvalTermValues[iTerm] = xTerms[iTerm]->BeginGradientComputation(S);
     xLastSolutionValue += xWeights[iTerm] * xLastGradEvalTermValues[iTerm];
     xTimers[iTerm].Stop();
-    printf("%7.3le%s ",xLastGradEvalTermValues[iTerm],(xLastGradEvalTermValues[iTerm] < lval) ? "*" : " ");
+    
+    if(!flagQuiet)
+      printf("%7.3le%s ",
+        xLastGradEvalTermValues[iTerm],
+        (xLastGradEvalTermValues[iTerm] < lval) ? "*" : " ");
     }
 
-  printf("  |  %7.3le\n", xLastSolutionValue);
+  if(!flagQuiet)
+    printf("  |  %7.3le\n", xLastSolutionValue);
 
   // Iterate variation by variation to compute the gradient
   for(size_t iCoeff = 0; iCoeff < nCoeff; iCoeff++)
@@ -2669,8 +2788,8 @@ MedialOptimizationProblem
     for(iTerm = 0; iTerm < xTerms.size(); iTerm++)
       {
       xGradTimers[iTerm].Start();
-      xGradient[iCoeff] += xWeights[iTerm] *
-        xTerms[iTerm]->ComputePartialDerivative(S, dS);
+      xLastGradientPerTerm[iTerm][iCoeff] = xTerms[iTerm]->ComputePartialDerivative(S, dS);
+      xGradient[iCoeff] += xWeights[iTerm] * xLastGradientPerTerm[iTerm][iCoeff];
       xGradTimers[iTerm].Stop();
       }
     }
@@ -2733,4 +2852,77 @@ void MedialOptimizationProblem::PrintReport(ostream &sout)
     sout << "  Elapsed time: " << xTimers[iTerm].Read() << endl;
     sout << "  Gradient time: " << xGradTimers[iTerm].Read() << endl;
     }
+}
+
+#include "SubdivisionMedialModel.h"
+#include "vtkPoints.h"
+#include "vtkPolyData.h"
+#include "vtkPolyDataWriter.h"
+#include "vtkFloatArray.h"
+#include "vtkPointData.h"
+
+void MedialOptimizationProblem::DumpGradientMesh()
+{
+  // Compute the partial derivative of each term with respect to each
+  // coefficient. We are assuming that the coefficients are mapping one
+  // to one to the coefficient mesh of a medial model.
+  SubdivisionMedialModel *model 
+    = dynamic_cast<SubdivisionMedialModel *>(xMedialModel);
+  if(!model)
+    throw string("DumpGradientMesh operation applied only to subdivision models");
+
+  // Get the control mesh
+  const SubdivisionSurface::MeshLevel &mctl = model->GetCoefficientMesh();
+
+  // Check that the number of parameters matches
+  if(xCoeff->GetNumberOfCoefficients() != mctl.nVertices * 4)
+    throw string("Coefficient mapping does not support DumpGradientMesh");
+
+  // Generate a VTK mesh
+  vtkPoints *lPoints = vtkPoints::New();
+  lPoints->Allocate(mctl.nVertices);
+  for(size_t i = 0; i < mctl.nVertices; i++)
+    lPoints->InsertNextPoint(model->GetCoefficientArray().data_block() + i * 4);
+
+  vtkPolyData *poly = vtkPolyData::New();
+  poly->SetPoints(lPoints);
+  SubdivisionSurface::ExportLevelToVTK(mctl, poly);
+
+  // For each term, generate a new data array
+  for(size_t iTerm = 0; iTerm < xTerms.size(); iTerm++)
+    {
+    vtkFloatArray *gradX = vtkFloatArray::New();
+    string nameX = string("X_") + xTerms[iTerm]->GetShortName();
+    gradX->SetName(nameX.c_str());
+    gradX->SetNumberOfComponents(3);
+    gradX->SetNumberOfTuples(nCoeff / 4);
+    poly->GetPointData()->AddArray(gradX);
+    
+    vtkFloatArray *gradR = vtkFloatArray::New();
+    string nameR = string("R_") + xTerms[iTerm]->GetShortName();
+    gradR->SetName(nameR.c_str());
+    gradR->SetNumberOfComponents(1);
+    gradR->SetNumberOfTuples(nCoeff / 4);
+    poly->GetPointData()->AddArray(gradR);
+
+    for(size_t i = 0; i < nCoeff / 4; i++)
+      {
+      gradX->SetTuple3(i,
+        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 0],
+        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 1],
+        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 2]);
+      gradR->SetTuple1(i,
+        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 3]);
+      }
+    }
+
+  char *fnout = new char[100];
+  sprintf(fnout, "dumpgrad%04i.vtk", this->nGradCalls);
+
+  vtkPolyDataWriter *write = vtkPolyDataWriter::New();
+  write->SetInput(poly);
+  write->SetFileName(fnout);
+  write->Update();
+
+  delete fnout;  
 }

@@ -84,7 +84,7 @@ public:
 
 private:
   // Loop scheme for computing tangents
-  MedialAtomLoopScheme xLoopScheme;
+  LoopTangentScheme xLoopScheme;
 
   // Sparse matrices containing the contribuion of each mesh node
   // to partial derivatives in U and V

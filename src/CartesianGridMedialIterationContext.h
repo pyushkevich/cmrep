@@ -2,6 +2,7 @@
 #define __CartesianGridMedialIterationContext_h_
 
 #include "MedialIterationContext.h"
+#include "MeshTraversal.h"
 
 class CartesianGridMedialIterationContext
 : public MedialIterationContext
@@ -62,10 +63,35 @@ public:
       xTriMap[i+1].v[0] = i00 + nu + 1;
       i+=2; 
       }
+
+    // The passed in mesh can be stored as the medial mesh
+    xMedialMesh = new TriangleMesh();
+    TriangleMeshGenerator tgmed(xMedialMesh, this->GetNumberOfAtoms());
+    for(MedialTriangleIterator it(this); !it.IsAtEnd(); ++it)
+      {
+      tgmed.AddTriangle(        
+        it.GetAtomIndex(0), it.GetAtomIndex(1), it.GetAtomIndex(2));
+      }
+    tgmed.GenerateMesh();
+    
+    // Create a new boundary mesh
+    xBoundaryMesh = new TriangleMesh();
+    TriangleMeshGenerator tgbnd(xBoundaryMesh, this->GetNumberOfBoundaryPoints());
+    for(MedialBoundaryTriangleIterator it(this); !it.IsAtEnd(); ++it)
+      {
+      tgbnd.AddTriangle(
+        it.GetBoundaryIndex(0), it.GetBoundaryIndex(1), it.GetBoundaryIndex(2));
+      }
+    tgbnd.GenerateMesh();
     };
 
   ~CartesianGridMedialIterationContext()
-    { delete xBndMap; delete xTriMap; }
+    { 
+    delete xBndMap; 
+    delete xTriMap; 
+    delete xBoundaryMesh;
+    delete xMedialMesh;
+    }
 
   /**
    * Return the index of at atom at position iu, iv
@@ -73,9 +99,28 @@ public:
   size_t GetAtomIndex(size_t iu, size_t iv) const
     { return iv * nu + iu; }
 
+  /** 
+   * Get a data structure for the medial triagle mesh. This allows various
+   * neighborhood inquiries to be performed, and is good for computing
+   * discrete first and second order derivative properties
+   */
+  TriangleMesh *GetMedialMesh()
+    { return this->xMedialMesh; }
+
+  /**
+   * Get a data structure for the boundary triangle mesh 
+   */
+  TriangleMesh *GetBoundaryMesh()
+    { return this->xBoundaryMesh; }
+
+
 private:
   // Dimension of the grid
   size_t nu, nv;
+
+  // Iterable triangle meshes
+  TriangleMesh *xMedialMesh, *xBoundaryMesh;
+
 };
 
 

@@ -100,6 +100,7 @@ void ExportMedialMeshToVTK(
 
   vtkFloatArray *lXu = AddMedialVectorField(pMedial, xModel, "Xu");
   vtkFloatArray *lXv = AddMedialVectorField(pMedial, xModel, "Xv");
+  vtkFloatArray *lGradR = AddMedialVectorField(pMedial, xModel, "GradR");
 
   // Allocate and add the image intensity array
   bool flagImage = xImage && xImage->IsImageLoaded();
@@ -142,6 +143,7 @@ void ExportMedialMeshToVTK(
     lAreaElement->SetTuple1(i, a.aelt);
     
     lNormal->SetTuple3(i, a.N(0), a.N(1), a.N(2));
+    lGradR->SetTuple3(i, a.xGradR[0], a.xGradR[1], a.xGradR[2]);
 
     // Compute the stretch ???
     lStretch->SetTuple1(i, a.G.xChristoffelSecond[0][0][0]);

@@ -244,6 +244,7 @@ double AdaptivelyIntegrateFunctionOverBoundary(
  * medial atoms rather than arrays of data. It's a convenience class
  * and this seemed like the best place to stick it in
  */
+
 class MedialAtomLoopScheme : public LoopTangentScheme
 {
 public:
@@ -286,27 +287,27 @@ public:
 private:
 
   SMLVec3d TangentX(size_t d, size_t v, MedialAtom *atoms) const
-    {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    {    
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y = xVtxTangentWeights[d][v] * atoms[v].X;
+    SMLVec3d y;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].X;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].X;
 
     return y;
     }
 
   SMLVec3d NormalX(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y = xVtxTangentWeights[d][v] * atoms[v].N;
+    SMLVec3d y;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].N;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].N;
 
-    return y;
+    return y;    
     }
 
   /**
@@ -314,14 +315,14 @@ private:
    */
   SMLVec3d TangentXu(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y = xVtxTangentWeights[d][v] * atoms[v].Xu;
+    SMLVec3d y;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Xu;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Xu;
 
-    return y;
+    return y;    
     } 
 
   /**
@@ -329,125 +330,126 @@ private:
    */
   SMLVec3d TangentXv(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y = xVtxTangentWeights[d][v] * atoms[v].Xv;
+    SMLVec3d y;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Xv;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Xv;
 
-    return y;
+    return y;  
     } 
 
   double PartialU(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].u;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].u;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].u;
 
-    return y;
+    return y;  
     }
 
   double PartialV(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].v;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].v;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].v;
 
-    return y;
+    return y;  
     }
 
 
   double PartialF(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].F;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].F;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].F;
 
-    return y;
+    return y;  
     }
 
   double PartialFv(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].Fv;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Fv;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Fv;
 
-    return y;
+    return y;  
     }
 
   double PartialFu(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].Fu;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Fu;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Fu;
 
-    return y;
+    return y;  
     }
 
   double PartialR(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].R;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].R;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].R;
 
-    return y;
+    return y;  
     }
 
   double PartialRv(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].Rv;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Rv;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Ru;
 
-    return y;
+    return y;  
     }
 
   double PartialRu(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].Ru;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].Ru;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Rv;
 
-    return y;
+    return y;  
     }
 
   double PartialAreaElt(size_t d, size_t v, MedialAtom *atoms) const
     {
-    size_t *ri = level->nbr.GetRowIndex();
-    size_t *ci = level->nbr.GetColIndex();
+    const size_t *ri = W.GetRowIndex();
+    const size_t *ci = W.GetColIndex();
 
-    double y = xVtxTangentWeights[d][v] * atoms[v].aelt;
+    double y = 0.0;
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
-      y += xNbrTangentWeights[d][i] * atoms[ci[i]].aelt;
+      y += W.GetSparseData()[i].w[d] * atoms[ci[i]].aelt;
 
-    return y;
+    return y;  
     }
 
 };
+
 
 #endif

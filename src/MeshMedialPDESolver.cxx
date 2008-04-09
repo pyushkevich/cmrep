@@ -254,8 +254,8 @@ MeshMedialPDESolver
   // Allocate the arrays that map vertices and neighbor relationships into the
   // sparse matrix A. These are needed because columns in A must be sorted and
   // because A contains non-zero diagonal entries
-  xMapVertexNbrToA = new size_t[topology->nbr.GetNumberOfSparseValues()];
-  xMapVertexToA = new size_t[topology->nbr.GetNumberOfRows()];
+  xMapVertexNbrToA = new size_t[topology->GetNeighborMatrix().GetNumberOfSparseValues()];
+  xMapVertexToA = new size_t[topology->GetNeighborMatrix().GetNumberOfRows()];
 
   // Process the data associated with each of the vertices
   for(j = 0, i = 0; i < topology->nVertices; i++)
@@ -311,7 +311,7 @@ MeshMedialPDESolver
   xVertexGeom = new VertexGeom[topology->nVertices];
 
   // Initialize the tangent weights
-  xLoopScheme.SetMeshLevel(topology);
+  xLoopScheme.SetMesh(topology);
 
   // Copy the pointer to the atoms. The atoms are passed in to this method
   // and are managed by the parent
@@ -376,7 +376,7 @@ MeshMedialPDESolver
     TriangleGeom &TG = xTriangleGeom[i];
     
     // Get the triangle and its three vertices
-    SubdivisionSurface::Triangle &t = topology->triangles[i];
+    Triangle &t = topology->triangles[i];
     const SMLVec3d &A = xAtoms[t.vertices[0]].X;
     const SMLVec3d &B = xAtoms[t.vertices[1]].X;
     const SMLVec3d &C = xAtoms[t.vertices[2]].X;

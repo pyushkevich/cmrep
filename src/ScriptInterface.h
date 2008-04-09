@@ -20,6 +20,9 @@ void TestTriangleAreaPartialDerivative();
 void TestTetrahedronVolumePartialDerivative();
 void TestFDStuff();
 
+class CoefficientMapping;
+class OptimizationParameters;
+
 namespace medialpde {
 
 class BinaryImage;
@@ -201,6 +204,23 @@ public:
     FloatImage *image, size_t nSteps, 
     const char *paramfile, const char *folderName = NULL);
 
+  /** 
+   * Configuration step for running optimization. Creates a mapping
+   * object based on the passed in optimization parameters
+   */
+  CoefficientMapping *GenerateCoefficientMapping(
+    OptimizationParameters &p);
+
+  /** 
+   * Configuration step for running optimization. Adds all energy terms
+   * to the optimization problem with appropriate weights.
+   */
+  void ConfigureEnergyTerms(
+    MedialOptimizationProblem &xProblem,                                     
+    OptimizationParameters &p,
+    FloatImage *image, 
+    FloatImage *imgGray);
+
   /** Save the model as a BYU mesh */
   void SaveBYUMesh(const char *file);
 
@@ -241,6 +261,7 @@ public:
   void SampleInterior(const char *file, double xStep, double xStart, double xEnd,
                       FloatImage *fim = NULL);
 
+
 protected:
 
   /** Constructor. Takes the medial model from child class. */
@@ -248,9 +269,6 @@ protected:
 
   // The solver
   GenericMedialModel *xMedialModel;
-
-  // Properties associated with different modes
-  double xStepSize;
 
   // A file where the mesh info is dumped
   std::string strDumpPath, strOptimizerDump;
@@ -391,6 +409,11 @@ public:
    * level of atoms. This method will subdivide either of the meshes.
    */
   void SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub);
+
+  /**
+   * Remesh coefficient and atom-level meshes
+   */
+  void Remesh();
 
   /**
    * Convert a Brute Force cm-rep to a PDE one. The radius function is used

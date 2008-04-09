@@ -3,6 +3,8 @@
 
 #include <cstdlib>
 
+class TriangleMesh;
+
 class MedialIterationContext
 {
 public:
@@ -45,6 +47,18 @@ public:
       
   size_t GetProfileIntervalIndex(size_t iBoundary, size_t iDepth)
     { return iDepth * xBndMap[nAtoms] + iBoundary; }
+
+  /** 
+   * Get a data structure for the medial triagle mesh. This allows various
+   * neighborhood inquiries to be performed, and is good for computing
+   * discrete first and second order derivative properties
+   */
+  virtual TriangleMesh *GetMedialMesh() = 0;
+
+  /**
+   * Get a data structure for the boundary triangle mesh 
+   */
+  virtual TriangleMesh *GetBoundaryMesh() = 0;
 
 protected:
 

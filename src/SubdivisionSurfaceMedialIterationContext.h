@@ -3,6 +3,7 @@
 
 #include "SubdivisionSurface.h"
 #include "MedialIterationContext.h"
+#include "MeshTraversal.h"
 
 class SubdivisionSurfaceMedialIterationContext 
 : public MedialIterationContext
@@ -30,13 +31,50 @@ public:
     for(size_t j = 0; j < nTriangles; j++)
       for(size_t k = 0; k < 3; k++)
         xTriMap[j].v[k] = inMesh->triangles[j].vertices[k];
+
+    // The passed in mesh can be stored as the medial mesh
+    xMedialMesh = inMesh;
+    
+    // Create a new boundary mesh
+    xBoundaryMesh = new TriangleMesh();
+
+    // Generate the mesh from the triangle information
+    TriangleMeshGenerator tgbnd(xBoundaryMesh, this->GetNumberOfBoundaryPoints());
+
+    // Iterate over the boundary triangles, adding points
+    for(MedialBoundaryTriangleIterator it(this); !it.IsAtEnd(); ++it)
+      {
+      tgbnd.AddTriangle(
+        it.GetBoundaryIndex(0), it.GetBoundaryIndex(1), it.GetBoundaryIndex(2));
+      }
+
+    // Generate it!
+    tgbnd.GenerateMesh();
     }
 
   ~SubdivisionSurfaceMedialIterationContext()
     {
     delete xTriMap;
     delete xBndMap;
+    delete xBoundaryMesh;
     }
+
+  /** 
+   * Get a data structure for the medial triagle mesh. This allows various
+   * neighborhood inquiries to be performed, and is good for computing
+   * discrete first and second order derivative properties
+   */
+  TriangleMesh *GetMedialMesh()
+    { return this->xMedialMesh; }
+
+  /**
+   * Get a data structure for the boundary triangle mesh 
+   */
+  TriangleMesh *GetBoundaryMesh()
+    { return this->xBoundaryMesh; }
+
+private:
+  TriangleMesh *xMedialMesh, *xBoundaryMesh;
 };
 
 #endif

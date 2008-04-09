@@ -14,16 +14,6 @@
 
 using namespace std;
 
-SubdivisionSurface::Triangle::Triangle()
-{
-  for(size_t i = 0; i < 3; i++)
-  {
-    vertices[i] = NOID;
-    neighbors[i] = NOID;
-    nedges[i] = -1;
-  }
-}
-
 void
 SubdivisionSurface
 ::SetOddVertexWeights(MutableSparseMatrix &W,
@@ -61,106 +51,6 @@ SubdivisionSurface
     W(ivc,tp.vertices[(v+1)%3]) = W_BND_EDGE_CONN;
     W(ivc,tp.vertices[(v+2)%3]) = W_BND_EDGE_CONN;
   }
-}
-
-inline bool NeighborPairPredicate (
-  const pair<size_t, SubdivisionSurface::NeighborInfo> &p1,
-  const pair<size_t, SubdivisionSurface::NeighborInfo> &p2)
-{
-  return p1.first < p2.first;
-}
-
-void SubdivisionSurface
-::ComputeWalks(MeshLevel *mesh)
-{
-  // Create a temporary mutable structure that represents walk info
-  typedef std::pair<size_t, NeighborInfo> Entry;
-  typedef std::list<Entry> Row;
-  std::vector<Row> walks(mesh->nVertices);
-
-  // Loop over all triangles, all vertices
-  for(size_t t = 0; t < mesh->triangles.size(); t++) for(size_t v = 0; v < 3; v++)
-    {
-      // This is the index of the current vertex
-      size_t ivtx = mesh->triangles[t].vertices[v];
-
-      // Check if the walk around the vertex has already been generated
-      if(walks[ivtx].size() == 0)
-      {
-        // The current position in the walk
-        size_t tWalk = t; short vWalk = v;
-
-        // The position at which the walk will loop around
-        size_t tLoop = t;
-
-        // Walk until reaching a NOID triangle or looping around
-        // cout << "Walk around vtx. " << ivtx << endl;
-        do
-        {
-          // Get a reference to the current triangle
-          Triangle &T = mesh->triangles[tWalk];
-
-          // Represent the next triangle in the walk
-          size_t tNext = T.neighbors[ror(vWalk)];
-          short vNext = ror(T.nedges[ror(vWalk)]);
-
-          // Put the current edge in the triangle into the list
-          // cout << "Fwd walk: visiting vtx. " << T.vertices[rol(vWalk)] <<
-          //    "; behind: (" << tWalk << "," << vWalk <<
-          //    "); ahead: (" << tNext << "," << vNext << ")" <<  endl;
-          walks[ivtx].push_back( make_pair(
-                                   T.vertices[rol(vWalk)],
-                                   NeighborInfo(tNext, vNext, tWalk, vWalk)));
-
-          // Update the position in the walk
-          tWalk = tNext; vWalk = vNext;
-        }
-        while(tWalk != NOID && tWalk != tLoop);
-
-        // Now, if we hit a NOID, we can need to walk in the opposite direction,
-        // starting from the same triangle as before
-        if(tWalk == NOID)
-        {
-          // Reset the position in the walk
-          tWalk = t; vWalk = v;
-
-          // Walk again, in a symmetrical loop
-          do
-          {
-            // Get a reference to the current triangle
-            Triangle &T = mesh->triangles[tWalk];
-
-            // Represent the next triangle in the walk
-            size_t tNext = T.neighbors[rol(vWalk)];
-            short vNext = rol(T.nedges[rol(vWalk)]);
-
-            // Put the current edge in the triangle into the list
-            // cout << "Rev walk: visiting vtx. " << T.vertices[ror(vWalk)] <<
-            //   "; behind: (" << tNext << "," << vNext <<
-            //   "); ahead: (" << tWalk << "," << vWalk << ")" << endl;
-            walks[ivtx].push_front( make_pair(
-                                      T.vertices[ror(vWalk)],
-                                      NeighborInfo(tWalk, vWalk, tNext, vNext)));
-
-            // Update the position in the walk
-            tWalk = tNext; vWalk = vNext;
-          }
-          while(tWalk != NOID);
-        }
-        else
-        {
-          // Rotate the walk so that the smallest member is the first element
-          // (for consistency with MMA code)
-          rotate(walks[ivtx].begin(),
-                 min_element(walks[ivtx].begin(), walks[ivtx].end(), &NeighborPairPredicate),
-                 walks[ivtx].end());
-        }
-      }
-    }
-
-  // Now we have visited all the vertices and computed a walk around each one.
-  // All that is left is to transfer this result into a sparse matrix
-  mesh->nbr.SetFromSTL(walks, mesh->triangles.size());
 }
 
 /**
@@ -243,6 +133,8 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
 
   // Subdivide each triangle into four
   child->triangles.resize(ntChild);
+  std::fill(child->triangles.begin(), child->triangles.end(), Triangle());
+
   for (i = 0; i < ntParent; i++)
   {
     // Get pointers to the four ctren
@@ -290,21 +182,31 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
   MutableSparseMatrix W(parent->nVertices + neParent, parent->nVertices);
 
   // Visit each of the even vertices, assigning it an id and weights
-  for(i = 0; i < ntParent; i++) for(j = 0; j < 3; j++)
-      if (child->triangles[4 * i + j].vertices[j] == NOID)
+  for(i = 0; i < ntParent; i++)
+    {
+    for(j = 0; j < 3; j++)
       {
+      if (child->triangles[4 * i + j].vertices[j] == NOID)
+        {
         RecursiveAssignVertexLabel(child, 4*i+j, j, parent->triangles[i].vertices[j]);
         SetEvenVertexWeights(W, parent, child, 4*i+j, j);
+        }
       }
+    }
 
   // Visit each of the odd vertices, assigning it an id, and weights
   child->nVertices = parent->nVertices;
-  for(i = 0; i < ntParent; i++) for(j = 0; j < 3; j++)
-      if (child->triangles[4 * i + 3].vertices[j] == NOID)
+  for(i = 0; i < ntParent; i++) 
+    {
+    for(j = 0; j < 3; j++)
       {
+      if (child->triangles[4 * i + 3].vertices[j] == NOID)
+        {
         RecursiveAssignVertexLabel(child, 4*i+3, j, child->nVertices++);
         SetOddVertexWeights(W, parent, child, 4*i+3, j);
+        }
       }
+    }
 
   // Copy the sparse matrix into immutable form
   child->weights.SetFromVNL(W);
@@ -316,7 +218,7 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
       child->weights, child->weights, parent->weights);
 
   // Compute the walks in the child mesh
-  ComputeWalks(child);
+  child->ComputeWalks();
 }
 
 void
@@ -360,7 +262,7 @@ RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n)
   dst->parent = src;
 }
 
-void SubdivisionSurface::ExportLevelToVTK(MeshLevel &src, vtkPolyData *mesh)
+void SubdivisionSurface::ExportLevelToVTK(const MeshLevel &src, vtkPolyData *mesh)
 {
   // The important thing with importing and exporting mesh levels is that the
   // order of triangles and vertices must be maintained.
@@ -381,29 +283,15 @@ void SubdivisionSurface::ExportLevelToVTK(MeshLevel &src, vtkPolyData *mesh)
 
 void SubdivisionSurface::ImportLevelFromVTK(vtkPolyData *mesh, MeshLevel &dest)
 {
-  size_t i, j;
+  // Create the generator
+  TriangleMeshGenerator tmgen(&dest, mesh->GetNumberOfPoints());
 
-  // Prepare the mesh
+  // Prepare the VTK mesh
   mesh->BuildCells();
-
-  // Typedefs
-  typedef pair<size_t, size_t> HalfEdge;
-  typedef pair<size_t, short> TriangleRep;
-  typedef map<HalfEdge, TriangleRep> TriangleMap;
-
-  // Get the number of triangles in the mesh
-  size_t nTriangles = mesh->GetNumberOfCells();
-  dest.triangles.resize(nTriangles);
-
-  // Set the number of vertices in the mesh
-  dest.nVertices = mesh->GetNumberOfPoints();
-
-  // Initialize the triangle map
-  TriangleMap tmap;
 
   // For each triangle, compute the neighbor. This can be done by first enumerating
   // all the edges in the mesh. For each edge there will be one or two triangles
-  for(i = 0; i < nTriangles; i++)
+  for(size_t i = 0; i < mesh->GetNumberOfCells(); i++)
   {
     // Get the points from the current triangle
     vtkIdType npts, *pts;
@@ -412,42 +300,15 @@ void SubdivisionSurface::ImportLevelFromVTK(vtkPolyData *mesh, MeshLevel &dest)
     // If the number of points is not 3, return with an exception
     if(npts != 3) throw string("Mesh contains cells other than triangles");
 
-    // Associate each half-edge with a triangle
-    for(j = 0; j < 3; j++)
-    {
-      // Set the vertices in each triangle
-      dest.triangles[i].vertices[j] = pts[j];
-
-      // Create the key and value
-      HalfEdge he(pts[(j+1) % 3], pts[(j+2) % 3]);
-      TriangleRep trep(i, (short) j);
-
-      // Insert the half-edge and check for uniqueness
-      pair<TriangleMap::iterator, bool> rc = tmap.insert(make_pair(he, trep));
-      if(!rc.second)
-        throw string("Half-edge appears twice in the mesh, that is illegal!");
-    }
+    // Add the vertices
+    tmgen.AddTriangle(pts[0], pts[1], pts[2]);
   }
 
-  // Take a pass through all the half-edges. For each, set the corresponding triangle's
-  // neighbor and neighbor index
-  for(TriangleMap::iterator it = tmap.begin(); it != tmap.end(); ++it)
-  {
-    TriangleRep &trep = it->second;
-    HalfEdge opposite(it->first.second, it->first.first);
-    TriangleMap::iterator itopp = tmap.find(opposite);
-    if(itopp != tmap.end())
-    {
-      dest.triangles[trep.first].neighbors[trep.second] = itopp->second.first;
-      dest.triangles[trep.first].nedges[trep.second] = itopp->second.second;
-    }
-  }
+  // Generate the mesh after all triangles added
+  tmgen.GenerateMesh();
 
   // Set the mesh's parent to NULL
   dest.parent = NULL;
-
-  // Finally, compute the walks in this mesh
-  ComputeWalks(&dest);
 }
 
 void SubdivisionSurface
@@ -591,125 +452,8 @@ bool SubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
 }
 
 
-/******************************************************************
- CODE FOR THE LOOP TANGENT SCHEME
- *****************************************************************/
-
-LoopTangentScheme::LoopTangentScheme()
-{
-  level = NULL;
-}
-
-LoopTangentScheme::~LoopTangentScheme()
-{
-  Reset();
-}
-
-void LoopTangentScheme::Reset()
-{
-  if(level)
-  {
-    level = NULL;
-    delete xNbrTangentWeights[0];
-    delete xNbrTangentWeights[1];
-    delete xVtxTangentWeights[0];
-    delete xVtxTangentWeights[1];
-  }
-}
-
-void LoopTangentScheme::SetMeshLevel(MeshLevel *in_level)
-{
-  // Clean up if necessary
-  Reset();
-
-  // Store the pointer to the mesh level
-  level = in_level;
-
-  // Initialize the tangent weights. These arrays assign a weight to all the
-  // neighboring vertices. But sometimes the vertex's own weight also needs
-  // to be included. How to handle this?
-  size_t nSparseEntries = level->nbr.GetNumberOfSparseValues();
-
-  for(size_t d = 0; d < 2; d++)
-  {
-    xNbrTangentWeights[d] = new double[nSparseEntries];
-    xVtxTangentWeights[d] = new double[level->nVertices];
-    fill_n(xNbrTangentWeights[d], nSparseEntries, 0.0);
-    fill_n(xVtxTangentWeights[d], level->nVertices, 0.0);
-  }
-
-  // Compute tangent weight at each vertex
-  for(size_t i = 0; i < level->nVertices; i++)
-  {
-    // Create an iterator around the vertex
-    EdgeWalkAroundVertex it(level, i);
-
-    // Get the valence of the vertex
-    size_t n = it.Valence();
-
-    // If the vertex is internal, weights are easy to compute
-    if(!it.IsOpen())
-    {
-      for(size_t j = 0; !it.IsAtEnd(); ++it, ++j)
-      {
-        // size_t idxA = xMapVertexNbrToA[it.GetPositionInMeshSparseArray()];
-        size_t k = it.GetPositionInMeshSparseArray();
-        xNbrTangentWeights[0][k] = cos(j * vnl_math::pi * 2.0 / n);
-        xNbrTangentWeights[1][k] = sin(j * vnl_math::pi * 2.0 / n);
-      }
-    }
-    else
-    {
-      // Get the index of the first neighbor
-      size_t kFirst = it.GetPositionInMeshSparseArray();
-
-      // Move the index to the last neighbor
-      it.GoToLastEdge();
-      size_t kLast = it.GetPositionInMeshSparseArray();
-
-      // We can now set the along-the-edge tangent vector
-      xNbrTangentWeights[1][kFirst] = 1.0;
-      xNbrTangentWeights[1][kLast] = -1.0;
-
-      // Now we branch according to the valence
-      if(n == 2)
-      {
-        xNbrTangentWeights[0][kFirst] = -1.0;
-        xNbrTangentWeights[0][kLast] = -1.0;
-        xVtxTangentWeights[0][i] = 2.0;
-      }
-      else if (n == 3)
-      {
-        // Move iterator to the previous (middle) vertex
-        it.GoToFirstEdge(); ++it;
-
-        // Get the corresponding A index
-        size_t kMiddle = it.GetPositionInMeshSparseArray();
-
-        // Set the weights
-        xNbrTangentWeights[0][kMiddle] = -1.0;
-        xVtxTangentWeights[0][i] = 1.0;
-      }
-      else
-      {
-        // Compute the angle theta
-        double theta = vnl_math::pi / (n - 1);
-        xNbrTangentWeights[0][kFirst] = xNbrTangentWeights[0][kLast] = sin(theta);
-
-        // Assign the weights to intermediate vertices
-        it.GoToFirstEdge(); ++it;
-        for(size_t j = 1; j < n - 1; ++j, ++it)
-        {
-          size_t kInt = it.GetPositionInMeshSparseArray();
-          xNbrTangentWeights[0][kInt] = (2.0 * cos(theta) - 2.0) * sin(theta * j);
-        }
-      }
-    }
-  }
-}
 
 
 
-// We need to instantiate sparse matrix of NeighborInfo objects
-#include "SparseMatrix.txx"
-template class ImmutableSparseArray<SubdivisionSurface::NeighborInfo>;
+
+

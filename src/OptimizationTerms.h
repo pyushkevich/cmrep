@@ -338,9 +338,11 @@ private:
 class LocalDistanceDifferenceEnergyTerm : public EnergyTerm
 {
 public:
-  LocalDistanceDifferenceEnergyTerm(
-    GenericMedialModel *model,
-    vector<GenericMedialModel *> &mdlReference);
+  /** Standard initialization */
+  LocalDistanceDifferenceEnergyTerm(GenericMedialModel *model);
+
+  // Set the parameters from a registry
+  void SetParameters(Registry &r);
 
   /** Compute the volume overlap fraction between image and m-rep */
   double ComputeEnergy(SolutionData *data)
@@ -378,6 +380,9 @@ private:
     double dm[3], db0[3], db1[3], r[3];
     };
 
+  // Medial model
+  GenericMedialModel *xModel;
+
   // Array of profiles, one for each boundary point
   std::vector<DistanceData> xRefDistData, xDistData;
 
@@ -388,10 +393,7 @@ private:
   double xTotalPenalty;
 };
 
-class CrossCorrelationImageMatchTerm : public EnergyTerm
-{
-public:
-  /**
+/**
    * Cross correlation energy term is initialized with a target image,
    * a medial model, a reference image, and a reference medial model.
    * The target image is the one we want to match, and the model is the
@@ -404,10 +406,19 @@ public:
    * meaning that the spoke extends to the boundary. Setting xiMax to 2.0 will
    * make it extend one radius value past the boundary.
    */
+class CrossCorrelationImageMatchTerm : public EnergyTerm
+{
+public:
+  
+  /** Initialize this term with the current model and target image*/
   CrossCorrelationImageMatchTerm(
-    EuclideanFunction *fTarget, GenericMedialModel *model,
-    EuclideanFunction *fReference, GenericMedialModel *mdlReference,
-    size_t nCuts, double xiMax = 1.0);
+    GenericMedialModel *model, FloatImage *xGrayImage);
+
+  // Destructor
+  ~CrossCorrelationImageMatchTerm();
+
+  /** Load the parameters from file */
+  void SetParameters(Registry &r);
 
   /** Compute the volume overlap fraction between image and m-rep */
   double ComputeEnergy(SolutionData *data)
@@ -478,6 +489,9 @@ private:
 
   // Total penalty
   double xTotalPenalty;
+
+  // Model
+  GenericMedialModel *xModel;
 
   // Target image function
   EuclideanFunction *fTarget, *fReference;
@@ -912,6 +926,8 @@ private:
   size_t nBnd;
   std::vector<SMLVec3d> xMeanCurvVec, dMeanCurvVec;
   double xIntegralSqrMeanCrv, xCrestCurvatureTerm, xPenalty;
+
+  StatisticsAccumulator saCurv, saDenom;
 };
 
 /*
@@ -1148,6 +1164,15 @@ public:
   vector<EnergyTerm *> &GetEnergyTerms()
     { return xTerms; }
 
+  /** Be quiet! */
+  void QuietOn() 
+    { flagQuiet = true; }
+
+  void QuietOff() 
+    { flagQuiet = false; }
+
+  void DumpGradientMesh();
+
 private:
   typedef vnl_vector<double> Vec;
   typedef vnl_matrix<double> Mat;
@@ -1195,7 +1220,10 @@ private:
 
   // Last place where the gradient was evaluated and its value there
   vnl_vector<double> xLastGradPoint, xLastGradient, xLastGradHint;
-  bool flagGradientComputed;
+  bool flagGradientComputed, flagQuiet;
+
+  // Array of gradient vectors for each optimization term
+  std::vector<vnl_vector<double>> xLastGradientPerTerm;
 
   // The solution at the last evaluation point
   vnl_matrix<double> xLastPhiField;
