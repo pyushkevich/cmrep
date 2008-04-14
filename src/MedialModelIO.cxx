@@ -275,18 +275,21 @@ SubdivisionMedialModelIO
     // Copy to the coefficient vector
     for(i = 0; i < mesh.nVertices; i++)
       {
+      double R;
       if(daRad)
         {
-        C[4 * i + 3] = daRad->GetTuple1(i);
+        R = daRad->GetTuple1(i);
         }
       else 
         {
         EdgeWalkAroundVertex walk(&mesh, i);
         if(walk.IsOpen())
-          C[4 * i + 3] = xDefaultBndRad;
+          R = xDefaultBndRad;
         else
-          C[4 * i + 3] = xDefaultInsideRad;
+          R = xDefaultInsideRad;
         }
+
+      C[4 * i + 3] = R;
       }
 
     // Create the medial model

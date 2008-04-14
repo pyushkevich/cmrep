@@ -50,6 +50,17 @@ public:
     this->Update(s, xRelError, erel); 
     }
 
+  void Update(const std::string &s, double dv, double v1, double v2, double v3, double v4, double eps)
+    {
+    // Estimate the derivative up to the fourth order of epsilon
+    double fd = -(v1 + 27 * (v3 - v2) - v4) / (24 * eps);    
+    double eabs = fabs(dv - fd);
+    double mean = 0.5 * (fabs(dv) + fabs(fd)) + eps;
+    double erel = eabs / mean;
+    this->Update(s, xAbsError, eabs);
+    this->Update(s, xRelError, erel);
+    }
+
   void Update(const std::string &s, SMLVec3d dv, SMLVec3d v1, SMLVec3d v2, double eps)
     {
     // Absolute error
@@ -65,6 +76,17 @@ public:
     // The way to compute e-rel below is wrong! comparing derivative
     // to the function value
     // double erel = eabs / (0.5 * (v1 + v2).two_norm() + eps);
+    this->Update(s, xAbsError, eabs); 
+    this->Update(s, xRelError, erel); 
+    }
+
+  void Update(const std::string &s, SMLVec3d dv, 
+    SMLVec3d v1, SMLVec3d v2, SMLVec3d v3, SMLVec3d v4, double eps)
+    {
+    SMLVec3d fd = -(v1 + 27. * (v3 - v2) - v4) / (24 * eps); 
+    double eabs = (dv - fd).two_norm();
+    double mean = 0.5 * (dv.two_norm() + fd.two_norm()) + eps;
+    double erel = eabs / mean;
     this->Update(s, xAbsError, eabs); 
     this->Update(s, xRelError, erel); 
     }
@@ -110,7 +132,7 @@ int TestGradientComputation(
   CodeTimer tCentral, tAnalytic, tInitialSolver;
   
   // The epsilon for central difference tests
-  double master_eps = 0.0001;
+  double master_eps = 1.0e-5;
 
   // The number of atoms in the solver
   size_t nAtoms = xSolver->GetNumberOfAtoms();
@@ -189,6 +211,8 @@ int TestGradientComputation(
   MedialAtom *A0 = new MedialAtom[nAtoms];
   MedialAtom *A1 = new MedialAtom[nAtoms];
   MedialAtom *A2 = new MedialAtom[nAtoms];
+  MedialAtom *A3 = new MedialAtom[nAtoms];
+  MedialAtom *A4 = new MedialAtom[nAtoms];
 
   // Create a hint vector
   GenericMedialModel::Vec xHint = xSolver->GetHintArray();
@@ -228,14 +252,24 @@ int TestGradientComputation(
       try 
         {
         // Solve for the forward difference
-        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + eps * xVar));
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + 1.5 * eps * xVar));
         tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A1);
 
-        // Solve for the backward difference
-        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - eps * xVar));
+        // Solve for the forward difference
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + 0.5 * eps * xVar));
         tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A2);
+
+        // Solve for the backward difference
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - 0.5 * eps * xVar));
+        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A3);
+
+        // Solve for the backward difference
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - 1.5 * eps * xVar));
+        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A4);
 
         // Exit loop 
         break;
@@ -260,27 +294,23 @@ int TestGradientComputation(
       // Point to the atoms
       MedialAtom &a1 = A1[i];
       MedialAtom &a2 = A2[i];
+      MedialAtom &a3 = A3[i];
+      MedialAtom &a4 = A4[i];
       MedialAtom &a0 = dAtoms[i];
 
       // Look at such a simple thing as a.X
-      dtq.Update("Atom's X", a0.X, a1.X, a2.X, eps);
-      dtq.Update("Atom's Xu", a0.Xu, a1.Xu, a2.Xu, eps);
-      dtq.Update("Atom's Xv", a0.Xv, a1.Xv, a2.Xv, eps);
-      dtq.Update("Atom's Xuu", a0.Xuu, a1.Xuu, a2.Xuu, eps);
-      dtq.Update("Atom's Xuv", a0.Xuv, a1.Xuv, a2.Xuv, eps);
-      dtq.Update("Atom's Xvv", a0.Xvv, a1.Xvv, a2.Xvv, eps);
-      dtq.Update("Atom's R", a0.R, a1.R, a2.R, eps);
-      dtq.Update("Atom's Fu", a0.Fu, a1.Fu, a2.Fu, eps);
-      dtq.Update("Atom's Fv", a0.Fv, a1.Fv, a2.Fv, eps);
-      dtq.Update("Atom's N", a0.N, a1.N, a2.N, eps);
-
-      if(fabs(a0.R - 0.5 * (a1.R - a2.R) / eps) > 0.01)
-        {
-        cerr << "Got a weird one!" << endl;
-        }
-
-
-
+      dtq.Update("Atom's X", a0.X, a1.X, a2.X, a3.X, a4.X, eps);
+      dtq.Update("Atom's Xu", a0.Xu, a1.Xu, a2.Xu, a3.Xu, a4.Xu, eps);
+      dtq.Update("Atom's Xv", a0.Xv, a1.Xv, a2.Xv, a3.Xv, a4.Xv, eps);
+      dtq.Update("Atom's Xuu", a0.Xuu, a1.Xuu, a2.Xuu, a3.Xuu, a4.Xuu, eps);
+      dtq.Update("Atom's Xuv", a0.Xuv, a1.Xuv, a2.Xuv, a3.Xuv, a4.Xuv, eps);
+      dtq.Update("Atom's Xvv", a0.Xvv, a1.Xvv, a2.Xvv, a3.Xvv, a4.Xvv, eps);
+      dtq.Update("Atom's R", a0.R, a1.R, a2.R, a3.R, a4.R, eps);
+      dtq.Update("Atom's Ru", a0.Ru, a1.Ru, a2.Ru, a3.Ru, a4.Ru, eps);
+      dtq.Update("Atom's Rv", a0.Rv, a1.Rv, a2.Rv, a3.Rv, a4.Rv, eps);
+      dtq.Update("Atom's Fu", a0.Fu, a1.Fu, a2.Fu, a3.Fu, a4.Fu, eps);
+      dtq.Update("Atom's Fv", a0.Fv, a1.Fv, a2.Fv, a3.Fv, a4.Fv, eps);
+      dtq.Update("Atom's N", a0.N, a1.N, a2.N, a3.N, a4.N, eps);
 
       // Look at the difference in the specific terms of metric tensor
       for(size_t u = 0; u < 2; u++) for(size_t v = 0; v < 2; v++)
@@ -288,42 +318,62 @@ int TestGradientComputation(
         dtq.Update("Metric Tensor (Covariant)", 
           a0.G.xCovariantTensor[u][v],
           a1.G.xCovariantTensor[u][v],
-          a2.G.xCovariantTensor[u][v], eps);
+          a2.G.xCovariantTensor[u][v],
+          a3.G.xCovariantTensor[u][v],
+          a4.G.xCovariantTensor[u][v], eps);
 
         dtq.Update("Metric Tensor (Contra)", 
           a0.G.xContravariantTensor[u][v],
           a1.G.xContravariantTensor[u][v],
-          a2.G.xContravariantTensor[u][v], eps);
+          a2.G.xContravariantTensor[u][v],
+          a3.G.xContravariantTensor[u][v],
+          a4.G.xContravariantTensor[u][v], eps);
 
         for(size_t w = 0; w < 2; w++)
           {
           dtq.Update("ChristoffelSymols(1)",
             a0.G.xChristoffelFirst[u][v][w],
             a1.G.xChristoffelFirst[u][v][w],
-            a2.G.xChristoffelFirst[u][v][w], eps);
+            a2.G.xChristoffelFirst[u][v][w],
+            a3.G.xChristoffelFirst[u][v][w],
+            a4.G.xChristoffelFirst[u][v][w], eps);
 
           dtq.Update("ChristoffelSymols(2)",
             a0.G.xChristoffelSecond[u][v][w],
             a1.G.xChristoffelSecond[u][v][w],
-            a2.G.xChristoffelSecond[u][v][w], eps);
+            a2.G.xChristoffelSecond[u][v][w],
+            a3.G.xChristoffelSecond[u][v][w],
+            a4.G.xChristoffelSecond[u][v][w], eps);
           }
         }
 
       // Take the largest difference in Phi
-      dtq.Update("Phi", a0.F, a1.F, a2.F, eps);
+      dtq.Update("Phi", a0.F, a1.F, a2.F, a3.F, a4.F, eps);
 
       // Also look at the differences in grad R mag sqr.
       dtq.Update("Sqr. Grad. Mag. of R", 
-        a0.xGradRMagSqr, a1.xGradRMagSqr, a2.xGradRMagSqr, eps);
+        a0.xGradRMagSqr, 
+        a1.xGradRMagSqr, 
+        a2.xGradRMagSqr,
+        a3.xGradRMagSqr, 
+        a4.xGradRMagSqr, eps);
 
       // Look at the gradR difference
-      dtq.Update("Grad R", a0.xGradR, a1.xGradR, a2.xGradR, eps);
+      dtq.Update("Grad R", a0.xGradR, a1.xGradR, a2.xGradR, a3.xGradR, a4.xGradR, eps);
 
       // Mean and Gaussian curvature
       dtq.Update("Medial mean curvature", 
-        a0.xMeanCurv, a1.xMeanCurv, a2.xMeanCurv, eps);
+        a0.xMeanCurv, 
+        a1.xMeanCurv, 
+        a2.xMeanCurv,
+        a3.xMeanCurv, 
+        a4.xMeanCurv, eps);
       dtq.Update("Medial Gaussian curvature", 
-        a0.xGaussCurv, a1.xGaussCurv, a2.xGaussCurv, eps);
+        a0.xGaussCurv, 
+        a1.xGaussCurv, 
+        a2.xGaussCurv,
+        a3.xGaussCurv, 
+        a4.xGaussCurv, eps);
 
       // Take the largest difference in boundary derivs
       // for(unsigned int k = 0; k < 2; k++)
@@ -338,12 +388,16 @@ int TestGradientComputation(
     SolutionData sd0(xGrid, A0);
     SolutionData sd1(xGrid, A1);
     SolutionData sd2(xGrid, A2);
+    SolutionData sd3(xGrid, A3);
+    SolutionData sd4(xGrid, A4);
     PartialDerivativeSolutionData pdsd(&sd0, dAtoms);
 
     // Compute the boundary weights derivatives
     sd0.ComputeIntegrationWeights();
     sd1.ComputeIntegrationWeights();
     sd2.ComputeIntegrationWeights();
+    sd3.ComputeIntegrationWeights();
+    sd4.ComputeIntegrationWeights();
     pdsd.ComputeIntegrationWeights();
 
     for(size_t q = 0; q < xGrid->GetNumberOfAtoms(); q++)
@@ -351,7 +405,20 @@ int TestGradientComputation(
       dtq.Update("Weights (medial)",
         pdsd.xMedialWeights[q],
         sd1.xMedialWeights[q],
-        sd2.xMedialWeights[q], eps);
+        sd2.xMedialWeights[q],
+        sd3.xMedialWeights[q],
+        sd4.xMedialWeights[q], eps);
+      }
+
+    // more stuff
+    for(MedialBoundaryTriangleIterator tit(xGrid); !tit.IsAtEnd(); ++tit)
+      {
+      dtq.Update("Weights (check)",
+        pdsd.xBoundaryTriangleArea[tit.GetIndex()],
+        sd1.xBoundaryTriangleArea[tit.GetIndex()],
+        sd2.xBoundaryTriangleArea[tit.GetIndex()],
+        sd3.xBoundaryTriangleArea[tit.GetIndex()],
+        sd4.xBoundaryTriangleArea[tit.GetIndex()], eps);
       }
 
     // Compute the area weight difference
@@ -361,33 +428,37 @@ int TestGradientComputation(
       dtq.Update("Weights (boundary)",
         pdsd.xBoundaryWeights[it.GetIndex()],
         sd1.xBoundaryWeights[it.GetIndex()],
-        sd2.xBoundaryWeights[it.GetIndex()], eps);
+        sd2.xBoundaryWeights[it.GetIndex()],
+        sd3.xBoundaryWeights[it.GetIndex()],
+        sd4.xBoundaryWeights[it.GetIndex()], eps);
 
       dtq.Update("Boundary Node Positions",
         GetBoundaryPoint(it, dAtoms).X,
         GetBoundaryPoint(it, A1).X,
-        GetBoundaryPoint(it, A2).X, eps);
+        GetBoundaryPoint(it, A2).X,
+        GetBoundaryPoint(it, A3).X,
+        GetBoundaryPoint(it, A4).X, eps);
 
       dtq.Update("Boundary Node Normals",
         GetBoundaryPoint(it, dAtoms).N,
         GetBoundaryPoint(it, A1).N,
-        GetBoundaryPoint(it, A2).N, eps);
-
-      double eN = (GetBoundaryPoint(it, dAtoms).N - 0.5 * (GetBoundaryPoint(it, A1).N - GetBoundaryPoint(it, A2).N) / eps).squared_magnitude();
-      if(eN > 1.0)
-        {
-        cerr << "Problem with node, bnd =  " << dAtoms[it.GetAtomIndex()].flagCrest << endl;
-        }
+        GetBoundaryPoint(it, A2).N,
+        GetBoundaryPoint(it, A3).N,
+        GetBoundaryPoint(it, A4).N, eps);
 
       dtq.Update("Boundary Mean Curv",
         GetBoundaryPoint(it, dAtoms).curv_mean,
         GetBoundaryPoint(it, A1).curv_mean,
-        GetBoundaryPoint(it, A2).curv_mean, eps);
+        GetBoundaryPoint(it, A2).curv_mean,
+        GetBoundaryPoint(it, A3).curv_mean,
+        GetBoundaryPoint(it, A4).curv_mean, eps);
 
       dtq.Update("Boundary Gauss Curv",
         GetBoundaryPoint(it, dAtoms).curv_gauss,
         GetBoundaryPoint(it, A1).curv_gauss,
-        GetBoundaryPoint(it, A2).curv_gauss, eps);
+        GetBoundaryPoint(it, A2).curv_gauss,
+        GetBoundaryPoint(it, A3).curv_gauss,
+        GetBoundaryPoint(it, A4).curv_gauss, eps);
 
       /* UNCOMMENT LATER! 
       dtq.Update("Integration Weights",
@@ -409,7 +480,7 @@ int TestGradientComputation(
   delete dAtoms;
 
   // Delete the atom arrays
-  delete A0; delete A1; delete A2;
+  delete A0; delete A1; delete A2; delete A3; delete A4;
 
   // Finalize the gradient computation
   tAnalytic.Start();

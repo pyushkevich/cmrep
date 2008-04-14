@@ -25,6 +25,9 @@
 
 #include "vtkUnstructuredGrid.h"
 #include "vtkPointLocator.h"
+#include "vtkPolyData.h"
+#include "vtkPolyDataWriter.h"
+#include "vtkCellLocator.h"
 
 
 #include <vnl/algo/vnl_qr.h>
@@ -36,8 +39,14 @@
 #include <algorithm>
 #include <fstream>
 
-#include "vtkPolyData.h"
-#include "vtkPolyDataWriter.h"
+
+#include <CGAL/Surface_mesh_default_triangulation_3.h>
+#include <CGAL/Complex_2_in_triangulation_3.h>
+#include <CGAL/make_surface_mesh.h>
+#include <CGAL/Implicit_surface_3.h>
+
+
+
 
 // References to FORTRAN code
 extern "C" {
@@ -78,6 +87,14 @@ void WriteMatrixFile(const vnl_matrix<double> &mat, const char *file)
       }
   ofs.close();
 }
+
+/*
+#include "gtb/graphics/indexed_triangle_set.hpp"
+#include "gtb/graphics/triangle_mesh.h"
+typedef gtb::tTriangleMesh<float> AFrontMesh;
+extern int do_tri_mesh(int csubdiv, AFrontMesh &mesh);
+*/
+
 
 namespace medialpde {
 
@@ -1465,6 +1482,179 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
 }
 
 
+template <typename GT>
+class Voodoo 
+  {
+  public:
+
+    typedef Voodoo<GT> Self;
+
+    typedef typename GT::Point_3 Point;
+    typedef typename GT::Segment_3 Segment_3;
+    typedef typename GT::Ray_3 Ray_3;
+    typedef typename GT::Line_3 Line_3;
+
+
+    MedialAtom *atoms;
+    TriangleMesh *mesh;
+    vtkPoints *points;
+    vtkPolyData *poly;
+    vtkCellLocator *locator;
+
+    Voodoo(TriangleMesh *mesh, MedialAtom *atoms)
+      : mesh(mesh), atoms(atoms)
+      {
+      // Create a polydata from the mesh
+      points = vtkPoints::New();
+      points->Allocate(mesh->nVertices);
+      for(size_t i = 0; i < mesh->nVertices; i++)
+        points->InsertNextPoint(atoms[i].X[0], atoms[i].X[1], atoms[i].X[2]);
+
+      poly = vtkPolyData::New();
+      poly->Allocate(mesh->triangles.size());
+      poly->SetPoints(points);
+
+      for(size_t t = 0; t < mesh->triangles.size(); t++)
+        {
+        vtkIdType xTri[3];
+        xTri[0] = mesh->triangles[t].vertices[0];
+        xTri[1] = mesh->triangles[t].vertices[1];
+        xTri[2] = mesh->triangles[t].vertices[2];
+        poly->InsertNextCell(VTK_TRIANGLE, 3, xTri);
+        }
+
+      poly->BuildCells();
+      poly->BuildLinks();
+
+      // Create a locator
+      locator = vtkCellLocator::New();
+      locator->SetDataSet(poly);
+      locator->BuildLocator();
+      }
+
+
+    class Traits
+      {
+      public:
+
+      typedef Self Surface_3;
+
+      class Construct_initial_points
+        {
+        public:
+
+          template <typename OutputIteratorPoints>
+          OutputIteratorPoints operator() (
+            const Surface_3& surface, 
+            OutputIteratorPoints out, 
+            int n = 20) const
+            {
+            vnl_random randy;
+            while(n-- > 0)
+              {
+              // Generate some random points
+              int irand = randy(surface.mesh->nVertices);
+              MedialAtom &a = surface.atoms[n];
+              *out++ = Point(a.X[0], a.X[1], a.X[2]);
+              }
+            return out;
+            }
+
+        };
+
+      class Intersect_3
+        {
+        public:
+
+          CGAL::Object operator () (const Surface_3 &surface, Segment_3 s) const
+            {
+            SMLVec3d a0(s.vertex(0)[0], s.vertex(0)[1], s.vertex(0)[2]);
+            SMLVec3d a1(s.vertex(1)[0], s.vertex(1)[1], s.vertex(1)[2]);
+            double t, x[3], pcoords[3];
+            int subId;
+
+            // cout << "Segment Check: " << a0 << " to " << a1;
+            int rc = surface.locator->IntersectWithLine(a0.data_block(), a1.data_block(), 0.001, t, x, pcoords, subId); 
+            // cout << "  ==> " << SMLVec3d(x) << endl;
+
+            if(rc)
+              {
+              Point p;
+              return CGAL::make_object(Point(x[0], x[1], x[2]));
+              }
+            else
+              {
+              return CGAL::Object();
+              }
+            }
+
+          CGAL::Object operator () (const Surface_3 &surface, Ray_3 r) const
+            {
+            // Figure out a point that's far enough across
+            SMLVec3d p1(r.source()[0], r.source()[1], r.source()[2]);
+            SMLVec3d v(r.direction().vector()[0], r.direction().vector()[1], r.direction().vector()[2]);
+            v.normalize();
+            SMLVec3d p2 = p1 + 1000. * v;
+            double t, x[3], pcoords[3];
+            int subId;
+
+            // cout << "Ray Check: " << p1 << " to " << p2;
+            int rc = surface.locator->IntersectWithLine(p1.data_block(), p2.data_block(), 0.001, t, x, pcoords, subId); 
+            // cout << "  ==> " << SMLVec3d(x) << endl;
+
+            if(rc)
+              {
+              Point p;
+              return CGAL::make_object(Point(x[0], x[1], x[2]));
+              }
+            else
+              {
+              return CGAL::Object();
+              }
+            }
+
+          CGAL::Object operator () (const Surface_3 &surface, Line_3 s) const
+            {
+            // TODO: fill it out
+            assert(-1);
+            Point p;
+            return CGAL::make_object(p);
+            }
+
+        };
+
+      Construct_initial_points construct_initial_points_object() const
+        { return Construct_initial_points(); }
+
+      Intersect_3 intersect_3_object() const
+        { return Intersect_3(); }
+
+      };
+    
+    typedef Traits Surface_mesher_traits_3 ;
+
+    double x;
+  };
+
+
+
+  typedef CGAL::Surface_mesh_default_triangulation_3 Tr;
+  typedef CGAL::Complex_2_in_triangulation_3<Tr> C2t3;
+  typedef Voodoo<Tr::Geom_traits> MyVoodoo;
+
+  typedef Tr::Geom_traits GT;
+typedef GT::Sphere_3 Sphere_3;
+typedef GT::Point_3 Point_3;
+typedef GT::FT FT;
+
+typedef FT (*Function)(Point_3);
+
+typedef CGAL::Implicit_surface_3<GT, Function> Surface_3;
+
+FT sphere_function (Point_3 p) {
+  const FT x2=p.x()*p.x(), y2=p.y()*p.y(), z2=p.z()*p.z();
+  return x2+y2+z2-1;
+}
 
 void SubdivisionMPDE::Remesh()
   {
@@ -1476,17 +1666,8 @@ void SubdivisionMPDE::Remesh()
 
   // Get the coefficient-level mesh
   SubdivisionSurface::MeshLevel mlCoeffOld = smm->GetCoefficientMesh(); 
+  SubdivisionSurface::MeshLevel mlAtomsOld = smm->GetAtomMesh(); 
 
-  // Check for triangles with all three vertices on the boundary
-  for(size_t p = 0; p < mlCoeffOld.triangles.size(); p++)
-    {
-    size_t *v = mlCoeffOld.triangles[p].vertices;
-    if(
-      smm->GetAtomArray()[v[0]].flagCrest &&
-      smm->GetAtomArray()[v[1]].flagCrest &&
-      smm->GetAtomArray()[v[2]].flagCrest)
-      cout << "BAD TRIANGLE BEFORE REMESHING" << endl;
-    }
 
   // We need to get a list of coordinates for remeshing
   typedef vnl_vector_fixed<double, 3> Vec;
@@ -1494,6 +1675,118 @@ void SubdivisionMPDE::Remesh()
   for(size_t i = 0; i < mlCoeffOld.nVertices; i++)
     for(size_t k = 0; k < 3; k++)
       X[i][k] = smm->GetCoefficient(i * 4 + k);
+
+  // --- CGAL code ---
+  
+  // default triangulation for Surface_mesher
+  typedef CGAL::Surface_mesh_default_triangulation_3 Tr;
+  typedef CGAL::Complex_2_in_triangulation_3<Tr> C2t3;
+  typedef Voodoo<Tr::Geom_traits> MyVoodoo;
+
+  Tr tr;
+  C2t3 c2t3(tr);
+  MyVoodoo voodoo(&mlAtomsOld, smm->GetAtomArray());
+  MyVoodoo::Traits traits;
+
+  typedef CGAL::Implicit_surface_3<GT, Function> Surface_3;
+  Surface_3 surface(sphere_function,             // pointer to function
+                    Sphere_3(CGAL::ORIGIN, 2.)); // bounding sphere
+
+  // defining meshing criteria
+  CGAL::Surface_mesh_default_criteria_3<Tr> criteria(30.,  // angular bound
+                                                     5.,  // radius bound
+                                                     5.); // distance bound
+  // meshing surface
+  const MyVoodoo::Traits::Surface_3 &surf = voodoo;
+  CGAL::make_surface_mesh(c2t3, surf, traits, criteria, CGAL::Manifold_with_boundary_tag(),mlAtomsOld.nVertices);
+
+  // CGAL::make_surface_mesh(c2t3, surface, criteria, CGAL::Non_manifold_tag());
+
+  // Now, we must somehow pull out the information from this mesh
+  SubdivisionSurface::MeshLevel mlCGALNew;
+  TriangleMeshGenerator mygen(&mlCGALNew, tr.number_of_vertices());
+  vtkPolyData *temp = vtkPolyData::New();
+
+  vtkPoints *points = vtkPoints::New();
+  points->Allocate(tr.number_of_vertices());
+  for(Tr::Vertex_iterator vit = tr.vertices_begin(); vit!=tr.vertices_end(); vit++)
+    {
+    points->InsertNextPoint(
+      vit->point().x(), vit->point().y(), vit->point().z());
+    }
+  temp->SetPoints(points);
+  temp->Allocate(tr.number_of_facets());
+
+  for(C2t3::Facet_iterator fit = c2t3.facets_begin(); fit != c2t3.facets_end(); fit++)
+    {
+    if(c2t3.face_status(fit->first, fit->second) == C2t3::REGULAR)
+      {
+      vtkIdType tri[3];
+      size_t it = 0;
+      for(size_t j = 0; j < 4; j++)
+        {
+        if(j == fit->second) continue;
+
+        Tr::Point p = fit->first->vertex(j)->point();      
+        size_t q = 0;
+        for(Tr::Vertex_iterator vit = tr.vertices_begin(); vit!=tr.vertices_end(); vit++)
+          {
+          if(vit->point().x() == p.x() && vit->point().y() == p.y() && vit->point().z() == p.z())
+            {
+            tri[it++] = q;
+            break;
+            }
+          q++;
+          }      
+        }
+      temp->InsertNextCell(VTK_TRIANGLE, 3, tri);
+      }
+    }
+
+  cout << "Calling Generate Mesh" << endl;
+  // mygen.GenerateMesh();
+
+  // Write the mesh to some VTK file
+  // SubdivisionSurface::ExportLevelToVTK(mlCGALNew, temp);
+  vtkPolyDataWriter *write = vtkPolyDataWriter::New();
+  write->SetInput(temp);
+  write->SetFileName("cgal.vtk");
+  write->Update();
+  cout << "Ok CGAL" << endl;
+
+
+
+
+
+
+
+  // --- AFRONT CODE ---
+  // Create a triangle mesh for Afront
+  /*
+  AFrontMesh amesh;
+  for(size_t i = 0; i < mlCoeffOld.nVertices; i++)
+    {
+    gtb::tTriangleMeshVertex<float> v;
+    for(size_t k = 0; k < 3; k++)
+      v.point[k] = smm->GetCoefficient(i * 4 + k);
+    amesh.verts.push_back(v);
+    }
+  for(size_t i = 0; i < mlCoeffOld.triangles.size(); i++)
+    {
+    gtb::TriangleMeshFace f;
+    f.verts[0] = mlCoeffOld.triangles[i].vertices[0];
+    f.verts[1] = mlCoeffOld.triangles[i].vertices[1];
+    f.verts[2] = mlCoeffOld.triangles[i].vertices[2];
+    amesh.faces.push_back(f);
+    }
+  std::vector<int> facemap, vertmap;
+	amesh.IdentityMap(facemap, mlCoeffOld.triangles.size());
+	amesh.IdentityMap(vertmap, mlCoeffOld.nVertices);
+  amesh.build_structures(facemap, vertmap);
+
+  // Run AFRONT
+  do_tri_mesh(smm->GetSubdivisionLevel(), amesh); 
+  */
 
   // Apply remeshing to the coefficient mesh
   mlCoeffOld.MakeDelaunay(X);
@@ -1505,22 +1798,61 @@ void SubdivisionMPDE::Remesh()
   // Check consistency
   SubdivisionSurface::CheckMeshLevel(mlCoeffOld);
 
+  // Get rid of bad off-edge triangles
+  SubdivisionSurface::MeshLevel mlCoeffNew;
+  TriangleMeshGenerator tmg(&mlCoeffNew, mlCoeffOld.nVertices);
   for(size_t p = 0; p < mlCoeffOld.triangles.size(); p++)
     {
     size_t *v = mlCoeffOld.triangles[p].vertices;
-    if(
-      smm->GetAtomArray()[v[0]].flagCrest &&
-      smm->GetAtomArray()[v[1]].flagCrest &&
-      smm->GetAtomArray()[v[2]].flagCrest)
-      cout << "BAD TRIANGLE AFTER REMESHING" << endl;
+    MedialAtom *A = smm->GetAtomArray();
+    if(A[v[0]].flagCrest && A[v[1]].flagCrest && A[v[2]].flagCrest)
+      {
+      cerr << "Dropping triangle " << v[0] << " " << v[1] << " " << v[2] << endl;
+      }
+    else
+      {
+      tmg.AddTriangle(v[0], v[1], v[2]);
+      }
     }
+  tmg.GenerateMesh();
+
+  // Find all unused vertices and create a vertex replacement rule
+  vnl_vector<double> C(smm->GetCoefficientArray().data_block(), mlCoeffOld.nVertices * 4);
+  vnl_vector<double> Cu(smm->GetCoefficientU().data_block(), mlCoeffOld.nVertices);
+  vnl_vector<double> Cv(smm->GetCoefficientV().data_block(), mlCoeffOld.nVertices);
+
+  std::vector<size_t> vcnt(mlCoeffOld.nVertices,0), vmap(mlCoeffOld.nVertices, 0);
+  for(size_t i = 0; i < mlCoeffNew.triangles.size(); i++)
+    for(size_t q = 0; q < 3; q++)
+      vcnt[mlCoeffNew.triangles[i].vertices[q]] |= 1;
+  size_t idx = 0;
+  for(size_t j = 0; j < mlCoeffOld.nVertices; j++)
+    {
+    vmap[j] = vcnt[j] ? idx : NOID;    
+    for(size_t c = 0; c < 4; c++)
+      C[idx * 4 + c] = C[j * 4 + c];
+    Cu[idx] = Cu[j];
+    Cv[idx] = Cv[j];
+    idx += vcnt[j];
+    }
+
+  // Now that we have a map from vertices to coefficients, we can shift up 
+  // the vertex arrays
+  for(size_t i = 0; i < mlCoeffNew.triangles.size(); i++)
+    for(size_t q = 0; q < 3; q++)
+      mlCoeffNew.triangles[i].vertices[q] = vmap[
+        mlCoeffNew.triangles[i].vertices[q]];
+  mlCoeffNew.nVertices = idx;
+  mlCoeffNew.ComputeWalks();
 
   // Apply subdivision to the refined mesh
   try 
     {
-    smm->SetMesh(mlCoeffOld, 
-      smm->GetCoefficientArray(), smm->GetCoefficientU(), 
-      smm->GetCoefficientV(), smm->GetSubdivisionLevel(), 0);
+    smm->SetMesh(mlCoeffNew, 
+      C.extract(4*idx), 
+      Cu.extract(idx), 
+      Cv.extract(idx), 
+      smm->GetSubdivisionLevel(), 0);
     }
   catch(...)
     {

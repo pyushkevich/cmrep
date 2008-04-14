@@ -642,7 +642,7 @@ int TestDerivativesNoImage(const char *fnMPDE)
   cout << "**************************************************" << endl;
  
   IdentityCoefficientMapping xMapping(model);
-  iReturn += TestGradientComputation(model, &xMapping, 3);
+  iReturn += TestGradientComputation(model, &xMapping, 10);
 
   // Test affine transform gradient computation
   cout << "**************************************************" << endl;
@@ -658,7 +658,7 @@ int TestDerivativesNoImage(const char *fnMPDE)
   
   AffineTransformCoefficientMapping xAffineMask(model);
   vnl_vector<double> pAffine(xAffinePosn, 12);
-  iReturn += TestGradientComputation(mp.GetMedialModel(), &xAffineMask, pAffine, 3);
+  iReturn += TestGradientComputation(mp.GetMedialModel(), &xAffineMask, pAffine, 10);
 
   // Test the most convoluted mask that we have
   cout << "**************************************************" << endl;
@@ -689,7 +689,7 @@ int TestDerivativesNoImage(const char *fnMPDE)
   vnl_vector<double> pPCA(xAPCAPosn, 17);
 
   // Perform the test
-  iReturn += TestGradientComputation(model, &xPCAMask, pPCA, 3);
+  iReturn += TestGradientComputation(model, &xPCAMask, pPCA, 10);
 
   // Return the total of the test values
   return iReturn;

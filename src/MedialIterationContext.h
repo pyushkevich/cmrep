@@ -48,6 +48,12 @@ public:
   size_t GetProfileIntervalIndex(size_t iBoundary, size_t iDepth)
     { return iDepth * xBndMap[nAtoms] + iBoundary; }
 
+  size_t GetBoundaryPointAtomIndex(size_t iBnd)
+    { return xInvBndMap[iBnd].atom; }
+
+  size_t GetBoundaryPointSide(size_t iBnd)
+    { return xInvBndMap[iBnd].side; }
+
   /** 
    * Get a data structure for the medial triagle mesh. This allows various
    * neighborhood inquiries to be performed, and is good for computing
@@ -70,6 +76,10 @@ protected:
   // difference of 2 between x[i+1] and x[i] indicates i is internal.
   // Then the boundary index for atom i, side j (0,1) is x[i+j]-j
   size_t *xBndMap;
+
+  // This is the inverse of xBndMap
+  struct AtomSidePair { size_t atom, side; };
+  AtomSidePair *xInvBndMap;
 
   // This is a mapping from triangles to vertices. It is probably redundant
   // but it makes the implementation a lot easier if we have a copy of this

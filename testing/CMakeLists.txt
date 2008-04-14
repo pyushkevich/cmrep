@@ -7,7 +7,6 @@ CONFIGURE_FILE(${CMREP_SOURCE_DIR}/testing/t001_param.txt ${CMREP_BINARY_DIR}/te
 # Use the first test set
 SET(TEST_TEMPLATE_BRUTE ${CMREP_SOURCE_DIR}/testing/t001_template_brute.cmrep)
 SET(TEST_SUBJECT_BRUTE  ${CMREP_SOURCE_DIR}/testing/t001_subject_brute.cmrep)
-SET(TEST_IMAGE_SMOOTH   ${CMREP_SOURCE_DIR}/testing/t001_img_smooth.nii.gz)
 SET(TEST_IMAGE_BINARY   ${CMREP_SOURCE_DIR}/testing/t001_img_binary.nii.gz)
 SET(TEST_PARAM_FILE     ${CMREP_BINARY_DIR}/testing/t001_param.txt)
 

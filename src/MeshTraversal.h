@@ -405,6 +405,12 @@ public:
   /** Compute gradient and (optionally) Jacobian for given X, F */
   void ComputeGradient(Vec *x, double *f, bool flagJacobian);
 
+  /** A more generic method that allows arrays of structs to be passed in */
+  void ComputeGradient(
+    void *xVecPtr, size_t xVecStride, 
+    void *xFunPtr, size_t xFunStrude,
+    bool flagJacobian);
+
 public:
 
   /** The jacobian with respect to X */

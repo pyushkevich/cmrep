@@ -83,6 +83,10 @@ public:
   void WriteToRegistry(Registry &folder);
 
 private:
+
+  // A gradient calculator
+  MeshGradientComputer xGradComp;
+
   // Loop scheme for computing tangents
   LoopTangentScheme xLoopScheme;
 
@@ -94,12 +98,13 @@ private:
 
   // Struct representing nonvarying terms in variational derivatives
   struct NonvaryingAtomTerms {
-    SMLVec3d X, Xu, Xv, Xuu, Xuv, Xvv;
-    double R;
+    SMLVec3d X, Xu, Xv;
+    double R, Ru, Rv;
     int order;
     NonvaryingAtomTerms() : 
-      X(0.0), Xu(0.0), Xv(0.0), Xuu(0.0), Xuv(0.0), Xvv(0.0), R(0.0), order(3) {};
+      X(0.0), Xu(0.0), Xv(0.0), R(0.0), Ru(0.0), Rv(0.0), order(3) {};
   };
+
 
   typedef ImmutableSparseArray<NonvaryingAtomTerms> NonvaryingTermsMatrix;
 
@@ -107,7 +112,16 @@ private:
   NonvaryingTermsMatrix xBasis;
 
   // Array of common derivative terms
-  MedialAtom::DerivativeTerms *dt;
+  std::vector<MedialAtom::DerivativeTerms> dt;
+
+  // Coefficients used in computing the derivatives of Ru
+  struct LocalDerivativeTerms 
+    { 
+    double w_Rv, w_g12, w_g22, w_g; 
+    double sqrt_gz;
+    };
+    
+  std::vector<LocalDerivativeTerms> dt_local;
 };
 
 

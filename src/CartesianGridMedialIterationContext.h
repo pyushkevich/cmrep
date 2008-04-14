@@ -52,6 +52,16 @@ public:
       ++i;
       }
 
+    // Generate inverse boundary mapping
+    xInvBndMap = new AtomSidePair[xBndMap[nAtoms]];
+    for(size_t i = 0; i < nAtoms; i++)
+      {
+      xInvBndMap[xBndMap[i + 0] - 0].atom = i;
+      xInvBndMap[xBndMap[i + 0] - 0].side = 0;
+      xInvBndMap[xBndMap[i + 1] - 1].atom = i;
+      xInvBndMap[xBndMap[i + 1] - 1].side = 1;
+      }
+
     // Generate the triangle mapping
     i = 0;
     for(iv = 0; iv < nv - 1; iv++) for(iu = 0; iu < nu - 1; iu++)
@@ -91,6 +101,7 @@ public:
     delete xTriMap; 
     delete xBoundaryMesh;
     delete xMedialMesh;
+    delete xInvBndMap;
     }
 
   /**

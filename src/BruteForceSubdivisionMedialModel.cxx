@@ -19,67 +19,12 @@ BruteForceSubdivisionMedialModel
   // Call the parent method
   SubdivisionMedialModel::SetMesh(mesh, C, u, v, nAtomSubs, nCoeffSubs);
 
-  // Pass the mesh to the loop scheme
+  // Initialize the gradient computer
   xLoopScheme.SetMesh(&mlAtom);
 
-  // Compute the sparse matrix that gives u and v derivatives of 
-  // functions/vectors over the mesh. These are going to be derivatives
-  // with respect to the U and V arrays passed in, not to some arbitrary
-  // local parameterization (which is referred to as p, q)
-  SparseMat::STLSourceType srcWuv;
-  for(size_t i = 0; i < mlAtom.nVertices; i++)
-    {
-    // Generate the row
-    SparseMat::STLRowType row;
-
-    // Compute the weigths for this row. The weights arise in the following:
-    //   dF_i/dp = Sum_{j \in N(i)} W^p_j F_j
-    //   dF_i/du = Sum_{j \in N(i)} (dp/du W^p_j + dq/du W^p_j) F_j
-    // So we are here computing (dp/du W^p_j + dq/du W^p_j) and storing them
-    // as elements of the sparse matrix Wu. We also do the same for Wv
-    
-    // First, we are going to compute du/dp and dv/dp
-    double dudp = xLoopScheme.GetPartialDerivative(0, i, uAtom.data_block());
-    double dudq = xLoopScheme.GetPartialDerivative(1, i, uAtom.data_block());
-    double dvdp = xLoopScheme.GetPartialDerivative(0, i, vAtom.data_block());
-    double dvdq = xLoopScheme.GetPartialDerivative(1, i, vAtom.data_block());
-
-    // Now compute the determinant of the Jacobian
-    double detj = 1.0 / (dudp * dvdq - dudq * dvdp);
-
-    // Now compute the inverse of the Jacobian
-    double dpdu =   detj * dvdq;
-    double dpdv = - detj * dudq;
-    double dqdu = - detj * dvdp;
-    double dqdv =   detj * dudp; 
-
-    // Compute how much the vertex itself contributes to the weights
-    row.push_back(
-      make_pair(i, 
-        make_pair(
-          xLoopScheme.GetOwnWeight(0, i) * dpdu + 
-          xLoopScheme.GetOwnWeight(1, i) * dqdu,
-          xLoopScheme.GetOwnWeight(0, i) * dpdv +
-          xLoopScheme.GetOwnWeight(1, i) * dqdv)));
-
-    // Now, compute the contributing weights for each vertex
-    for(EdgeWalkAroundVertex w(&mlAtom, i); !w.IsAtEnd(); ++w)
-      {
-      row.push_back(
-        make_pair(w.MovingVertexId(), 
-          make_pair(
-            xLoopScheme.GetNeighborWeight(0, w) * dpdu + 
-            xLoopScheme.GetNeighborWeight(1, w) * dqdu,
-            xLoopScheme.GetNeighborWeight(0, w) * dpdv + 
-            xLoopScheme.GetNeighborWeight(1, w) * dqdv)));
-      }
-
-    // Store the rows
-    srcWuv.push_back(row);
-    }
-
-  // Set the derivative matrices
-  Wuv.SetFromSTL(srcWuv, mlAtom.nVertices);
+  // Initialize the derivative term arrays
+  dt.resize(mlAtom.nVertices);
+  dt_local.resize(mlAtom.nVertices);
 }
 
 void
@@ -108,11 +53,11 @@ BruteForceSubdivisionMedialModel
 
     // Negative R should be disallowed
     if(a.R < 0.0)
-      throw MedialModelException("Negative R in BruteForceModel");
-
-    // Set F = R^2
-    a.F = a.R * a.R;
+      throw MedialModelException("Negative F in BruteForceModel");
     }
+
+  // Get a pointer to the Loop scheme weights
+  const LoopTangentScheme::WeightMatrix &W = xLoopScheme.GetWeightMatrix();
 
   // We must now compute the derivatives of X and R to make real atoms
   for(i = 0; i < mlAtom.nVertices; i++)
@@ -121,54 +66,48 @@ BruteForceSubdivisionMedialModel
     MedialAtom &a = xAtoms[i];
 
     // Compute the partial derivatives of F and X
-    a.Xu.fill(0.0); a.Xv.fill(0.0); a.Fu = 0; a.Fv = 0;
-    for(SparseMat::RowIterator it = Wuv.Row(i); !it.IsAtEnd(); ++it)
+    a.Xu.fill(0.0); a.Xv.fill(0.0); a.Ru = 0; a.Rv = 0;
+    for(LoopTangentScheme::WeightMatrix::ConstRowIterator it = W.Row(i); 
+      !it.IsAtEnd(); ++it)
       {
       MedialAtom &anbr = xAtoms[it.Column()];
-      double wu = it.Value().first;
-      double wv = it.Value().second;
+      double wu = it.Value().w[0];
+      double wv = it.Value().w[1];
 
       a.Xu += wu * anbr.X;
       a.Xv += wv * anbr.X;
-      a.Fu += wu * anbr.F;
-      a.Fv += wv * anbr.F;
-      }
-    }
-
-  // On the third pass, we compute the second order partial derivatives
-  for(i = 0; i < mlAtom.nVertices; i++)
-    {
-    // Set up i-th atom
-    MedialAtom &a = xAtoms[i];
-
-    // Compute the partial derivatives of F and X
-    a.Xuu.fill(0.0); a.Xuv.fill(0.0); a.Xvv.fill(0.0);
-    a.Fuu = 0.0; a.Fuv = 0.0; a.Fvv = 0.0;
-    SMLVec3d Xvu; Xvu.fill(0.0);
-    for(SparseMat::RowIterator it = Wuv.Row(i); !it.IsAtEnd(); ++it)
-      {
-      MedialAtom &anbr = xAtoms[it.Column()];
-      double wu = it.Value().first;
-      double wv = it.Value().second;
-
-      a.Xuu += wu * anbr.Xu;
-      a.Xuv += 0.5 * (wu * anbr.Xv + wv * anbr.Xu);
-      a.Xvv += wv * anbr.Xv;
-      a.Fuu += wu * anbr.Fu;
-      a.Fuv += 0.5 * (wu * anbr.Fv + wv * anbr.Fu);
-      a.Fvv += wv * anbr.Fv;
+      a.Ru += wu * anbr.R;
+      a.Rv += wv * anbr.R;
       }
 
     // Compute the atom's differential geometry, normal and boundary
-    a.ComputeDifferentialGeometry();
+    a.G.SetOneJet(a.X.data_block(), a.Xu.data_block(), a.Xv.data_block());
     a.ComputeNormalVector();
-    a.ComputeBoundaryAtoms(!mlAtom.IsVertexInternal(i));
+
+
+    // For atoms that are on the edge, we correct Ru, so that |gradR|=1 and
+    // Rv stays constant. This involves solving the system
+    // g11 Ru Ru + 2 g12 Ru Rv + g22 Rv Rv = 1
+    if(!mlAtom.IsVertexInternal(i))
+      {
+      double g12 = a.G.xCovariantTensor[0][1];
+      double g22 = a.G.xCovariantTensor[1][1];
+      double z = g22 - a.Rv * a.Rv;
+      if(z < 0)
+        throw MedialModelException("Excessive Rv in BruteForceModel");
+
+      // we store the square root of z for further derivative compn
+      dt_local[i].sqrt_gz = sqrt(a.G.g * z);
+
+      // here is the corrected Ru
+      a.Ru = (g12 * a.Rv - dt_local[i].sqrt_gz) / g22;
+      }
+
+
+    a.ComputeBoundaryAtomsUsingR(!mlAtom.IsVertexInternal(i));
 
     if(!a.flagValid)
       throw MedialModelException("Invalid Atom in BruteForceModel");
-
-    // Turned off since we are not using this anywhere
-    // a.ComputeBoundaryCurvature();
     }
 }
 
@@ -191,6 +130,9 @@ BruteForceSubdivisionMedialModel
 
   // Allocate structure for holding data derived from the basis
   NonvaryingTermsMatrix::STLSourceType nvSource;
+
+  // Get a pointer to the Loop scheme weights
+  const LoopTangentScheme::WeightMatrix &W = xLoopScheme.GetWeightMatrix();
 
   // Iterate over all basis components
   for(size_t var = 0; var < nvar; var++)
@@ -263,33 +205,23 @@ BruteForceSubdivisionMedialModel
       for(i = 0; i < mlAtom.nVertices; i++) 
         if(vTerms[i].order == ord)
           nc++;
-      // cout << "Order " << ord << ": " << nc << " atoms. " << endl;
-      }
+      }                                   
 
     // Next, precompute the first partial derivatives of X and R
     for(i = 0; i < mlAtom.nVertices; i++) 
-      for(SparseMat::RowIterator it = Wuv.Row(i); !it.IsAtEnd(); ++it)
+  
+      for(LoopTangentScheme::WeightMatrix::ConstRowIterator it = W.Row(i); 
+        !it.IsAtEnd(); ++it)
         {
-        double wu = it.Value().first;
-        double wv = it.Value().second;
+        double wu = it.Value().w[0];
+        double wv = it.Value().w[1];
         SMLVec3d Xnbr = vTerms[it.Column()].X;
+        double Rnbr = vTerms[it.Column()].R;
 
         vTerms[i].Xu += wu * Xnbr;
         vTerms[i].Xv += wv * Xnbr;
-        }
-
-    // Next, precompute the second order partial derivatives of X and R
-    for(i = 0; i < mlAtom.nVertices; i++) 
-      for(SparseMat::RowIterator it = Wuv.Row(i); !it.IsAtEnd(); ++it)
-        {
-        double wu = it.Value().first;
-        double wv = it.Value().second;
-        SMLVec3d XUnbr = vTerms[it.Column()].Xu;
-        SMLVec3d XVnbr = vTerms[it.Column()].Xv;
-
-        vTerms[i].Xuu += wu * XUnbr;
-        vTerms[i].Xuv += 0.5 * (wu * XVnbr + wv * XUnbr);
-        vTerms[i].Xvv += wv * XVnbr;
+        vTerms[i].Ru += wu * Rnbr;
+        vTerms[i].Rv += wv * Rnbr;
         }
 
     // Finally, place the marked nodes into a sparse structure for later use
@@ -308,18 +240,33 @@ void
 BruteForceSubdivisionMedialModel
 ::BeginGradientComputation()
 {
-  // Precompute common terms for atom derivatives
-  dt = new MedialAtom::DerivativeTerms[mlAtom.nVertices];
   for(size_t i = 0; i < mlAtom.nVertices; i++)
+    {
+    // Precompute the atom's terms
     xAtoms[i].ComputeCommonDerivativeTerms(dt[i]);
+    
+    // Now, our own thing
+    if(!mlAtom.IsVertexInternal(i))
+      {
+      MedialAtom &a = xAtoms[i];
+      double g12 = a.G.xCovariantTensor[0][1];
+      double g22 = a.G.xCovariantTensor[1][1];
+      double z = g22 - a.Rv * a.Rv;
+      LocalDerivativeTerms &ld = dt_local[i];
+
+      ld.w_Rv = (a.Rv*ld.sqrt_gz + g12*z)/(g22*z);
+      ld.w_g12 = a.Rv / g22;
+      ld.w_g22 = 
+        ((g22 - 2 * a.Rv * a.Rv)*ld.sqrt_gz - 2*g12*a.Rv*z)/(2. * g22 * g22 * z);
+      ld.w_g = - ld.sqrt_gz / (2 * a.G.g * g22);
+      }
+    }  
 }
 
 void
 BruteForceSubdivisionMedialModel
 ::EndGradientComputation()
 {
-  // Precompute common terms for atom derivatives
-  delete dt;
 }
 
 void
@@ -328,6 +275,9 @@ BruteForceSubdivisionMedialModel
 {
   // Iterator for selecting the atoms affected by the current variation
   NonvaryingTermsMatrix::RowIterator it;
+
+  // Get a pointer to the Loop scheme weights
+  const LoopTangentScheme::WeightMatrix &W = xLoopScheme.GetWeightMatrix();
 
   // Clear the derivative information in all atoms
   for(size_t i = 0; i < mlAtom.nVertices; i++)
@@ -344,80 +294,41 @@ BruteForceSubdivisionMedialModel
     // Get the atom's index
     size_t j = it.Column();
 
+    // Get the current atom and the derivative (which we are computing)
+    MedialAtom &a = xAtoms[j];
+    MedialAtom &da = dAtoms[j];
+
     // Label the atom as dependent
-    dAtoms[j].order = it.Value().order;
+    da.order = it.Value().order;
     nc++;
 
     // Copy the constant terms. This is a little wasteful, but pretty much 
     // necessary in order to only hold one array of dAtoms in memory
-    dAtoms[j].R   = it.Value().R;
-    dAtoms[j].X   = it.Value().X;
-    dAtoms[j].Xu  = it.Value().Xu;
-    dAtoms[j].Xv  = it.Value().Xv;
-    dAtoms[j].Xuu = it.Value().Xuu;
-    dAtoms[j].Xuv = it.Value().Xuv;
-    dAtoms[j].Xvv = it.Value().Xvv;
-
-    // Compute the derivative of F = R^2 at the atom
-    dAtoms[j].F = 2.0 * dAtoms[j].R * xAtoms[j].R;
-    }
-  // cout << "Dep Atoms : " << nc << " of " << mlAtom.nVertices << endl;
-
-  // Second loop to compute partials of F
-  for(it = xBasis.Row(iBasis); !it.IsAtEnd(); ++it)
-    {
-    // Get the atom's index
-    size_t j = it.Column();
-
-    // Get the current atom and the derivative (which we are computing)
-    MedialAtom &a = xAtoms[j];
-    MedialAtom &da = dAtoms[j];
-
-    // Compute the partial derivatives of Fu
-    da.Fu = da.Fv = 0.0;
-    for(SparseMat::RowIterator wit = Wuv.Row(j); !wit.IsAtEnd(); ++wit)
-      {
-      double Fnbr = dAtoms[wit.Column()].F;
-      double wu = wit.Value().first;
-      double wv = wit.Value().second;
-
-      da.Fu += wu * Fnbr;
-      da.Fv += wv * Fnbr;
-      }
+    da.X   = it.Value().X;
+    da.Xu  = it.Value().Xu;
+    da.Xv  = it.Value().Xv;
+    da.R   = it.Value().R;
+    da.Ru  = it.Value().Ru;
+    da.Rv  = it.Value().Rv;
 
     // Compute the metric tensor derivatives of the atom
     a.ComputeMetricTensorDerivatives(da);
-    a.ComputeChristoffelDerivatives(da);
 
-    // Compute the derivatives of the boundary nodes
-    a.ComputeBoundaryAtomDerivatives(da, dt[j]);
-    }
-
-  // Third loop to compute second order partials of F
-  for(it = xBasis.Row(iBasis); !it.IsAtEnd(); ++it)
-    {
-    // Get the atom's index
-    size_t j = it.Column();
-
-    // Get the current atom and the derivative (which we are computing)
-    MedialAtom &a = xAtoms[j];
-    MedialAtom &da = dAtoms[j];
-
-    // Compute the derivative of mean and gauss curvatures
-    da.Fuu = da.Fuv = da.Fvv = 0.0;
-    for(SparseMat::RowIterator wit = Wuv.Row(j); !wit.IsAtEnd(); ++wit)
+    // For atoms that are on the edge, we correct Ru, so that |gradR|=1 and
+    // Rv stays constant. This involves solving the system
+    // g11 Ru Ru + 2 g12 Ru Rv + g22 Rv Rv = 1
+    if(a.flagCrest)
       {
-      MedialAtom &danbr = dAtoms[wit.Column()];
-      double wu = wit.Value().first;
-      double wv = wit.Value().second;
-
-      da.Fuu += wu * danbr.Fu;
-      da.Fvv += wv * danbr.Fv;
-      da.Fuv += 0.5 * (wu * danbr.Fv + wv * danbr.Fu);
+      LocalDerivativeTerms &ld = dt_local[j];
+      da.Ru = 
+        ld.w_g   * da.G.g +
+        ld.w_g12 * da.G.xCovariantTensor[0][1] +
+        ld.w_g22 * da.G.xCovariantTensor[1][1] +
+        ld.w_Rv  * da.Rv;
       }
 
-    // Compute things in the atom that depend on second derivatives
-    // a.ComputeBoundaryCurvatureDerivative(da);
+    // Compute the derivatives of the boundary nodes
+    a.ComputeBoundaryAtomDerivativesUsingR(da, dt[j]);
     }
 }
 

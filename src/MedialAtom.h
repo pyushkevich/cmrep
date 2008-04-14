@@ -99,8 +99,19 @@ struct MedialAtom
    * compute GradR and the boundary sites. */
   bool ComputeBoundaryAtoms(bool flagEdgeAtom);
 
+  /** Same as above, but input given as (X,R), not (X,F) */
+  bool ComputeBoundaryAtomsUsingR(bool flagEdgeAtom);
+
   void ComputeBoundaryCurvature();
   void ComputeBoundaryCurvatureDerivative(MedialAtom &da);
+
+  /** 
+   * This simple method computes necessary aspects of an atom using only
+   * the non-parametric aspects of the atom: X, R, gradR, N
+   */
+  void ComputeNonParametric()
+    {
+    }
 
   /**
    * These terms are used to compute Gateaux derivatives of the atom's
@@ -135,6 +146,9 @@ struct MedialAtom
    * the terms of the 'derivative' Atom passed in as the parameter
    */
   void ComputeBoundaryAtomDerivatives(MedialAtom &dAtom, const DerivativeTerms &dt) const;
+
+  /** Same as above, but input given as (X,R), not (X,F) */
+  void ComputeBoundaryAtomDerivativesUsingR(MedialAtom &dAtom, const DerivativeTerms &dt) const;
 
   /**
    * Set all the derivative terms in the atom to equal zero. This is useful when the

@@ -75,7 +75,7 @@ private:
   GenericMedialModel *xModel;
 
   // Accumulators
-  StatisticsAccumulator saPenalty;
+  StatisticsAccumulator saPenalty, saEncroach, saFalseEncroach;
 
   double UnifiedComputeEnergy(SolutionData *S, bool flagGradient);
 };

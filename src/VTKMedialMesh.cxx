@@ -351,10 +351,10 @@ void ExportBoundaryMeshToVTK(
     SMLVec3d NX = (it.GetBoundarySide() > 0 ? 1.0:1.0) *  vnl_cross_3d(A.Xu, A.Xv);
     SMLVec3d NY = vnl_cross_3d(B.X_i[0], B.X_i[1]);
 
-    SMLVec3d Kvec = termBC.GetCurvatureVector(i);
-    double H2 = Kvec.squared_magnitude() / 
-      (soldat.xBoundaryWeights[i] * soldat.xBoundaryWeights[i]);
-    lSqrMeanCrv->SetTuple1(i, H2);
+    // SMLVec3d Kvec = termBC.GetCurvatureVector(i);
+    // double H2 = Kvec.squared_magnitude() / 
+    //  (soldat.xBoundaryWeights[i] * soldat.xBoundaryWeights[i]);
+    // lSqrMeanCrv->SetTuple1(i, H2);
 
     // Compute the diffeomorphic penalty
     double diffpen = 0;

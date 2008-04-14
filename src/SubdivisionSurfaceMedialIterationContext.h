@@ -25,7 +25,17 @@ public:
     // the boundary index
     xBndMap[0] = 0;
     for(size_t i = 0; i < nAtoms; i++)
-      xBndMap[i+1] = xBndMap[i] + (inMesh->IsVertexInternal(i) ? 2 : 1);    
+      xBndMap[i+1] = xBndMap[i] + (inMesh->IsVertexInternal(i) ? 2 : 1);   
+
+    // Generate inverse boundary mapping
+    xInvBndMap = new AtomSidePair[xBndMap[nAtoms]];
+    for(size_t i = 0; i < nAtoms; i++)
+      {
+      xInvBndMap[xBndMap[i + 0] - 0].atom = i;
+      xInvBndMap[xBndMap[i + 0] - 0].side = 0;
+      xInvBndMap[xBndMap[i + 1] - 1].atom = i;
+      xInvBndMap[xBndMap[i + 1] - 1].side = 1;
+      }
 
     // Generate the triangle mapping
     for(size_t j = 0; j < nTriangles; j++)
@@ -57,6 +67,7 @@ public:
     delete xTriMap;
     delete xBndMap;
     delete xBoundaryMesh;
+    delete xInvBndMap; 
     }
 
   /** 

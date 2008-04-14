@@ -140,7 +140,9 @@ public:
 
   // The array of boundary weights (area elements) and the total bnd. area
   std::vector<double> xBoundaryWeights;
+  std::vector<SMLVec3d> xBoundaryAreaVector;
   std::vector<SMLVec3d> xBoundaryTriangleUnitNormal;
+  std::vector<double> xBoundaryTriangleArea;
   double xBoundaryArea;
 
   // The array of medial weights (area elements) and the total bnd. area
@@ -896,7 +898,7 @@ private:
  * than the radius of the medial model. Of course the model can avoid 
  * this penalty by pushing the radius to zero, so this penalty should
  * always be used in conjunction with a radius penalty.
- */
+ *
 class BoundaryCurvaturePenalty : public EnergyTerm
 {
 public:
@@ -928,6 +930,31 @@ private:
   double xIntegralSqrMeanCrv, xCrestCurvatureTerm, xPenalty;
 
   StatisticsAccumulator saCurv, saDenom;
+};        */
+
+class BoundaryCurvaturePenalty : public EnergyTerm
+{
+public:
+  // Constructr
+  BoundaryCurvaturePenalty(GenericMedialModel *model);
+
+  // Compute the penalty
+  double ComputeEnergy(SolutionData *data);
+
+  // Describe the terms of the penalty
+  void PrintReport(ostream &sout);
+
+  // Compute the partial derivative
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS);
+
+  // Print a short name
+  string GetShortName() { return string("BNDCRV"); }
+
+private:
+  // Temps
+  GenericMedialModel *model;
+  StatisticsAccumulator saSqrEdgeLen;
 };
 
 /*

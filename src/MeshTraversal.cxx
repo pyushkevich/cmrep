@@ -294,6 +294,18 @@ void MeshGradientComputer::SetMesh(TriangleMesh *mesh)
 
 void MeshGradientComputer::ComputeGradient(Vec *x, double *f, bool flagJacobian)
 {
+  this->ComputeGradient(x, sizeof(Vec), f, sizeof(double), flagJacobian);
+}
+
+void MeshGradientComputer::ComputeGradient(
+    void *xVecPtr, size_t xVecStride, 
+    void *xFunPtr, size_t xFunStride,
+    bool flagJacobian)
+{
+  // Cast the arrays to char arrays so we can add strides
+  char *caVecPtr = static_cast<char *>(xVecPtr);
+  char *caFunPtr = static_cast<char *>(xFunPtr);
+
   // Get the row and column index of the sparse matrix
   size_t *xRowIdx = jacX.GetRowIndex();
   size_t *xColIdx = jacX.GetColIndex();
@@ -318,9 +330,12 @@ void MeshGradientComputer::ComputeGradient(Vec *x, double *f, bool flagJacobian)
       for(size_t ic = xRowIdx[i]; ic < xRowIdx[i+1]; ic++)
         {
         size_t j = xColIdx[ic];
+        Vec x = *reinterpret_cast<Vec *>(caVecPtr + xVecStride * j);
+        double f = *reinterpret_cast<double *>(caFunPtr + xFunStride * j);
+        
         double w = xWeights[ic].w[d];
-        Fi[d] += w * f[j];
-        Xi[d] += w * x[j];
+        Fi[d] += w * f;
+        Xi[d] += w * x;
         }
       }
 

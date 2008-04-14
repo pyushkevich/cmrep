@@ -62,6 +62,8 @@ SolutionDataBase::SolutionDataBase(
   xMedialWeights.resize(nAtoms, 0.0);
   xMedialTriangleUnitNormal.resize(nMedTri, SMLVec3d(0.0));
   xInteriorVolumeElement.resize(nBndPts, SMLVec3d(0.0));
+  xBoundaryTriangleArea.resize(nBndTri, 0.0);
+  xBoundaryAreaVector.resize(nBndPts, SMLVec3d(0.0));
 
   // Copy stuff
   this->xAtomGrid = xAtomGrid;
@@ -91,6 +93,7 @@ void SolutionData::ComputeIntegrationWeights()
   std::fill(xBoundaryWeights.begin(), xBoundaryWeights.end(), 0.0);
   std::fill(xMedialWeights.begin(), xMedialWeights.end(), 0.0);
   std::fill(xInteriorVolumeElement.begin(), xInteriorVolumeElement.end(), SMLVec3d(0.0));
+  std::fill(xBoundaryAreaVector.begin(), xBoundaryAreaVector.end(), SMLVec3d(0.0));
 
   // Iterate over the medial triangles
   for(MedialTriangleIterator imt(xAtomGrid); !imt.IsAtEnd() ; ++imt)
@@ -114,6 +117,7 @@ void SolutionData::ComputeIntegrationWeights()
 
     // Store the quantity N / norm(N) for fast derivative computation
     assert(imt.GetIndex() < nMedTri);
+
     xMedialTriangleUnitNormal[imt.GetIndex()] = N / Nmag;
     
     // Add to the total area
@@ -155,6 +159,7 @@ void SolutionData::ComputeIntegrationWeights()
     xBoundaryArea += A;
 
     // Store the quantity N / norm(N) for fast derivative computation
+    xBoundaryTriangleArea[ibt.GetIndex()] = A;
     xBoundaryTriangleUnitNormal[ibt.GetIndex()] = NB / NBmag;
     assert(ibt.GetIndex() < nBndTri);
     
@@ -172,6 +177,10 @@ void SolutionData::ComputeIntegrationWeights()
     // Assign a third of each weight to each corner
     xBoundaryWeights[ib0] += A; xBoundaryWeights[ib1] += A; xBoundaryWeights[ib2] += A;
 
+    xBoundaryAreaVector[ib0] += 0.5 * NB;
+    xBoundaryAreaVector[ib1] += 0.5 * NB;
+    xBoundaryAreaVector[ib2] += 0.5 * NB;
+
     // Update the volume element coeffs
     assert(ib0 < nBndPts && ib1 < nBndPts && ib2 < nBndPts);
     xInteriorVolumeElement[ib0] += vvec;
@@ -179,8 +188,18 @@ void SolutionData::ComputeIntegrationWeights()
     xInteriorVolumeElement[ib2] += vvec;
     }
 
+  xBoundaryArea = 0.0;
+  for(MedialBoundaryPointIterator ibp(xAtomGrid); !ibp.IsAtEnd() ; ++ibp)
+    {
+    xBoundaryWeights[ibp.GetIndex()] = dot_product(
+      xAtoms[ibp.GetAtomIndex()].xBnd[ibp.GetBoundarySide()].N, 
+      xBoundaryAreaVector[ibp.GetIndex()]);
+    xBoundaryArea += xBoundaryWeights[ibp.GetIndex()];
+    }
+  
+
   // Scale the boundary area by 3
-  xBoundaryArea *= 3.0;
+  // xBoundaryArea *= 3.0;
 }
 
 /*********************************************************************************
@@ -210,6 +229,7 @@ void PartialDerivativeSolutionData
   std::fill(xBoundaryWeights.begin(), xBoundaryWeights.end(), 0.0);
   std::fill(xMedialWeights.begin(), xMedialWeights.end(), 0.0);
   std::fill(xInteriorVolumeElement.begin(), xInteriorVolumeElement.end(), SMLVec3d(0.0));
+  std::fill(xBoundaryAreaVector.begin(), xBoundaryAreaVector.end(), SMLVec3d(0.0));
 
   // Iterate over the medial triangles
   for(MedialTriangleIterator imt(xAtomGrid); !imt.IsAtEnd() ; ++imt)
@@ -283,6 +303,9 @@ void PartialDerivativeSolutionData
       double dA = dot_product(
         dNB_over_two, xReference->xBoundaryTriangleUnitNormal[ibt.GetIndex()]);
 
+      xBoundaryTriangleArea[ibt.GetIndex()] = dA;
+
+
       // Add to the total area
       xBoundaryArea += dA;
 
@@ -290,6 +313,10 @@ void PartialDerivativeSolutionData
       xBoundaryWeights[ib0] += dA; 
       xBoundaryWeights[ib1] += dA; 
       xBoundaryWeights[ib2] += dA;
+
+      xBoundaryAreaVector[ib0] += dNB_over_two;
+      xBoundaryAreaVector[ib1] += dNB_over_two;
+      xBoundaryAreaVector[ib2] += dNB_over_two;
 
       // Compute the volume element coefficients
       SMLVec3d U0 = Y0 - X0, U1 = Y1 - X1, U2 = Y2 - X2;
@@ -316,8 +343,21 @@ void PartialDerivativeSolutionData
       }
     }
 
+  xBoundaryArea = 0.0;
+  for(MedialBoundaryPointIterator ibp(xAtomGrid); !ibp.IsAtEnd() ; ++ibp)
+    {
+    xBoundaryWeights[ibp.GetIndex()] = 
+      dot_product(
+        xAtoms[ibp.GetAtomIndex()].xBnd[ibp.GetBoundarySide()].N, 
+        xReference->xBoundaryAreaVector[ibp.GetIndex()]) +
+      dot_product(
+        xReference->xAtoms[ibp.GetAtomIndex()].xBnd[ibp.GetBoundarySide()].N, 
+        xBoundaryAreaVector[ibp.GetIndex()]);
+    xBoundaryArea += xBoundaryWeights[ibp.GetIndex()];
+    }  
+
   // Scale the medial area by 3
-  xBoundaryArea *= 3.0;
+  // xBoundaryArea *= 3.0;
 }
 
 /*********************************************************************************
@@ -1297,8 +1337,9 @@ BoundaryGradRPenaltyTerm
       // Get the badness of the atom. At boundary atoms, the badness
       // is a function of how far |gradR| is from zero. We can set the
       // penalty to have the form alpha * (1 - |gradR|^2)^2
-      double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
-      double penalty = (xScale * devn * devn);
+      // double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
+      // double penalty = (xScale * devn * devn);
+      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xGradRMagSqr);
 
       // Register the gradR
       saGradR.Update(S->xAtoms[i].xGradRMagSqr);
@@ -1310,7 +1351,7 @@ BoundaryGradRPenaltyTerm
       // from being anywhere near 1, since that will make the derivatives
       // of the boundary nodes go to infinity, killing the optimizer. So 
       // we let the penalty be of the form alpha / sqrt(1-(gradR^2))
-      double penalty = 0.01 * (1.0 / S->xAtoms[i].xNormalFactor - 1);
+      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xNormalFactor - 1);
       saPenalty.Update(penalty);
       }
     }
@@ -1335,15 +1376,18 @@ ComputePartialDerivative(
       {
       if(S->xAtoms[i].flagCrest)
         {
-        double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
-        double ddevn = - dS->xAtoms[i].xGradRMagSqr;
-        double d_penalty = 2 * xScale * devn * ddevn; 
+        // double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
+        // double ddevn = - dS->xAtoms[i].xGradRMagSqr;
+        // double d_penalty = 2 * xScale * devn * ddevn; 
+        // dTotalPenalty += d_penalty;
+        double d_penalty = 0.0001 * 
+          (-dS->xAtoms[i].xGradRMagSqr / (S->xAtoms[i].xGradRMagSqr * S->xAtoms[i].xGradRMagSqr));
         dTotalPenalty += d_penalty;
         }
       else
         {
         double d_penalty = 
-          - 0.01 * dS->xAtoms[i].xNormalFactor / 
+          - 0.0001 * dS->xAtoms[i].xNormalFactor / 
           (S->xAtoms[i].xNormalFactor * S->xAtoms[i].xNormalFactor);
         dTotalPenalty += d_penalty;
         }
@@ -1616,26 +1660,19 @@ double MedialAnglesPenaltyTerm::ComputeEnergy(SolutionData *S)
 {
   xTotalPenalty = xMaxPenalty = 0.0;
 
-  // Look at the angle made by Xu and Xv at a point
-  // Create a penalty term
-  ExponentialBarrierFunction ebf(30, 1, 100);
-
-  // This penalty computes the tangent of the angle between Xu and Xv
-  // Then, in order to give more flexibility, we take this term to a 
-  // power, so that the penalty near 0 is smaller
+  // We will simply look at the ratio |Xu x Xv| to |Xu| |Xv| and
+  // take its inverse as the penalty, with a very small weight
   for(MedialAtomIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
     {
     MedialAtom &a = S->xAtoms[it.GetIndex()];
-    double penalty = 
-      a.G.xCovariantTensor[0][1] * a.G.xCovariantTensor[0][1] / a.G.g;
-    double p_scale = penalty * penalty * penalty * penalty;
-    xTotalPenalty += p_scale;
-    xMaxPenalty = std::max(penalty, xMaxPenalty);
-    }
+    double g11 = a.G.xCovariantTensor[0][0];
+    double g22 = a.G.xCovariantTensor[1][1];
 
-  // Sum the penalty over all triangles in the mesh
-  // for(MedialTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
-  //  xTotalPenalty += CosineSquareTuple(S->xAtoms, it);
+    double xpen = 0.01 * g11 * g22 * a.G.gInv;
+
+    xTotalPenalty += xpen;
+    xMaxPenalty = std::max(xpen, xMaxPenalty);
+    }
 
   // return 0.25 * xTotalPenalty / S->xAtomGrid->GetNumberOfAtoms();
   xTotalPenalty /= S->xAtomGrid->GetNumberOfAtoms();
@@ -1649,25 +1686,24 @@ double MedialAnglesPenaltyTerm::ComputePartialDerivative(SolutionData *S, Partia
   // Compute the square of the cosine of the angle between Xu and Xv
   for(MedialAtomIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
     {
-    MedialAtom &a = S->xAtoms[it.GetIndex()];
     MedialAtom &da = dS->xAtoms[it.GetIndex()];
+    //if(da.order <= 2)
+    //  {
+      MedialAtom &a = S->xAtoms[it.GetIndex()];
+      double g11 = a.G.xCovariantTensor[0][0];
+      double g22 = a.G.xCovariantTensor[1][1];
+      double dg11 = da.G.xCovariantTensor[0][0];
+      double dg22 = da.G.xCovariantTensor[1][1];
+    
+      double dxpen = 0.01 * (
+        dg11 *  g22 *  a.G.gInv + 
+         g11 * dg22 *  a.G.gInv +
+         g11 *  g22 * da.G.gInv);
 
-    double numerator = 
-      a.G.xCovariantTensor[0][1] * a.G.xCovariantTensor[0][1];
-    double d_numerator = 
-      2.0 * a.G.xCovariantTensor[0][1] * da.G.xCovariantTensor[0][1];
-    double d_penalty = 
-      (d_numerator * a.G.g - numerator * da.G.g) / (a.G.g * a.G.g);
-    double penalty = numerator / a.G.g;
-    dTotalPenalty += 4.0 * d_penalty * penalty * penalty * penalty;
+      dTotalPenalty += dxpen;
+    //  }
     }
-  /*
-  // Sum the penalty over all triangles in the mesh
-  for(MedialTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
-    dTotalPenalty += CosineSquareTupleDerivative(S->xAtoms, dS->xAtoms, it);
 
-  return 0.25 * dTotalPenalty / S->xAtomGrid->GetNumberOfAtoms();
-  */
   return dTotalPenalty / S->xAtomGrid->GetNumberOfAtoms();
 }
 
@@ -1684,6 +1720,99 @@ void MedialAnglesPenaltyTerm::PrintReport(ostream &sout)
 // const double BoundaryCurvaturePenalty::xPower = 1;
 // const double BoundaryCurvaturePenalty::xScale = 1;
 
+BoundaryCurvaturePenalty
+::BoundaryCurvaturePenalty(GenericMedialModel *model)
+{
+  // Define the regularization term as a spring energy term
+}
+
+double
+BoundaryCurvaturePenalty
+::ComputeEnergy(SolutionData *S)
+{  
+  // Reset the penalty
+  saSqrEdgeLen.Reset();
+
+  // Compute the squared distances between all neighboring nodes
+  TriangleMesh *mesh = S->xAtomGrid->GetBoundaryMesh();
+
+  // Loop once over every edge
+  for(size_t t = 0; t < mesh->triangles.size(); t++)
+    {
+    for(size_t q = 0; q < 3; q++)
+      {
+      if(t < mesh->triangles[t].neighbors[q])
+        {
+        size_t ib1 = mesh->triangles[t].vertices[ror(q)];
+        size_t ib2 = mesh->triangles[t].vertices[rol(q)];
+        size_t ia1 = S->xAtomGrid->GetBoundaryPointAtomIndex(ib1);
+        size_t ia2 = S->xAtomGrid->GetBoundaryPointAtomIndex(ib2);
+        size_t is1 = S->xAtomGrid->GetBoundaryPointSide(ib1);
+        size_t is2 = S->xAtomGrid->GetBoundaryPointSide(ib2);
+        SMLVec3d X1 = S->xAtoms[ia1].xBnd[is1].X;
+        SMLVec3d X2 = S->xAtoms[ia2].xBnd[is2].X;
+
+        // Compute the energy
+        SMLVec3d edge = X2 - X1;
+        saSqrEdgeLen.Update(dot_product(edge, edge));
+        }
+      }
+    }
+
+  return saSqrEdgeLen.GetSum();
+}
+
+double 
+BoundaryCurvaturePenalty
+::ComputePartialDerivative(
+  SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  // Reset the penalty
+  double dPenalty = 0.0;
+
+  // Compute the squared distances between all neighboring nodes
+  TriangleMesh *mesh = S->xAtomGrid->GetBoundaryMesh();
+
+  // Loop once over every edge
+  for(size_t t = 0; t < mesh->triangles.size(); t++)
+    {
+    for(size_t q = 0; q < 3; q++)
+      {
+      if(t < mesh->triangles[t].neighbors[q])
+        {
+        size_t ib1 = mesh->triangles[t].vertices[ror(q)];
+        size_t ib2 = mesh->triangles[t].vertices[rol(q)];
+        size_t ia1 = S->xAtomGrid->GetBoundaryPointAtomIndex(ib1);
+        size_t ia2 = S->xAtomGrid->GetBoundaryPointAtomIndex(ib2);
+        size_t is1 = S->xAtomGrid->GetBoundaryPointSide(ib1);
+        size_t is2 = S->xAtomGrid->GetBoundaryPointSide(ib2);
+        
+        SMLVec3d X1 = S->xAtoms[ia1].xBnd[is1].X;
+        SMLVec3d X2 = S->xAtoms[ia2].xBnd[is2].X;
+        SMLVec3d dX1 = dS->xAtoms[ia1].xBnd[is1].X;
+        SMLVec3d dX2 = dS->xAtoms[ia2].xBnd[is2].X;
+
+        // Compute the energy
+        SMLVec3d edge = X2 - X1;
+        SMLVec3d d_edge = dX2 - dX1;
+
+        dPenalty += 2 * dot_product(d_edge, edge);
+        }
+      }
+    }
+
+  return dPenalty;
+}
+
+void BoundaryCurvaturePenalty
+::PrintReport(ostream &sout)
+{
+  sout << "  Boundary Spring Penalty: " << endl;
+  sout << "    rms edge length   : " << sqrt(saSqrEdgeLen.GetMean()) << endl;
+  sout << "    total penalty     : " << saSqrEdgeLen.GetSum() << endl;
+}
+
+/**
 BoundaryCurvaturePenalty
 ::BoundaryCurvaturePenalty(GenericMedialModel *model)
 {
@@ -1718,13 +1847,18 @@ BoundaryCurvaturePenalty
       SMLVec3d &Xj2 = GetBoundaryPoint(it, S->xAtoms, j2).X;
       SMLVec3d A = Xj2 - Xj, B = Xj1 - Xj;
 
+      // Get the normal vector at this node (is this fair?)
+      SMLVec3d &Nj = GetBoundaryPoint(it, S->xAtoms, j).N;
+
       // Compute the cotangent of the angle at j
       double AB = dot_product(A, B);
       SMLVec3d AxB = vnl_cross_3d(A, B);
-      double magAxB = AxB.magnitude();
+      
+      // double magAxB = dot_product(AxB.magnitude();
+      double magAxB = - dot_product(Nj, AxB);
       double cotAlphaJ = AB / magAxB;
       
-      xTest += magAxB;
+      xTest += cotAlphaJ;
 
       saDenom.Update(magAxB);      
 
@@ -1761,8 +1895,7 @@ BoundaryCurvaturePenalty
 
   xPenalty = (4 * xIntegralSqrMeanCrv - xCrestCurvatureTerm) 
     / S->xBoundaryArea;
-  // return xPenalty;
-
+  
   return xTest;
 }
 
@@ -1795,6 +1928,10 @@ BoundaryCurvaturePenalty
         SMLVec3d A = Xj2 - Xj, B = Xj1 - Xj;
         SMLVec3d dA = DXj2 - DXj, dB = DXj1 - DXj;
 
+        // Get the normal vector at this node (is this fair?)
+        SMLVec3d &Nj = GetBoundaryPoint(it, S->xAtoms, j).N;
+        SMLVec3d &dNj = GetBoundaryPoint(it, dS->xAtoms, j).N;
+
         // Compute the cotangent of the angle at j
         double AB = dot_product(A, B);
         double dAB = dot_product(dA, B) + dot_product(A, dB);
@@ -1802,13 +1939,19 @@ BoundaryCurvaturePenalty
         SMLVec3d AxB = vnl_cross_3d(A, B);
         SMLVec3d d_AxB = vnl_cross_3d(dA, B) + vnl_cross_3d(A, dB);
 
-        double magAxB = AxB.magnitude();
-        double d_magAxB = dot_product(AxB, d_AxB) / magAxB;
+        // double magAxB = AxB.magnitude();
+        // double d_magAxB = dot_product(AxB, d_AxB) / magAxB;
+        
+        double magAxB = - dot_product(Nj, AxB);
+        double d_magAxB = - dot_product(Nj, d_AxB) - dot_product(dNj, AxB);
 
-        dTest += d_magAxB;
+        
 
         double cotAlphaJ = AB / magAxB;
         double d_cotAlphaJ = (dAB * magAxB - AB * d_magAxB) / (magAxB * magAxB);
+        cout << d_cotAlphaJ << endl;
+
+        dTest += d_cotAlphaJ;
 
         // Compute the contribution to the normal vector
         SMLVec3d xcontr = (Xj2 - Xj1) * cotAlphaJ;
@@ -1850,10 +1993,10 @@ BoundaryCurvaturePenalty
   // TURN OFF CREST RADIUS TERM
   dCrestCurvatureTerm = 0;
 
-  /*
-  return
+  
+  double d_penalty = 
     ((4 * dIntegralSqrMeanCrv - dCrestCurvatureTerm) - xPenalty * dS->xBoundaryArea)
-    / S->xBoundaryArea; */
+    / S->xBoundaryArea; 
 
   return dTest;
 }
@@ -1870,6 +2013,7 @@ void BoundaryCurvaturePenalty
     << " / " << saDenom.GetMean() << " / " << saDenom.GetMax() << endl;
   sout << "    total penalty     : " << xPenalty << endl;
 }
+*/
 
 /*********************************************************************************
  * Medial Curvature Penalty Term
@@ -2858,8 +3002,10 @@ void MedialOptimizationProblem::PrintReport(ostream &sout)
 #include "vtkPoints.h"
 #include "vtkPolyData.h"
 #include "vtkPolyDataWriter.h"
+#include "vtkPolyDataReader.h"
 #include "vtkFloatArray.h"
 #include "vtkPointData.h"
+#include "MedialModelIO.h"
 
 void MedialOptimizationProblem::DumpGradientMesh()
 {
@@ -2878,6 +3024,19 @@ void MedialOptimizationProblem::DumpGradientMesh()
   if(xCoeff->GetNumberOfCoefficients() != mctl.nVertices * 4)
     throw string("Coefficient mapping does not support DumpGradientMesh");
 
+  // Save the cm-rep file for this model
+  char *fnout = new char[100];
+  sprintf(fnout, "dumpgrad%04i.cmrep", this->nGradCalls);
+  SubdivisionMedialModelIO::WriteModel(model, fnout);
+  
+  // Now load the VTK file and append with some gradient fields
+  sprintf(fnout, "dumpgrad%04i.vtk", this->nGradCalls);
+  vtkPolyDataReader *reader = vtkPolyDataReader::New();
+  reader->SetFileName(fnout);
+  reader->Update();
+  vtkPolyData *poly = reader->GetOutput();
+
+  /*
   // Generate a VTK mesh
   vtkPoints *lPoints = vtkPoints::New();
   lPoints->Allocate(mctl.nVertices);
@@ -2887,6 +3046,22 @@ void MedialOptimizationProblem::DumpGradientMesh()
   vtkPolyData *poly = vtkPolyData::New();
   poly->SetPoints(lPoints);
   SubdivisionSurface::ExportLevelToVTK(mctl, poly);
+  */
+
+  // Generate the net force arrays
+  vtkFloatArray *gradXnet = vtkFloatArray::New();
+  string nameX = string("X_NET");
+  gradXnet->SetName(nameX.c_str());
+  gradXnet->SetNumberOfComponents(3);
+  gradXnet->SetNumberOfTuples(nCoeff / 4);
+  poly->GetPointData()->AddArray(gradXnet);
+  
+  vtkFloatArray *gradRnet = vtkFloatArray::New();
+  string nameR = string("R_NET");
+  gradRnet->SetName(nameR.c_str());
+  gradRnet->SetNumberOfComponents(1);
+  gradRnet->SetNumberOfTuples(nCoeff / 4);
+  poly->GetPointData()->AddArray(gradRnet);
 
   // For each term, generate a new data array
   for(size_t iTerm = 0; iTerm < xTerms.size(); iTerm++)
@@ -2907,17 +3082,29 @@ void MedialOptimizationProblem::DumpGradientMesh()
 
     for(size_t i = 0; i < nCoeff / 4; i++)
       {
-      gradX->SetTuple3(i,
-        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 0],
-        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 1],
-        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 2]);
-      gradR->SetTuple1(i,
-        xWeights[iTerm] * xLastGradientPerTerm[iTerm][i * 4 + 3]);
-      }
-    }
+      SMLVec3d dX(
+        xLastGradientPerTerm[iTerm][i * 4 + 0],
+        xLastGradientPerTerm[iTerm][i * 4 + 1],
+        xLastGradientPerTerm[iTerm][i * 4 + 2]);
+      SMLVec3d wdX = xWeights[iTerm] * dX;
+      double dR = xLastGradientPerTerm[iTerm][i * 4 + 3];
+      double wdR = xWeights[iTerm] * dR;
 
-  char *fnout = new char[100];
-  sprintf(fnout, "dumpgrad%04i.vtk", this->nGradCalls);
+      gradX->SetTuple3(i, wdX[0], wdX[1], wdX[2]);
+      gradR->SetTuple1(i, wdR);
+
+      if(iTerm == 0)
+        {
+        gradXnet->SetTuple3(i, wdX[0], wdX[1], wdX[2]);
+        gradRnet->SetTuple1(i, wdR);
+        }
+      else
+        {
+        SMLVec3d XX = SMLVec3d(gradXnet->GetTuple3(i)) + wdX;
+        gradXnet->SetTuple3(i, XX[0], XX[1], XX[2]);
+        gradRnet->SetTuple1(i, gradRnet->GetTuple1(i) + wdR);
+        }      }
+    }
 
   vtkPolyDataWriter *write = vtkPolyDataWriter::New();
   write->SetInput(poly);

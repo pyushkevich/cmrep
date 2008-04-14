@@ -70,7 +70,7 @@ bool MedialAtom::ComputeBoundaryAtoms(bool flagEdgeAtom)
   SMLVec3d xGradPhi = Xu * Cu + Xv * Cv;
 
   // Compute the radius of the atom
-  // R = sqrt(F);
+  R = sqrt(F);
 
   // Compute the Riemannian gradient of R
   xGradR = 0.5 * xGradPhi / R;
@@ -83,33 +83,18 @@ bool MedialAtom::ComputeBoundaryAtoms(bool flagEdgeAtom)
     {
     // We are at a crest, valid atom
     flagCrest = true;
+    flagValid = true;
 
     // There is a zero badness value
-    // xGradRMagSqr = 1.0;
+    xGradRMagSqr = 1.0;
     xNormalFactor = 0.0;
 
-    // Make grad-R have unit length
-    // xGradR = xGradPhi / xGradPhi.magnitude(); 
-
-    // If the magnitude of gradR is zero, we are in real trouble
-    if(xGradRMagSqr == 0.0)
-      {
-      flagValid = false;
-      xBnd[0].X = xBnd[1].X = X;
-      xBnd[0].N = -N;
-      xBnd[1].N = N;
-      }
-    else
-      {
-      flagValid = true;
-
-      // Use a different computation for the boundary atoms. This
-      // should be a correct computation if |gradR|==1 but it will
-      // different for brute force models where gradR may not be 1
-      // on the boundary
-      xBnd[0].N = xBnd[1].N = - xGradR / sqrt(xGradRMagSqr);
-      xBnd[0].X = xBnd[1].X = X + R * xBnd[0].N;
-      }
+    // Basically, we expect each medial model to give us boundary atoms
+    // with gradR ~= 1. We simply set xBnd.N = -gradR. If the magnitude
+    // of xBnd.N is not exactly 1, that can be a problem - but it's the
+    // problem that should be handled in the medial model, not here.
+    xBnd[0].N = xBnd[1].N = - xGradR;
+    xBnd[0].X = xBnd[1].X = X + R * xBnd[0].N;
     }
   else
     {
@@ -154,6 +139,303 @@ bool MedialAtom::ComputeBoundaryAtoms(bool flagEdgeAtom)
 
   return flagValid;
 }
+
+bool MedialAtom::ComputeBoundaryAtomsUsingR(bool flagEdgeAtom)
+{
+  // Compute the Riemannian gradient of R
+  double (*G2)[2] = G.xContravariantTensor;
+  double Cu = (Ru * G2[0][0] + Rv * G2[0][1]);
+  double Cv = (Ru * G2[0][1] + Rv * G2[1][1]);
+
+  // Compute gradR and its gradient magnitude
+  xGradR       = Xu * Cu + Xv * Cv;
+  xGradRMagSqr = Ru * Cu + Rv * Cv;
+
+  // Compute F = r^2
+  F = R * R;
+
+  // Split depending on whether this is an end atom
+  if(flagEdgeAtom)
+    {
+    // We are at a crest, valid atom
+    flagCrest = true;
+
+    // There is a zero badness value
+    xNormalFactor = 0.0;
+
+    // If the magnitude of gradR is zero, we are in real trouble
+    if(xGradRMagSqr == 0.0)
+      {
+      flagValid = false;
+      xBnd[0].X = xBnd[1].X = X;
+      xBnd[0].N = -N;
+      xBnd[1].N = N;
+      }
+    else
+      {
+      flagValid = true;
+
+      // Use a different computation for the boundary atoms. This
+      // should be a correct computation if |gradR|==1 but it will
+      // different for brute force models where gradR may not be 1
+      // on the boundary
+      xBnd[0].N = xBnd[1].N = - xGradR / sqrt(xGradRMagSqr);
+      xBnd[0].X = xBnd[1].X = X + R * xBnd[0].N;
+      }
+    }
+  else
+    {
+    // Otherwise, we have a normal atom
+    flagCrest = false;
+
+    // Check if this is greater than one - should never be very close either
+    if(xGradRMagSqr > 1.0)
+      {
+      // This is an invalid atom
+      flagValid = false;
+
+      // Set the boundary atoms to zero
+      xNormalFactor = 0;
+      xBnd[0].X = xBnd[1].X = X;
+      xBnd[0].N = -N;
+      xBnd[1].N = N;
+      }
+    else
+      {
+      // Finally, we have a clean internal atom
+      flagValid = true;
+
+      // Compute the normal component of the sail vectors
+      xNormalFactor = sqrt(1.0 - xGradRMagSqr);
+      SMLVec3d CN = N * xNormalFactor;
+
+      // Compute the position and normals of boundary points
+      xBnd[0].N = - xGradR - CN;
+      xBnd[0].X = X + xBnd[0].N * R;
+      xBnd[1].N = - xGradR + CN;
+      xBnd[1].X = X + xBnd[1].N * R;
+      }
+    }
+
+  return flagValid;
+}
+
+
+
+// Prerequisites:
+//  * The first jet for the atom and datom
+//  * The contravariant tensor for the atom and datom
+//
+void 
+MedialAtom::ComputeBoundaryAtomDerivatives(
+  MedialAtom &dAtom, const DerivativeTerms &dt) const
+{
+  // Get the relevant elements of the atoms
+  SMLVec3d &Y = dAtom.X, &Yu = dAtom.Xu, &Yv = dAtom.Xv;
+  
+  // Get the elements of the first fundamental form and its derivative
+  const double &g11 = G.xContravariantTensor[0][0];
+  const double &g12 = G.xContravariantTensor[0][1];
+  const double &g22 = G.xContravariantTensor[1][1];
+  const double &z11 = dAtom.G.xContravariantTensor[0][0];
+  const double &z12 = dAtom.G.xContravariantTensor[0][1];
+  const double &z22 = dAtom.G.xContravariantTensor[1][1];
+
+  // Get the g's
+  const double &g = G.g; const double &z = dAtom.G.g;
+
+  // Get the partials of Phi and its variational derivative
+  double &H = dAtom.F, &Hu = dAtom.Fu, &Hv = dAtom.Fv;
+
+  // Get the derivatives of R
+  double P = H * dt.x1_2R;
+  double Pu = Hu * dt.x1_2R - H * dt.Ru_2F;
+  double Pv = Hv * dt.x1_2R - H * dt.Rv_2F;
+
+  dAtom.R = P; 
+  
+  // This is the derivative of the normal vector
+  dAtom.N =  vnl_cross_3d(dt.Xu_aelt, Yv);
+  dAtom.N += vnl_cross_3d(Yu, dt.Xv_aelt);
+  vmuladd(dAtom.N, dt.N_2g, -z);
+
+  // We will compute several intermediate terms
+  double z1iRi = z11 * dt.Ru + z12 * dt.Rv;
+  double z2iRi = z12 * dt.Ru + z22 * dt.Rv;
+
+  // Compute the derivative of grad R
+  vmulset(dAtom.xGradR, Xu, z1iRi + g11 * Pu + g12 * Pv);
+  vmuladd(dAtom.xGradR, Xv, z2iRi + g12 * Pu + g22 * Pv);
+  vmuladd(dAtom.xGradR, Yu, dt.g1iRi);
+  vmuladd(dAtom.xGradR, Yv, dt.g2iRi);
+
+  // Compute the derivative of grad R . grad R
+  dAtom.xGradRMagSqr = z1iRi * dt.Ru + z2iRi * dt.Rv 
+    + 2.0 * (dt.g1iRi * Pu + dt.g2iRi * Pv);
+
+  // Compute the 
+
+  // Address the edge case first
+  if(flagCrest) 
+    {
+    dAtom.xNormalFactor = 0.0;
+    if(flagValid)
+      {
+      // Compute (gradR / |gradR|)'
+      vmulset(dAtom.xBnd[0].N, dAtom.xGradR, -dt.inv_mag_gradR);
+      vmuladd(dAtom.xBnd[0].N, xBnd[0].N, 
+        - dot_product(dAtom.xBnd[0].N, xBnd[0].N));
+      dAtom.xBnd[1].N = dAtom.xBnd[0].N;
+
+      // Compute the boundary atoms
+      dAtom.xBnd[1].X = dAtom.xBnd[0].X = 
+        Y + R * dAtom.xBnd[0].N + P * xBnd[0].N;
+
+      // The normal term vanishes
+      // dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
+      // dAtom.xGradRMagSqr = 0.0;
+      }
+    else
+      {
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
+      dAtom.xBnd[0].N = -dAtom.N;
+      dAtom.xBnd[1].N = dAtom.N;
+      }
+    }
+  else
+    {
+    if(flagValid)
+      {
+      // Set the normal factor
+      dAtom.xNormalFactor = -0.5 * dAtom.xGradRMagSqr / xNormalFactor;
+
+      // Compute the plus-minus term
+      SMLVec3d dNormalTerm;
+      vmulset(dNormalTerm, dAtom.N, xNormalFactor);
+      vmuladd(dNormalTerm, dt.N_2nt, -dAtom.xGradRMagSqr);
+
+      // Compute the boundary atom normals
+      dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
+      dAtom.xBnd[0].N -= dNormalTerm;
+      dAtom.xBnd[1].N += dNormalTerm;
+
+      // Compute the boundary atoms
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = Y;
+      vmuladd(dAtom.xBnd[0].X, dAtom.xBnd[0].N, R);
+      vmuladd(dAtom.xBnd[0].X, xBnd[0].N, P);
+      vmuladd(dAtom.xBnd[1].X, dAtom.xBnd[1].N, R);
+      vmuladd(dAtom.xBnd[1].X, xBnd[1].N, P);
+      }
+    else
+      {
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
+      dAtom.xBnd[0].N = -dAtom.N;
+      dAtom.xBnd[1].N = dAtom.N;
+      }
+    }
+}
+
+
+// Prerequisites:
+//  * The first jet for the atom and datom
+//  * The contravariant tensor for the atom and datom
+//
+void 
+MedialAtom::ComputeBoundaryAtomDerivativesUsingR(
+  MedialAtom &dAtom, const DerivativeTerms &dt) const
+{
+  // Get the relevant elements of the atoms
+  SMLVec3d &Y = dAtom.X, &Yu = dAtom.Xu, &Yv = dAtom.Xv;
+  
+  // Get the elements of the first fundamental form and its derivative
+  const double &g11 = G.xContravariantTensor[0][0];
+  const double &g12 = G.xContravariantTensor[0][1];
+  const double &g22 = G.xContravariantTensor[1][1];
+  const double &z11 = dAtom.G.xContravariantTensor[0][0];
+  const double &z12 = dAtom.G.xContravariantTensor[0][1];
+  const double &z22 = dAtom.G.xContravariantTensor[1][1];
+
+  // Get the g's
+  const double &g = G.g; const double &z = dAtom.G.g;
+
+  // Get the partials of Phi and its variational derivative
+  double P = dAtom.R;
+  double Pu = dAtom.Ru;
+  double Pv = dAtom.Rv;
+
+  double Cu = (Ru * g11 + Rv * g12);
+  double Cv = (Ru * g12 + Rv * g22);
+  double dCu = (Pu * g11 + Ru * z11 + Pv * g12 + Rv * z12);
+  double dCv = (Pu * g12 + Ru * z12 + Pv * g22 + Rv * z22);
+
+  // Compute gradR and its gradient magnitude
+  dAtom.xGradR       = Xu * dCu + Yu * Cu + Xv * dCv + Yv * Cv;
+  dAtom.xGradRMagSqr = Ru * dCu + Pu * Cu + Rv * dCv + Pv * Cv;
+
+  // Set the partials of F
+  dAtom.F = 2.0 * R * P; 
+  
+  // This is the derivative of the normal vector
+  dAtom.N =  vnl_cross_3d(dt.Xu_aelt, Yv);
+  dAtom.N += vnl_cross_3d(Yu, dt.Xv_aelt);
+  vmuladd(dAtom.N, dt.N_2g, -z);
+
+  // Address the edge case first
+  if(flagCrest) 
+    {
+    dAtom.xNormalFactor = 0.0;
+    if(flagValid)
+      {
+      // Compute (gradR / |gradR|)'
+      vmulset(dAtom.xBnd[0].N, dAtom.xGradR, -dt.inv_mag_gradR);
+      vmuladd(dAtom.xBnd[0].N, xBnd[0].N, 
+        - dot_product(dAtom.xBnd[0].N, xBnd[0].N));
+      dAtom.xBnd[1].N = dAtom.xBnd[0].N;
+
+      // Compute the boundary atoms
+      dAtom.xBnd[1].X = dAtom.xBnd[0].X = 
+        Y + R * dAtom.xBnd[0].N + P * xBnd[0].N;
+      }
+    else
+      {
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
+      dAtom.xBnd[0].N = -dAtom.N;
+      dAtom.xBnd[1].N = dAtom.N;
+      }
+    }
+  else
+    {
+    if(flagValid)
+      {
+      // Set the normal factor
+      dAtom.xNormalFactor = -0.5 * dAtom.xGradRMagSqr / xNormalFactor;
+
+      // Compute the plus-minus term
+      SMLVec3d dNormalTerm;
+      vmulset(dNormalTerm, dAtom.N, xNormalFactor);
+      vmuladd(dNormalTerm, dt.N_2nt, -dAtom.xGradRMagSqr);
+
+      // Compute the boundary atom normals
+      dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
+      dAtom.xBnd[0].N -= dNormalTerm;
+      dAtom.xBnd[1].N += dNormalTerm;
+
+      // Compute the boundary atoms
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = Y;
+      vmuladd(dAtom.xBnd[0].X, dAtom.xBnd[0].N, R);
+      vmuladd(dAtom.xBnd[0].X, xBnd[0].N, P);
+      vmuladd(dAtom.xBnd[1].X, dAtom.xBnd[1].N, R);
+      vmuladd(dAtom.xBnd[1].X, xBnd[1].N, P);
+      }
+    else
+      {
+      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
+      dAtom.xBnd[0].N = -dAtom.N;
+      dAtom.xBnd[1].N = dAtom.N;
+      }
+    }
+}
+
 
 double temp01(
   SMLVec3d &Au, SMLVec3d &Bu, SMLVec3d &Cu,
@@ -469,6 +751,7 @@ MedialAtom
     dAtom.G.xCovariantTensor[0][0] * G.xCovariantTensor[1][1] +
     dAtom.G.xCovariantTensor[1][1] * G.xCovariantTensor[0][0] -
     2 * dAtom.G.xCovariantTensor[0][1] * G.xCovariantTensor[0][1];
+  dAtom.G.gInv = - G.gInv * (G.gInv * dAtom.G.g);
 
   // Compute the derivatives of the contravariant tensor
   dAtom.G.xContravariantTensor[0][0] = G.gInv *
@@ -514,118 +797,7 @@ MedialAtom
 	  	G.xContravariantTensor[k][1] * dAtom.G.xChristoffelFirst[i][j][1]; 	  	 
 }
 
-// Prerequisites:
-//  * The first jet for the atom and datom
-//  * The contravariant tensor for the atom and datom
-//
-void 
-MedialAtom::ComputeBoundaryAtomDerivatives(
-  MedialAtom &dAtom, const DerivativeTerms &dt) const
-{
-  // Get the relevant elements of the atoms
-  SMLVec3d &Y = dAtom.X, &Yu = dAtom.Xu, &Yv = dAtom.Xv;
-  
-  // Get the elements of the first fundamental form and its derivative
-  const double &g11 = G.xContravariantTensor[0][0];
-  const double &g12 = G.xContravariantTensor[0][1];
-  const double &g22 = G.xContravariantTensor[1][1];
-  const double &z11 = dAtom.G.xContravariantTensor[0][0];
-  const double &z12 = dAtom.G.xContravariantTensor[0][1];
-  const double &z22 = dAtom.G.xContravariantTensor[1][1];
 
-  // Get the g's
-  const double &g = G.g; const double &z = dAtom.G.g;
-
-  // Get the partials of Phi and its variational derivative
-  double &H = dAtom.F, &Hu = dAtom.Fu, &Hv = dAtom.Fv;
-
-  // Get the derivatives of R
-  double P = H * dt.x1_2R;
-  double Pu = Hu * dt.x1_2R - H * dt.Ru_2F;
-  double Pv = Hv * dt.x1_2R - H * dt.Rv_2F;
-
-  dAtom.R = P; 
-  
-  // This is the derivative of the normal vector
-  dAtom.N =  vnl_cross_3d(dt.Xu_aelt, Yv);
-  dAtom.N += vnl_cross_3d(Yu, dt.Xv_aelt);
-  vmuladd(dAtom.N, dt.N_2g, -z);
-
-  // We will compute several intermediate terms
-  double z1iRi = z11 * dt.Ru + z12 * dt.Rv;
-  double z2iRi = z12 * dt.Ru + z22 * dt.Rv;
-
-  // Compute the derivative of grad R
-  vmulset(dAtom.xGradR, Xu, z1iRi + g11 * Pu + g12 * Pv);
-  vmuladd(dAtom.xGradR, Xv, z2iRi + g12 * Pu + g22 * Pv);
-  vmuladd(dAtom.xGradR, Yu, dt.g1iRi);
-  vmuladd(dAtom.xGradR, Yv, dt.g2iRi);
-
-  // Compute the derivative of grad R . grad R
-  dAtom.xGradRMagSqr = z1iRi * dt.Ru + z2iRi * dt.Rv 
-    + 2.0 * (dt.g1iRi * Pu + dt.g2iRi * Pv);
-
-  // Compute the 
-
-  // Address the edge case first
-  if(flagCrest) 
-    {
-    dAtom.xNormalFactor = 0.0;
-    if(flagValid)
-      {
-      // Compute (gradR / |gradR|)'
-      vmulset(dAtom.xBnd[0].N, dAtom.xGradR, -dt.inv_mag_gradR);
-      vmuladd(dAtom.xBnd[0].N, xBnd[0].N, 
-        - dot_product(dAtom.xBnd[0].N, xBnd[0].N));
-      dAtom.xBnd[1].N = dAtom.xBnd[0].N;
-
-      // Compute the boundary atoms
-      dAtom.xBnd[1].X = dAtom.xBnd[0].X = 
-        Y + R * dAtom.xBnd[0].N + P * xBnd[0].N;
-
-      // The normal term vanishes
-      // dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
-      // dAtom.xGradRMagSqr = 0.0;
-      }
-    else
-      {
-      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
-      dAtom.xBnd[0].N = -dAtom.N;
-      dAtom.xBnd[1].N = dAtom.N;
-      }
-    }
-  else
-    {
-    if(flagValid)
-      {
-      // Set the normal factor
-      dAtom.xNormalFactor = -0.5 * dAtom.xGradRMagSqr / xNormalFactor;
-
-      // Compute the plus-minus term
-      SMLVec3d dNormalTerm;
-      vmulset(dNormalTerm, dAtom.N, xNormalFactor);
-      vmuladd(dNormalTerm, dt.N_2nt, -dAtom.xGradRMagSqr);
-
-      // Compute the boundary atom normals
-      dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
-      dAtom.xBnd[0].N -= dNormalTerm;
-      dAtom.xBnd[1].N += dNormalTerm;
-
-      // Compute the boundary atoms
-      dAtom.xBnd[0].X = dAtom.xBnd[1].X = Y;
-      vmuladd(dAtom.xBnd[0].X, dAtom.xBnd[0].N, R);
-      vmuladd(dAtom.xBnd[0].X, xBnd[0].N, P);
-      vmuladd(dAtom.xBnd[1].X, dAtom.xBnd[1].N, R);
-      vmuladd(dAtom.xBnd[1].X, xBnd[1].N, P);
-      }
-    else
-      {
-      dAtom.xBnd[0].X = dAtom.xBnd[1].X = dAtom.X;
-      dAtom.xBnd[0].N = -dAtom.N;
-      dAtom.xBnd[1].N = dAtom.N;
-      }
-    }
-}
 
 
 
