@@ -3113,3 +3113,4 @@ void MedialOptimizationProblem::DumpGradientMesh()
 
   delete fnout;  
 }
+

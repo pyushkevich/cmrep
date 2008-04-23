@@ -449,7 +449,7 @@ struct FullEdge
 
 void SanityCheck(
                  TriangleMesh *mesh,
-                 std::vector<vnl_vector_fixed<size_t, 3>> &tdidx,
+                 std::vector< vnl_vector_fixed<size_t, 3> > &tdidx,
                  std::vector<FullEdge> &edges)
   {
   for(size_t i = 0; i < edges.size(); i++)
@@ -662,3 +662,4 @@ template class ImmutableSparseArray<NeighborInfo>;
 template class ImmutableSparseArray<LoopTangentScheme::Weight>;
 template class ImmutableSparseArray<MeshGradientComputer::Vec>;
 template class ImmutableSparseArray<MeshGradientComputer::Mat>;
+

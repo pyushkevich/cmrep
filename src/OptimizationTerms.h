@@ -1250,7 +1250,7 @@ private:
   bool flagGradientComputed, flagQuiet;
 
   // Array of gradient vectors for each optimization term
-  std::vector<vnl_vector<double>> xLastGradientPerTerm;
+  std::vector< vnl_vector<double> > xLastGradientPerTerm;
 
   // The solution at the last evaluation point
   vnl_matrix<double> xLastPhiField;

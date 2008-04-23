@@ -19,6 +19,9 @@ ELSE(VTK_FOUND)
     "Cannot build without VTK.  Please set VTK_DIR.")
 ENDIF(VTK_FOUND)
 
+# Set the include directories
+INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src)
+
 # Find BOOST
 IF(USE_CGAL)
   FIND_PACKAGE(BOOST)
@@ -52,11 +55,6 @@ IF(GLUT_FOUND)
   INCLUDE_DIRECTORIES(${GLUT_INCLUDE_DIR})
   LINK_DIRECTORIES(${GLUT_INCLUDE_DIR})
 ENDIF(GLUT_FOUND)
-
-# Set the include directories
-INCLUDE_DIRECTORIES(
-  ${CMREP_SOURCE_DIR}/src
-  )
 
 #  ${CMREP_SOURCE_DIR}/extras/afront/tmp/
 
