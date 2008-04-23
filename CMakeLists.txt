@@ -130,4 +130,5 @@ ADD_EXECUTABLE(cmrep2mesh src/CMRepToMesh.cxx)
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
 
-### TARGET_LINK_LIBRARIES(cmrep_remesh afront gtb ThreadLib mlslib viewer)
+# Add installation targets
+INSTALL_TARGETS("/bin" cmr_fit testpde cmrep2mesh cmrep_subdivide cmrep_remesh)
