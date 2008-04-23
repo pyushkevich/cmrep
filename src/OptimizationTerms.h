@@ -661,7 +661,7 @@ public:
 private:
   // Maximum and minimum values of the Jacobian encountered during
   // optimization
-  StatisticsAccumulator saJacobian, saPenalty;
+  StatisticsAccumulator saJacobian, saLower, saUpper, saPenalty;
 
   // double xMinJacobian, xMaxJacobian, xAvgJacobian, xTotalPenalty;
 

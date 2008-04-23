@@ -1042,9 +1042,14 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
     {
     // Set the flip/scale matrix
     vnl_matrix<double> F(3, 3, 0.0);
-    F(0,0) = (f & 1) ? -sqrt(Dx(0) / Dy(0)) : sqrt(Dx(0) / Dy(0));
-    F(1,1) = (f & 2) ? -sqrt(Dx(1) / Dy(1)) : sqrt(Dx(1) / Dy(1));
-    F(2,2) = (f & 4) ? -sqrt(Dx(2) / Dy(2)) : sqrt(Dx(2) / Dy(2));
+    // F(0,0) = (f & 1) ? -sqrt(Dx(0) / Dy(0)) : sqrt(Dx(0) / Dy(0));
+    // F(1,1) = (f & 2) ? -sqrt(Dx(1) / Dy(1)) : sqrt(Dx(1) / Dy(1));
+    // F(2,2) = (f & 4) ? -sqrt(Dx(2) / Dy(2)) : sqrt(Dx(2) / Dy(2));
+
+    // Flips only, no scaling, to avoid breaking model
+    F(0,0) = (f & 1) ? -1.0 : 1.0;
+    F(1,1) = (f & 2) ? -1.0 : 1.0;
+    F(2,2) = (f & 4) ? -1.0 : 1.0;
 
     // Compute the rotation+flip matrix
     vnl_matrix<double> R = Vx * F * Vy.transpose();

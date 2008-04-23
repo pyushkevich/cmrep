@@ -1011,6 +1011,8 @@ double BoundaryJacobianEnergyTerm::ComputeEnergy(SolutionData *S)
   saJacobian.Reset();
 
   // Reset the penalty accumulator
+  saLower.Reset();
+  saUpper.Reset();
   saPenalty.Reset();
 
   // Create a barrier function
@@ -1055,6 +1057,9 @@ double BoundaryJacobianEnergyTerm::ComputeEnergy(SolutionData *S)
       // return exp(-a * x) + exp(x - b); 
       eit->PenA[z] = ebfA.f(-eit->J[z]);
       eit->PenB[z] = ebfB.f( eit->J[z]);
+      
+      saLower.Update(eit->PenA[z]);
+      saUpper.Update(eit->PenB[z]);
       saPenalty.Update(eit->PenA[z] + eit->PenB[z]);
       }
     }
@@ -1130,12 +1135,16 @@ BoundaryJacobianEnergyTerm
 ::PrintReport(ostream &sout)
 {
   sout << "  Boundary Jacobian Term " << endl;
-  sout << "    total penalty  : " << saPenalty.GetSum() << endl;
-  sout << "    min jacobian   : " << saJacobian.GetMin() << endl;  
-  sout << "    max jacobian   : " << saJacobian.GetMax() << endl;  
-  sout << "    avg jacobian   : " << saJacobian.GetMean() << endl;  
-  sout << "    left penalty   : " << xPenaltyA << endl;
-  sout << "    right penalty  : " << xPenaltyB << endl;
+  sout << "    total penalty      : " << saPenalty.GetSum() << endl;
+  sout << "    min jacobian       : " << saJacobian.GetMin() << endl;  
+  sout << "    max jacobian       : " << saJacobian.GetMax() << endl;  
+  sout << "    avg jacobian       : " << saJacobian.GetMean() << endl; 
+  sout << "    min lower penalty  : " << saLower.GetMin() << endl;
+  sout << "    max lower penalty  : " << saLower.GetMax() << endl;
+  sout << "    avg lower penalty  : " << saLower.GetMean() << endl;
+  sout << "    min upper penalty  : " << saUpper.GetMin() << endl;
+  sout << "    max upper penalty  : " << saUpper.GetMax() << endl;
+  sout << "    avg upper penalty  : " << saUpper.GetMean() << endl;
 }
 
 VolumeIntegralEnergyTerm
