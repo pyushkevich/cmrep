@@ -4,8 +4,6 @@
 
 using namespace std;
 
-using namespace medialpde;
-
 int usage()
 {
   cout << "cmrep2mesh : create medial and boundary meshes from cm-rep" << endl;

@@ -23,8 +23,6 @@ void TestFDStuff();
 class CoefficientMapping;
 class OptimizationParameters;
 
-namespace medialpde {
-
 class BinaryImage;
 class FloatImage;
 
@@ -138,6 +136,17 @@ private:
   friend class FloatImage;
 };
 
+/** This simple structure defines flags to pass to optimization */
+struct OptimizationFlags 
+{
+  bool flagDumpGradientMesh;
+  bool flagTestGradient;
+
+  OptimizationFlags() : 
+    flagTestGradient(false), 
+    flagDumpGradientMesh(false) {}
+};
+
 /** This is the highest level class for working with the PDE application */
 class MedialPDE
 {
@@ -196,13 +205,15 @@ public:
     FloatImage *image, 
     size_t nSteps, 
     Registry &reg,
-    FloatImage *imggray = NULL,
-    bool do_deriv_test = false);
+    OptimizationFlags flags,
+    FloatImage *imggray = NULL);
   
   // Same as above
+  /*
   void RunOptimization(
     FloatImage *image, size_t nSteps, 
     const char *paramfile, const char *folderName = NULL);
+  */
 
   /** 
    * Configuration step for running optimization. Creates a mapping
@@ -470,7 +481,5 @@ private:
 
   PrincipalComponents *xPCA, *xAppearancePCA;
 };
-
-} // Namespace medial PDE!
 
 #endif

@@ -12,8 +12,6 @@
 
 using namespace std;
 
-namespace medialpde {
-
 FloatImage::FloatImage()
 {
   xImage = ITKImageWrapperFactory<float>::NewImageWrapper();
@@ -311,4 +309,3 @@ void BinaryImage::LoadFromFile(const char *file)
   xImage->LoadFromFile(file);
 }
 
-} // Namespace

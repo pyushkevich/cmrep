@@ -20,17 +20,16 @@
 #include <vtkMarchingCubes.h>
 #include <vtkPolyDataWriter.h>
 
-using namespace medialpde;
-
 int usage()
 {
-  cout << "cmrepfit: fit cm-rep to image" << endl;
+  cout << "cmrep_fit: fit cm-rep to image" << endl;
   cout << "usage: " << endl; 
-  cout << "  cmrepfit [options] param.txt template.cmrep target.img output_dir" << endl;
+  cout << "  cmrep_fit [options] param.txt template.cmrep target.img output_dir" << endl;
   cout << "options: " << endl;
   cout << "  -s N   : Only run fitting stage N (first stage is stage 0)" << endl;
   cout << "  -g FN  : Supply 'gray' image filename for direct-to-image fitting" << endl;
   cout << "  -t     : Test gradient computation for each of the terms (debug)" << endl;
+  cout << "  -d     : Dump out mesh with gradient vectors at each iteration (debug)" << endl;
   cout << "parameter file specification: " << endl;
   cout << "  http://alliance.seas.upenn.edu/~pauly2/wiki/index.php?n=Main.CM-RepFittingToolCmrFit" << endl;
   cout << endl;
@@ -135,8 +134,11 @@ int main(int argc, char *argv[])
 
   // Check optional parameters
   bool flag_one_stage = false;
-  bool flag_test_deriv = false;
   size_t selected_stage = 0;
+
+  // Optimization flags
+  OptimizationFlags flags_opt;
+
   size_t argoptmax = argc-4;
   string fn_gray = "";
   for(size_t i = 1; i < argoptmax; i++)
@@ -155,7 +157,11 @@ int main(int argc, char *argv[])
       }
     else if(arg == "-t")
       {
-      flag_test_deriv = true;
+      flags_opt.flagTestGradient = true;
+      }
+    else if(arg == "-d")
+      {
+      flags_opt.flagDumpGradientMesh = true;
       }
     else
       {
@@ -334,7 +340,7 @@ int main(int argc, char *argv[])
         }
       else if(stages[i].mode == FIT_TO_BINARY)
         {
-        mrep.RunOptimization(&imgfloat, stages[i].max_iter, stages[i].param, &imggray, flag_test_deriv);
+        mrep.RunOptimization(&imgfloat, stages[i].max_iter, stages[i].param, flags_opt, &imggray);
         }
       else throw string("Unknown optimization mode");
 

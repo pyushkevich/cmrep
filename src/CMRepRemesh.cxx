@@ -4,8 +4,6 @@
 
 using namespace std;
 
-using namespace medialpde;
-
 int usage()
 {
   cout << "cmrep_remesh : remesh medial surface in subdivision surface cm-rep" << endl;

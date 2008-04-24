@@ -23,7 +23,6 @@
 #include <iostream>
 
 using namespace std;
-using namespace medialpde;
 
 // void TestTetGen(GenericMedialModel *model);
 
@@ -342,7 +341,9 @@ void Test03()
   cout << "Image Match = " << mp->ComputeImageMatch(img) << endl;
 
   // TODO: Load optimization parameters from a file
-  mp->RunOptimization(img, 30, "file.txt");
+  Registry dummyreg;
+  OptimizationFlags dflags;
+  mp->RunOptimization(img, 30, dummyreg, dflags);
   mp->SaveToParameterFile((dirWork + "avg/average_mrepL_02.mpde").c_str());
   mp->SaveBYUMesh((dirWork + "avg/average_mrepL_02.byu").c_str());
 }

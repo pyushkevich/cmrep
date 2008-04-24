@@ -14,6 +14,11 @@ ENDIF(ITK_FOUND)
 FIND_PACKAGE(VTK)
 IF(VTK_FOUND)
   INCLUDE(${VTK_USE_FILE})
+  SET(VTK_LIBRARIES
+    vtkCommon vtkIO vtkGraphics vtkRendering vtkFiltering vtkImaging vtkHybrid)
+  IF(VTK_MAJOR_VERSION EQUAL 4)
+    SET(VTK_LIBRARIES ${VTK_LIBRARIES} vtkPatented)
+  ENDIF(VTK_MAJOR_VERSION EQUAL 4)
 ELSE(VTK_FOUND)
   MESSAGE(FATAL_ERROR
     "Cannot build without VTK.  Please set VTK_DIR.")
@@ -111,23 +116,20 @@ ADD_LIBRARY(cmrep ${COMMON_SRCS})
 SET(ITK_LIBRARIES
   ITKNumerics ITKIO ITKCommon ITKBasicFilters)
 
-# Define the VTK libraries
-SET(VTK_LIBRARIES
-  vtkCommon vtkIO vtkGraphics vtkRendering vtkFiltering vtkImaging vtkHybrid)
 
 # Set the list of required libraries
 LINK_LIBRARIES(
-  ${ITK_LIBRARIES}
-  ${VTK_LIBRARIES}
+  cmrep
   toms611
-  cmrep)
+  ${ITK_LIBRARIES}
+  ${VTK_LIBRARIES})
 
 # Link the main executables
-ADD_EXECUTABLE(testpde src/ScriptTest.cxx)
-ADD_EXECUTABLE(cmr_fit src/Fit.cxx)
-ADD_EXECUTABLE(cmrep2mesh src/CMRepToMesh.cxx)
+ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
+ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
+ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
 
 # Add installation targets
-INSTALL_TARGETS("/bin" cmr_fit testpde cmrep2mesh cmrep_subdivide cmrep_remesh)
+INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_getmesh cmrep_subdivide cmrep_remesh)

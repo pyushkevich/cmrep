@@ -1,7 +1,6 @@
 #include "ScriptInterface.h"
 #include <iostream>
 
-using namespace medialpde;
 using namespace std;
 
 int usage()
@@ -40,3 +39,4 @@ int main(int argc, char *argv[])
     }
   return 0;
   }
+

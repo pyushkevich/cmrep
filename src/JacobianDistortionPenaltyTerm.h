@@ -42,7 +42,7 @@ public:
 private:
 
   // Reference medial PDE
-  medialpde::MedialPDE *mpdeRef;
+  MedialPDE *mpdeRef;
 
   // Pointer to the model and the reference model
   GenericMedialModel *xModel, *xRefModel;
@@ -108,7 +108,7 @@ public:
 private:
 
   // Reference medial PDE
-  medialpde::MedialPDE *mpdeRef;
+  MedialPDE *mpdeRef;
 
   // Pointer to the model and the reference model
   GenericMedialModel *xModel, *xRefModel;

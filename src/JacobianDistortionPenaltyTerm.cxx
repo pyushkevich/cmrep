@@ -48,7 +48,7 @@ MedialJacobianDistortionPenaltyTerm
     delete mpdeRef;
 
   // Load the reference model
-  mpdeRef = new medialpde::MedialPDE(fnref.c_str());
+  mpdeRef = new MedialPDE(fnref.c_str());
 
   // Check that the reference model matches
   xRefModel = mpdeRef->GetMedialModel();
@@ -207,7 +207,7 @@ BoundaryJacobianDistortionPenaltyTerm
     delete mpdeRef;
 
   // Load the reference model
-  mpdeRef = new medialpde::MedialPDE(fnref.c_str());
+  mpdeRef = new MedialPDE(fnref.c_str());
 
   // Check that the reference model matches
   xRefModel = mpdeRef->GetMedialModel();

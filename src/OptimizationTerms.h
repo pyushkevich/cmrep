@@ -11,8 +11,6 @@
 #include "MedialAtomGrid.h"
 #include "Registry.h"
 
-using medialpde::FloatImage;
-
 /******************************************************************
  * THIS EUCLIDEAN FUNCTION JUNK SHOULD GO SOMEWHERE ELSE
  * ************************************************************** */
@@ -1198,6 +1196,13 @@ public:
   void QuietOff() 
     { flagQuiet = false; }
 
+  /** Dump gradient meshes (on/off) */
+  void DumpGradientMeshOn()
+    { flagDumpGradientMesh = true; }
+
+  void DumpGradientMeshOff()
+    { flagDumpGradientMesh = false; }
+
   void DumpGradientMesh();
 
 private:
@@ -1241,6 +1246,9 @@ private:
 
   // Whether the gradient is available
   bool flagLastEvalAvailable, flagPhiGuessAvailable;
+
+  // Whether we are dumping out the gradient mesh every iteration
+  bool flagDumpGradientMesh;
   
   // Last place where the function was evaluated
   vnl_vector<double> xLastEvalPoint;

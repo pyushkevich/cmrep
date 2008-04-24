@@ -92,8 +92,6 @@ extern int do_tri_mesh(int csubdiv, AFrontMesh &mesh);
 */
 
 
-namespace medialpde {
-
 struct DiscreteAtom
 {
   double u, v, x, y, z, r;
@@ -297,7 +295,6 @@ void GradientDescentOptimization(MedialOptimizationProblem *xProblem,
     // Compute the gradient and the image match
     double xMatch =
       xProblem->ComputeGradient( xSolution.data_block(), xGradient.data_block());
-    xProblem->DumpGradientMesh();
 
     // Take a step in the gradient direction
     vnl_vector<double> xTentativeSolution = xSolution - xStep * xGradient;
@@ -457,7 +454,6 @@ void my_calcg(int &n, double *x, int &nf, double *g, int *, double *, void *info
   try 
     { 
     mop->ComputeGradient(x, g); 
-    mop->DumpGradientMesh();
     }
   catch(MedialModelException &exc) 
     {
@@ -534,6 +530,8 @@ void EvolutionaryOptimization(
   assert(0);
 }
 
+/*
+
 void MedialPDE
 ::RunOptimization(
   FloatImage *image, size_t nSteps,
@@ -551,6 +549,8 @@ void MedialPDE
     this->RunOptimization(image,nSteps,reg);
     }
 }
+
+*/
 
 CoefficientMapping *
 MedialPDE::GenerateCoefficientMapping(OptimizationParameters &p)
@@ -728,7 +728,7 @@ void MedialPDE::ConfigureEnergyTerms(
 
 void MedialPDE
 ::RunOptimization(
-  FloatImage *image, size_t nSteps, Registry &folder, FloatImage *imgGray, bool flag_test)
+  FloatImage *image, size_t nSteps, Registry &folder, OptimizationFlags flags, FloatImage *imgGray)
 {
   // Read the optimization parameters from the file
   OptimizationParameters p; p.ReadFromRegistry(folder);
@@ -745,6 +745,10 @@ void MedialPDE
   // Create the optimization problem
   MedialOptimizationProblem xProblem(xMedialModel, xMapping);
 
+  // Set up debugging features
+  if(flags.flagDumpGradientMesh)
+    xProblem.DumpGradientMeshOn();
+
   // Add all terms to the optimization problem
   ConfigureEnergyTerms(xProblem, p, image, imgGray);
 
@@ -754,7 +758,7 @@ void MedialPDE
   xProblem.PrintReport(cout);
 
   // Test the term-by-term gradient computation
-  if(flag_test)
+  if(flags.flagTestGradient)
     {
     printf("TESTING GRADIENT COMPUTATION\n");
     printf("%12s  %12s : %9s  %9s  %9s  %9s  %9s  P/F\n",
@@ -2823,4 +2827,3 @@ void RenderMedialPDE(MedialPDE *model)
 }
 */
 
-} // namespace

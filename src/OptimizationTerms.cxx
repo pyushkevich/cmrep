@@ -2692,6 +2692,7 @@ MedialOptimizationProblem
   flagLastEvalAvailable = false;
   flagPhiGuessAvailable = false;
   flagGradientComputed = false;
+  flagDumpGradientMesh = false;
 
   // Save the initial coefficients currently in the model
   xInitialCoefficients = xMedialModel->GetCoefficientArray();
@@ -2979,6 +2980,10 @@ MedialOptimizationProblem
     Evaluate(xEvalPoint);
     }
     */
+
+  // If gradient mesh dumping is on, do it
+  if(flagDumpGradientMesh)
+    DumpGradientMesh();
 
   // Return the solution value
   return xLastSolutionValue;
