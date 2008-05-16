@@ -130,6 +130,9 @@ ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
 ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
+ADD_EXECUTABLE(cmrep_fillmesh src/CMRepMeshToImage.cxx)
+ADD_EXECUTABLE(cmrep_genwarp src/CMRepToWarp.cxx)
 
 # Add installation targets
-INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_getmesh cmrep_subdivide cmrep_remesh)
+INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_getmesh cmrep_subdivide 
+  cmrep_remesh cmrep_fillmesh cmrep_genwarp)
