@@ -97,6 +97,7 @@ SET(COMMON_SRCS
   src/PardisoInterface.cxx
   src/PDESubdivisionMedialModel.cxx
   src/PrincipalComponents.cxx
+  src/PrincipalComponentsPenaltyTerm.cxx
   src/Procrustes.cxx
   src/Registry.cxx
   src/ScriptImaging.cxx
