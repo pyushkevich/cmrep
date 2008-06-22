@@ -330,6 +330,8 @@ int main(int argc, char *argv[])
         cout << " " << itri+1 << "/" << nt << endl;
     }
 
+  cout << endl;
+
   // Write the warp fields out
   string suffix = "xvec." + fnext;
   for(size_t d = 0; d < 3; d++)
