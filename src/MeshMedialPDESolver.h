@@ -50,13 +50,11 @@ public:
 
   // Set the input data as an array of positions and rho values. Another way
   // to set the input data is to manipulate the values of the atoms directly
-  // The third (optional) parameter is the 'guess' solution, which serves as
-  // the initial solution for Newton iteration
-  void SetInputData(const SMLVec3d *X, const double *rho, const double *phi = NULL);
+  void SetInputData(const SMLVec3d *X, const double *rho, const double *tau);
 
   // Our first attempt at a solver method. The flag specifies whether the
   // terms involved in gradient computation should also be computed
-  void SolveEquation(double *xInitSoln = NULL, bool flagGradient = false);
+  void SolveEquation(bool flagGradient = false);
 
   // Compute the common part of the gradient computation
   void BeginGradientComputation();
@@ -76,7 +74,7 @@ public:
     { return xAtoms; }
 
   // This method computes the LBO at each internal node. 
-  vnl_vector<double> ComputeLBO(const double *phi);
+  // vnl_vector<double> ComputeLBO(const double *phi);
 
 private:
 
@@ -84,14 +82,10 @@ private:
   void Reset();
 
   // This method is used to compute the sparse matrix A for Newton's method
-  void FillNewtonMatrix(const double *phi, bool flagInputChange);
+  void FillSparseMatrix(bool flagInputChange);
 
   // This method is used to compute the right hand side B for Newton's method
-  double FillNewtonRHS(const double *phi);
-
-  // Compute the value of the function (Lap phi - rho at internal vertex, or
-  // \|grad phi\|^2 - 4 phi at boundary vertex)
-  double ComputeNodeF(size_t i, const double *phi);
+  void FillRHS();
 
   // This computes the geometry associated with a mesh before running the solver
   void ComputeMeshGeometry(bool flagGradient);
@@ -105,13 +99,14 @@ private:
   // Compute the condition number of the Jacobian
   void ComputeJacobianConditionNumber();
 
+
   // An immutable sparse matrix used to represent the PDE. Each row
   // corresponds to a vertex, non-zero values are found between adjacent
   // vertices (those contributing to gradient and LBO computations)
-  SparseMat A;
+  SparseMat M;
 
-  // Arrays B and epsilon used in Newton's solver
-  vnl_vector<double> xRHS, xEpsilon;
+  // Right hand side and the solution of the PDE
+  vnl_vector<double> xRHS, xPhi;
 
   // A pointer to the mesh topology
   MeshLevel *topology;
@@ -144,6 +139,21 @@ private:
     // The first fundamental form and its inverse
     // double gCovariant[2][2], gContravariant[2][2];
     };
+
+  // An index object, used to map one sparse array to another
+  class MeshMatrixXRef
+    {
+    public:
+    std::vector<size_t> xSelfIndex, xNbrIndex;
+    void Initialize(size_t nVertices, size_t nEdges)
+      { 
+      xSelfIndex.resize(nVertices, 0);
+      xNbrIndex.resize(nEdges, 0);
+      }
+    };
+
+  // There are 3 x-references, for the 3 quadrants of M that change
+  MeshMatrixXRef xIndexAPhi, xIndexAOmega, xIndexN;
 
   // Geometry arrays that store triangle-related and vertex-related info
   TriangleGeom *xTriangleGeom;

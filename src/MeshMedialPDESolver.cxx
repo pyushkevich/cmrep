@@ -188,6 +188,7 @@ MeshMedialPDESolver
 }
 */
 
+/*
 void 
 MeshMedialPDESolver
 ::ComputeJacobianConditionNumber()
@@ -214,6 +215,7 @@ MeshMedialPDESolver
   // Return the ratio of the norms
   cout << "CONDITION NUMBER: " << sqrt(xNormSqr * xNormInvSqr);
 }
+*/
 
 void
 MeshMedialPDESolver
@@ -225,86 +227,128 @@ MeshMedialPDESolver
   // gradient use Loop's approximation, which will also use the entire
   // neigborhood of the vertex (except the vertex itself, but the finite
   // difference equation does use it)
-  size_t i, j, k;
 
   // Clean up storage
   Reset();
 
   // Store the mesh
   this->topology = topology;
-  
-  // Allocate and fill the row index array
-  size_t *xRowIndex = new size_t[topology->nVertices + 1];
-  xRowIndex[0] = 0;
-  for(i = 0; i < topology->nVertices; i++)
-    xRowIndex[i+1] = xRowIndex[i] + topology->GetVertexValence(i) + 1;
 
-  // Get the number of sparse entries in the A matrix and allocate arrays
-  size_t nSparseEntries = xRowIndex[topology->nVertices];
-  size_t *xColIndex = new size_t[nSparseEntries];
-  double *xSparseValues = new double[nSparseEntries];
+  // Shorthand for number of vertices, etc
+  size_t n = topology->nVertices;
 
-  // Next we create a temporary array that contains indices of the neighbor
-  // vertices in the vertex list (column) and in the walk around the i-th
-  // vertex. This temporary array gets sorted so that we have a sorted
-  // sparse matrix structure as well as a mapping from walk-index to index in
-  // the sparse matrix.
-  vector< pair<size_t, size_t> > xTempColIndex(nSparseEntries);
+  // Sparse matrix defining the mesh structure
+  typedef TriangleMesh::NeighborMatrix NType;
+  const TriangleMesh::NeighborMatrix &Nt = topology->GetNeighborMatrix();
 
-  // Allocate the arrays that map vertices and neighbor relationships into the
-  // sparse matrix A. These are needed because columns in A must be sorted and
-  // because A contains non-zero diagonal entries
-  xMapVertexNbrToA = new size_t[topology->GetNeighborMatrix().GetNumberOfSparseValues()];
-  xMapVertexToA = new size_t[topology->GetNeighborMatrix().GetNumberOfRows()];
+  // This code will generate the sparse matrix for the linear system. The
+  // system consists of a block matrix
+  // [ A  U1 ] [ phi   ] = [ 0   ]
+  // [ U2 0  ] [ omega ]   [ g1  ]
+  // [ 0  A  ]             [ rho ]
+  // [ N  0  ]             [ g2  ]
 
-  // Process the data associated with each of the vertices
-  for(j = 0, i = 0; i < topology->nVertices; i++)
+  // Source matrix (STL), is 2n by 2n
+  SparseMat::STLSourceType S(2 * n);
+
+  // Loop over the vertices
+  for(size_t i = 0; i < n; i++)
     {
-    // Add the vertex itself to the temp index; NOID indicates for later that
-    // this entry does not have a corresponding entry in the topology->nbr 
-    // sparse array
-    xTempColIndex[j++] = make_pair(i, NOID);
+    // Create a list of all the neighbors and the vertex itself
+    vector<int> ring;
 
-    // Create a walk about the vertex
-    EdgeWalkAroundVertex it(topology, i);
+    // Add the vertex itself to the ring
+    ring.push_back(i);
+    
+    // Add each neighbor
+    for(NType::ConstRowIterator row = Nt.Row(i); !row.IsAtEnd(); ++row)
+      ring.push_back(row.Column());
 
-    // Visit each vertex in the walk
-    for(k = 0; !it.IsAtEnd(); ++it, ++k)
-      xTempColIndex[j++] = 
-        make_pair(it.MovingVertexId(), it.GetPositionInMeshSparseArray());
+    // Sort the list, because Pardiso requires it to be that way
+    sort(ring.begin(), ring.end());
 
-    // Sort the vertices in the range corresponding to i
-    std::sort(
-      xTempColIndex.begin() + xRowIndex[i], 
-      xTempColIndex.begin() + xRowIndex[i + 1]);
-
-    // Fill in the values of the column index and the vertex-A mapping
-    for(k = xRowIndex[i]; k < xRowIndex[i + 1]; k++)
+    // Now create entries for the sparse matrix
+    for(vector<int>::iterator ir = ring.begin(); ir != ring.end(); ++ir)
       {
-      xColIndex[k] = xTempColIndex[k].first;
-      if(xTempColIndex[k].second == NOID)
-        xMapVertexToA[i] = k;
+      // Get the vertex id and index in the mesh's neighbor sparse array
+      size_t j = *ir;
+
+      if(topology->IsVertexInternal(i))
+        {
+        // Add entry in A(phi)
+        S[i].push_back(make_pair(j, 0.0));
+
+        // Add entry in A(omega)
+        S[n+i].push_back(make_pair(n+j, 0.0));
+
+        // Add entry in U1
+        if(i == j)
+          S[i].push_back(make_pair(n + i, -1.0));
+        }
       else
-        xMapVertexNbrToA[xTempColIndex[k].second] = k;
+        {
+        // Add entry in N
+        S[i+n].push_back(make_pair(j, 0.0));
+
+        // Add entry in U2
+        if(i == j)
+          S[i].push_back(make_pair(i, 1.0));
+        }      
       }
     }
 
-  // Initialize our immutable matrix
-  A.SetArrays(topology->nVertices, topology->nVertices, 
-    xRowIndex, xColIndex, xSparseValues);
+  // Now create the sparse matrix
+  M.SetFromSTL(S, 2 * n);
 
-  // This is sad, but in addition to the immutable matrix A, we have to store a 
-  // PARDISO-compatible column and row index array with 1-based indexing
-  xPardisoRowIndex = new int[topology->nVertices+1];
-  xPardisoColIndex = new int[nSparseEntries];
-  for(i = 0; i <= topology->nVertices; i++)
-    xPardisoRowIndex[i] = xRowIndex[i] + 1;
-  for(j = 0; j < nSparseEntries; j++)
-    xPardisoColIndex[j] = xColIndex[j] + 1;
+  // Perform PARDISO symbolic factorization
+  xPardiso.SymbolicFactorization(M);
 
-  // Initialize the right hand side and epsilon
-  xRHS.set_size(topology->nVertices);
-  xEpsilon.set_size(topology->nVertices);
+  // For each of the 'interesting' quadrants in M (A-phi, A-omega, N)
+  // we need to create an index mapping the topology neighborhood 
+  // structure into the sparse matrix.
+  xIndexAPhi.Initialize(Nt.GetNumberOfRows(), Nt.GetNumberOfSparseValues());
+  xIndexAOmega.Initialize(Nt.GetNumberOfRows(), Nt.GetNumberOfSparseValues());
+  xIndexN.Initialize(Nt.GetNumberOfRows(), Nt.GetNumberOfSparseValues());
+
+  for(size_t i = 0; i < n; i++)
+    {
+    // Go over the row in the A-phi quadrant
+    for(SparseMat::RowIterator rM = M.Row(i); !rM.IsAtEnd(); ++rM)
+      {
+      size_t j = rM.Column();
+      if(i == j)
+        xIndexAPhi.xSelfIndex[i] = rM.SparseIndex();
+      else if(i < n)
+        xIndexAPhi.xNbrIndex[Nt.FindEntryIndex(i, j)] = rM.SparseIndex();
+      }
+
+    // Go over the row in the bottom of the matrix
+    for(SparseMat::RowIterator rM = M.Row(i+n); !rM.IsAtEnd(); ++rM)
+      {
+      size_t j = rM.Column();
+
+      // We are in the N part
+      if(j < n)
+        {
+        if(i == j)
+          xIndexN.xSelfIndex[i] = rM.SparseIndex();
+        else
+          xIndexN.xNbrIndex[Nt.FindEntryIndex(i, j)] = rM.SparseIndex();
+        }
+      // We are in the A-omega part
+      else
+        {
+        if(i == j - n)
+          xIndexAOmega.xSelfIndex[i] = rM.SparseIndex();
+        else
+          xIndexAOmega.xNbrIndex[Nt.FindEntryIndex(i, j)] = rM.SparseIndex();
+        }
+      }
+    }
+
+  // Initialize right hand side and solution arrays
+  xRHS.set_size(2 * n);
+  xPhi.set_size(2 * n);
 
   // Initialize the triangle area array and other such arrays
   xTriangleGeom = new TriangleGeom[topology->triangles.size()];
@@ -317,12 +361,8 @@ MeshMedialPDESolver
   // and are managed by the parent
   xAtoms = inputAtoms;
 
-  // Set the initial values of the F field (it sucks having to do this)
-  for(i = 0; i < topology->nVertices; i++)
-    xAtoms[i].F = topology->IsVertexInternal(i) ? 1.0 : 0.8;
-
   // Initialize the weight array for gradient computation
-  W = new SMLVec3d[nSparseEntries];
+  W = new SMLVec3d[M.GetNumberOfSparseValues()];
 }
 
 MeshMedialPDESolver
@@ -466,18 +506,20 @@ MeshMedialPDESolver
 
     // Compute the normal vector
     a.ComputeNormalVector();
+
+    // For the boundary atoms, also compute Fu, which is static
+    if(!topology->IsVertexInternal(i))
+      a.Fu = xLoopScheme.Fu(i, xAtoms);
     } 
 }
 
 void
 MeshMedialPDESolver
-::FillNewtonMatrix(const double *phi, bool flagInputChange)
+::FillSparseMatrix(bool flagInputChange)
 {
-  size_t i;
-
   // At this point, the structure of the matrix A has been specified. We have
   // to specify the values. This is done one vertex at a time.
-  for(i = 0; i < topology->nVertices; i++)
+  for(size_t i = 0; i < topology->nVertices; i++)
     {
     EdgeWalkAroundVertex it(topology, i);
     if(!it.IsOpen())
@@ -513,110 +555,69 @@ MeshMedialPDESolver
           it.OppositeVertexIndexInTriangleBehind()];
         double weight = scale * (cota + cotb);
 
-        // Set the weight for the moving vertex (to be scaled)
-        A.GetSparseData()[xMapVertexNbrToA[it.GetPositionInMeshSparseArray()]] = weight;
-        // Update accumulators
+        // Set the weight for the moving vertex
+        size_t idxMesh = it.GetPositionInMeshSparseArray();
+        M.GetSparseData()[xIndexAPhi.xNbrIndex[idxMesh]] = weight;
+        M.GetSparseData()[xIndexAOmega.xNbrIndex[idxMesh]] = weight;
+
+        // Update accumulator
         w_accum += weight;
         }
 
       // Set the diagonal entry in A
-      A.GetSparseData()[xMapVertexToA[i]] = -w_accum;
-
-      // for(j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
-      //  cout << "Open Vertex " << i << ", Neighbor " 
-      //    << A.GetColIndex()[j] << " = " << A.GetSparseData()[j] << endl;
+      M.GetSparseData()[xIndexAPhi.xSelfIndex[i]] = -w_accum;
+      M.GetSparseData()[xIndexAOmega.xSelfIndex[i]] = -w_accum;
       }
     else
       {
-      // V is a boundary vertex for which we compute the Riemannian gradient.
-      // This gradient is computed using Loop's tangent formula.
-      MedialAtom &a = xAtoms[i];
-
-      // Compute the partials of phi in the tangent directions
-      double phi_1 = xLoopScheme.GetPartialDerivative(0, i, phi);
-      double phi_2 = xLoopScheme.GetPartialDerivative(1, i, phi);
-        
-      // Multiply by the contravariant tensor to get weights
-      double xi_1 = 
-        a.G.xContravariantTensor[0][0] * phi_1 + 
-        a.G.xContravariantTensor[1][0] * phi_2;
-
-      double xi_2 = 
-        a.G.xContravariantTensor[0][1] * phi_1 + 
-        a.G.xContravariantTensor[1][1] * phi_2;
-
-      // Add up to get the weights in the sparse matrix
-      EdgeWalkAroundVertex it(topology, i);
-      for(; !it.IsAtEnd(); ++it)
+      // The matrix will only have the expression for Phi_v, which is the
+      // weights of the tangent vectors. Another option would be to put here
+      // the expression for Phi_,nu. But let's leave that for now.
+      M.GetSparseData()[xIndexN.xSelfIndex[i]] = xLoopScheme.GetOwnWeight(1, i);
+      for(EdgeWalkAroundVertex it(topology, i); !it.IsAtEnd(); ++it)
         {
-        size_t j = xMapVertexNbrToA[it.GetPositionInMeshSparseArray()];
-        A.GetSparseData()[j] = 2.0 * (
-          xLoopScheme.GetNeighborWeight(0, it) * xi_1 +
-          xLoopScheme.GetNeighborWeight(1, it) * xi_2);
+        size_t idxMesh = it.GetPositionInMeshSparseArray();
+        M.GetSparseData()[xIndexN.xNbrIndex[idxMesh]] = 
+          xLoopScheme.GetNeighborWeight(1, it);
         }
-
-      /*
-      for(j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
-        {
-        A.GetSparseData()[j] = 
-          2.0 * (xTangentWeights[0][j] * xi_1 + xTangentWeights[1][j] * xi_2);
-        }
-        */
-
-      // Finally, add the weight for the point itself (-4 \epsilon)
-      A.GetSparseData()[xMapVertexToA[i]] = - 4.0 + 2.0 * (
-        xLoopScheme.GetOwnWeight(0, i) * xi_1 + 
-        xLoopScheme.GetOwnWeight(1, i) * xi_2);
-
-      // for(j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
-      //  cout << "Closed Vertex " << i << ", Neighbor " 
-      //    << A.GetColIndex()[j] << " = " << A.GetSparseData()[j] << endl;
       }
     }
 }
 
-double
+void
 MeshMedialPDESolver
-::ComputeNodeF(size_t i, const double *phi)
+::FillRHS()
 {
-  if(topology->IsVertexInternal(i))
+  size_t n = topology->nVertices;
+
+  // Fill the right hand side. It's a vector [0 g1 rho g2], so it should be easy
+  // to compute it
+  for(size_t i = 0; i < n; i++)
     {
-    // To compute the laplacian of phi, simply use the weights in the corresponding
-    // row of sparse matrix A.
-    double lap_phi = 0.0;
-    for(size_t j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
+    if(topology->IsVertexInternal(i))
       {
-      lap_phi += A.GetSparseData()[j] * phi[A.GetColIndex()[j]];
+      xRHS[i] = 0.0;
+      xRHS[n + i] = xAtoms[i].xLapR;
       }
+    else
+      {
+      // This is the hairy part, where we compute
+      // (-fu g12 - Sqrt[fu^2 g12^2 + 4 f0 g22 - fu^2 g11 g22])/g22
+      double f = xAtoms[i].F;
+      double fu = xAtoms[i].Fu;
+      double g11 = xAtoms[i].G.xContravariantTensor[1][1];
+      double g12 = xAtoms[i].G.xContravariantTensor[1][2];
+      double g22 = xAtoms[i].G.xContravariantTensor[2][2];
+      double gInv = xAtoms[i].G.gInv;
 
-    // Now, the right hand side has the form \Delta \phi - \rho
-    return lap_phi - xAtoms[i].xLapR;
-    }
-  else 
-    {
-    // We compute the gradient of phi directly, so that it is possible to
-    // call this method without the prerequisite of calling FillNewtonMatrix
-    double Fu = xLoopScheme.GetPartialDerivative(0, i, phi);
-    double Fv = xLoopScheme.GetPartialDerivative(1, i, phi);
-
-    // Return value is |grad Phi|^2 - 4 \phi
-    return xAtoms[i].G.SquaredGradientMagnitude(Fu, Fv) - 4.0 * phi[i];
+      xRHS[i] = xAtoms[i].R * xAtoms[i].R;
+      xRHS[n + i] = 
+        ( - fu * g12 - sqrt(4 * f * g22 - fu * fu * gInv)) / g22;
+      }
     }
 }
 
-double
-MeshMedialPDESolver
-::FillNewtonRHS(const double *phi)
-{
-  // Loop over all vertices. This method is a little tricky because it uses all 
-  // the weights already computed in matrix A to compute the right hand side.
-  for(size_t i = 0; i < topology->nVertices; i++)
-    xRHS[i] = - ComputeNodeF(i, phi);
-
-  // Return the squared magnitude
-  return xRHS.squared_magnitude();
-}
-
+/*
 vnl_vector<double>
 MeshMedialPDESolver
 ::ComputeLBO(const double *phi)
@@ -644,6 +645,7 @@ MeshMedialPDESolver
 
   return lbo;
 }
+*/
 
 void
 MeshMedialPDESolver
@@ -681,6 +683,7 @@ MeshMedialPDESolver
     }
 }
 
+/* 
 int
 MeshMedialPDESolver
 ::TestJacobianAndGradient(double *xInitSoln)
@@ -753,6 +756,8 @@ MeshMedialPDESolver
 
   return flagSuccess ? 0 : -1;
 }
+
+*/
 
 /*
 void
@@ -905,75 +910,25 @@ MeshMedialPDESolver
 
 void
 MeshMedialPDESolver
-::SolveEquation(double *xInitSoln, bool flagGradient)
+::SolveEquation(bool flagGradient)
 {
-  size_t i;
-
   // cout << "MeshMedialPDESolver::SolveEquation()" << endl;
 
   // Compute the mesh geometry
   ComputeMeshGeometry(flagGradient);
 
-  // Set the solution to the current values of phi (or to the initial solution
-  // passed in to the method)
-  vnl_vector<double> xSoln(topology->nVertices);
-  for(i = 0; i < topology->nVertices; i++)
-    {
-    xSoln[i] = ((xInitSoln == NULL) ? xAtoms[i].F : xInitSoln[i]);
-    }
-  vnl_vector<double> xStartingSoln = xSoln;
-
-  // Initialize the Jacobian and the function value
-  cout << "Solving: PHI = " << xSoln << endl << endl;
-  FillNewtonMatrix(xSoln.data_block(), true);
-  FillNewtonRHS(xSoln.data_block());
-  Vec fx = -xRHS;
-
-  // Set up the LM optimization
-  double fval = levenberg_marquardt(
-    this,
-    xSoln.size(),
-    xSoln.data_block(),
-    fx.data_block(),
-    A,
-    &MeshMedialPDESolver::ComputeLMResidual,
-    &MeshMedialPDESolver::ComputeLMJacobian,
-    xSoln.data_block(),
-    200);
-
-  // if(fval > 1.0e-8)
-  //  throw MedialModelException("Bad solution");
-
-  // Compute the medial atoms
-  ComputeMedialAtoms(xSoln.data_block());
-}
-
-void
-MeshMedialPDESolver
-::ComputeLMResidual(void *handle, int n, double *x, double *fx)
-{
-  // Get a pointer to the working object
-  MeshMedialPDESolver *self = reinterpret_cast<MeshMedialPDESolver *>(handle);
+  // Compute the sparse matrix
+  FillSparseMatrix(true);
 
   // Compute the right hand side
-  self->FillNewtonRHS(x);
+  FillRHS();
 
-  // Return the residual
-  Vec vfx = -self->xRHS;
-  vfx.copy_out(fx);
-}
+  // Use pardiso to solve the problem
+  xPardiso.NumericFactorization(M);
+  xPardiso.Solve(xRHS.data_block(), xPhi.data_block());
 
-void
-MeshMedialPDESolver
-::ComputeLMJacobian(void *handle, int n, double *x, SparseMat &J)
-{
-  // Compute the Jacobian
-  MeshMedialPDESolver *self = reinterpret_cast<MeshMedialPDESolver *>(handle);
-
-  // Compute the Jacobian
-  self->FillNewtonMatrix(x, false);
-
-  // Nothing else to do, J already points to the Jacobian
+  // Compute the medial atoms
+  ComputeMedialAtoms(xPhi.data_block());
 }
 
 /*
@@ -1013,6 +968,21 @@ MeshMedialPDESolver::gsl_df(const gsl_vector *v, void *params, gsl_vector *df)
 }
 
 */
+
+
+void
+MeshMedialPDESolver
+::BeginGradientComputation()
+{
+}
+
+void
+MeshMedialPDESolver
+::ComputeAtomVariationalDerivative(MedialAtom *dAtoms)
+{
+}
+
+#ifdef DOITLATER
 
 void
 MeshMedialPDESolver
@@ -1192,6 +1162,8 @@ MeshMedialPDESolver
     }
 }
 
+#endif
+
 /*
 void
 MeshMedialPDESolver
@@ -1265,6 +1237,8 @@ MeshMedialPDESolver
 }
 */
 
+
+#ifdef DOITLATER
 
 int
 MeshMedialPDESolver
@@ -1438,7 +1412,7 @@ MeshMedialPDESolver
   return flagSuccess ? 0 : -1;
 }
 
-
+#endif
 
 /**************************************************************************
  * CODE FOR SOLVING THE PDE USING TENSOLVE METHOD

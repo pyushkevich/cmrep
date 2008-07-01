@@ -3,6 +3,9 @@
 
 #include "SubdivisionMedialModel.h"
 
+/** 
+ * This class implements the new Biharmonic PDE medial model
+ */
 class PDESubdivisionMedialModel : public SubdivisionMedialModel
 {
 public:
@@ -11,7 +14,11 @@ public:
 
   PDESubdivisionMedialModel();
 
-  /** Set the mesh and initial coefficient array */
+  /** There are 5 components */
+  size_t GetNumberOfComponents() const { return 5; }
+
+  /** Set the mesh and initial coefficient array. There are 5 
+      coefficients per control point: x,y,z,rho and tau         */
   void SetMesh(
     const MeshLevel &mesh, 
     const Vec &C, const Vec &u, const Vec &v,
@@ -26,8 +33,6 @@ public:
 
   /** Compute the atoms from given a set of coefficients.  */
   void ComputeAtoms(const double *xHint = NULL);
-
-  Vec ComputeLBO(const double *phi);
 
   /** 
    * Specify the set of directions (variations) for repeated gradient computations
@@ -73,6 +78,7 @@ private:
   struct VariationalBasisAtomData {
     SMLVec3d X, Xu, Xv, Xuu, Xuv, Xvv;
     double xLapR;
+    double R;
     VariationalBasisAtomData() 
       : X(0.0), Xu(0.0), Xv(0.0), Xuu(0.0), Xuv(0.0), Xvv(0.0), xLapR(0.0) {}
   };

@@ -98,6 +98,9 @@ public:
     const TVal &Value()
       { return p->xSparseValues[iPos]; }
 
+    size_t SparseIndex()
+      { return iPos; }
+
     size_t Column()
       { return p->xColIndex[iPos]; }
 
@@ -126,6 +129,9 @@ public:
 
     TVal &Value()
       { return p->xSparseValues[iPos]; }
+
+    size_t SparseIndex()
+      { return iPos; }
 
     size_t Size()
       { return iEnd - iStart; }
@@ -166,6 +172,25 @@ public:
   // Set all the values in the matrix to some value
   void Fill(const TVal &value)
     { for(size_t i = 0; i < nSparseEntries; i++) xSparseValues[i] = value; }
+
+  // This is a slow method that finds an entry (r,c) in the matrix. It returns
+  // an iterator, but if the entry can't be found, the iterator IsAtEnd()
+  ConstRowIterator FindEntry(size_t row, size_t col) const
+    {
+    ConstRowIterator cr = Row(row);
+    while(!cr.IsAtEnd() && cr.Column() != col)
+      ++cr;
+    return cr;
+    }
+
+  size_t FindEntryIndex(size_t row, size_t col) const
+    { 
+    ConstRowIterator cr = Row(row);
+    while(!cr.IsAtEnd() && cr.Column() != col)
+      ++cr;
+    return cr.IsAtEnd() ? (size_t)(-1) : cr.SparseIndex();
+    }
+    
 
   // A copy operator that actually copies the data
   Self & operator = (const Self &src);

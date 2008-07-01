@@ -23,6 +23,9 @@ public:
   BruteForceSubdivisionMedialModel();
   ~BruteForceSubdivisionMedialModel();
 
+  /** There are 4 components (x,y,z,r) */
+  size_t GetNumberOfComponents() const { return 4; }
+
   void SetMesh(const MeshLevel &mesh, 
     const Vec &C, const Vec &u, const Vec &v,
     size_t nAtomSubs, size_t nCoeffSubs);

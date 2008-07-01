@@ -28,17 +28,20 @@ SubdivisionMedialModel
   // Subdivide the input mesh into the coefficient-level mesh
   SubdivisionSurface::RecursiveSubdivide(&mesh, &mlCoefficient, nCoeffSubs);
 
+  // Get number of components per control point
+  size_t nc = this->GetNumberOfComponents();
+
   // Compute the coefficients and u/v arrays from the input data
   if(nCoeffSubs > 0)
     {
     // Initialize the arrays
-    xCoefficients.set_size(mlCoefficient.nVertices * 4);
+    xCoefficients.set_size(mlCoefficient.nVertices * nc);
     uCoeff.set_size(mlCoefficient.nVertices);
     vCoeff.set_size(mlCoefficient.nVertices);
 
     // Apply the subdivision to the coefficients
     SubdivisionSurface::ApplySubdivision(
-      C.data_block(), xCoefficients.data_block(), 4, mlCoefficient);
+      C.data_block(), xCoefficients.data_block(), nc, mlCoefficient);
 
     // Apply to the u and v arrays
     SubdivisionSurface::ApplySubdivision(

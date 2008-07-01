@@ -22,6 +22,8 @@ PDESubdivisionMedialModel
   xSolver.SetMeshTopology(&mlAtom, xAtoms);
 }
 
+#ifdef _COMMENTOUT_
+
 PDESubdivisionMedialModel::Vec
 PDESubdivisionMedialModel
 ::ComputeLBO(const double *phi)
@@ -49,38 +51,40 @@ PDESubdivisionMedialModel
   return xSolver.ComputeLBO(phi);
 }
 
+#endif
+
 void 
 PDESubdivisionMedialModel
 ::ComputeAtoms(const double *xHint)
 {
   size_t i;
 
-  // The first step is to compute the X and rho of the atoms based on the
+  // The first step is to compute X, tau and rho of the atoms based on the
   // coefficients. This step is performed in this class, not in the solver
   for(i = 0; i < mlAtom.nVertices; i++)
     {
     // Set up i-th atom
-    MedialAtom &a = xAtoms[i]; a.X.fill(0.0); a.xLapR = 0.0;
+    MedialAtom &a = xAtoms[i]; 
+    a.X.fill(0.0); 
+    a.xLapR = 0.0;
+    a.R = 0.0;
 
     // Compute the weighted sum of the coefficients
     ImmutableSparseMatrix<double>::RowIterator it = mlAtom.weights.Row(i);
     for( ; !it.IsAtEnd(); ++it)
       {
-      size_t j = it.Column() << 2; double w = it.Value();
+      size_t j = it.Column() * 5; 
+      double w = it.Value();
       a.X += w * xCoefficients.extract(3, j);
-      a.xLapR += w * xCoefficients[j+3];
+      a.xLapR += w * xCoefficients[j + 3];
+      a.R += w * xCoefficients[j + 4];
       }
-    }
 
-  // If the initial solution is specified, take the F values from it
-  if(xHint != NULL) 
-    {
-    for(i = 0; i < mlAtom.nVertices; i++)
-      xAtoms[i].F = xHint[i];
+    a.F = a.R * a.R;
     }
 
   // Now have the solver solve the equation
-  xSolver.SolveEquation(NULL, true);
+  xSolver.SolveEquation(true);
 }
 
 PDESubdivisionMedialModel::Vec
@@ -115,9 +119,11 @@ PDESubdivisionMedialModel
       ImmutableSparseMatrix<double>::RowIterator it = mlAtom.weights.Row(i);
       for( ; !it.IsAtEnd(); ++it)
         {
-        size_t j = it.Column() << 2; double w = it.Value();
+        size_t j = it.Column() * 5; 
+        double w = it.Value();
         vbad.X += w * xVariation.extract(3, j);
         vbad.xLapR += w * xVariation[j+3];
+        vbad.R += w * xVariation[j+4];
         }
       }
     }
@@ -141,6 +147,7 @@ PDESubdivisionMedialModel
     VariationalBasisAtomData &vbad = xVariationalBasis[ivar][i];
     dAtoms[i].X = vbad.X;
     dAtoms[i].xLapR = vbad.xLapR;
+    dAtoms[i].R = vbad.R;
     }
 
   xSolver.ComputeAtomVariationalDerivative(dAtoms);
@@ -155,11 +162,6 @@ WriteToRegistry(Registry &R)
 
   // Set the model subtype
   R["Grid.Model.SolverType"] << "PDE";
-
-  // Save the values of R computed at the atom level
-  Vec phi = GetPhi();
-  R["Grid.PhiAvailable"] << true;
-  R.Folder("Grid.Phi").PutArray(phi.size(), phi.data_block());
 }
 
 void

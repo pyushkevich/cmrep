@@ -16,6 +16,8 @@
 #define dabs(x) (doublereal)abs(x)
 #define min(a,b) ((a) <= (b) ? (a) : (b))
 #define max(a,b) ((a) >= (b) ? (a) : (b))
+#define pow_dd(a,b) (pow(*a, *b))
+#define pow_di(a,b) (pow(*a, *b))
 
 typedef int integer;
 typedef float real;
@@ -2361,7 +2363,7 @@ L50:
     doublereal d__1, d__2, d__3;
 
     /* Builtin functions */
-    double sqrt(doublereal), pow_dd(doublereal *, doublereal *);
+    double sqrt(doublereal), pow(double, double); // , pow_dd(doublereal *, doublereal *);
 
     /* Local variables */
     static doublereal h__;
@@ -5307,7 +5309,8 @@ logical stopx_(integer *idummy)
     doublereal d__1, d__2, d__3;
 
     /* Builtin functions */
-    double pow_dd(doublereal *, doublereal *);
+    double pow(double, double);
+    // double pow_dd(doublereal *, doublereal *);
 
     /* Local variables */
     static doublereal machep;
@@ -7797,7 +7800,8 @@ L999:
 
     /* Builtin functions */
     integer s_wsfe(cilist *), e_wsfe(void);
-    double pow_di(doublereal *, integer *);
+    double pow(double, double);
+    // double pow_di(doublereal *, integer *);
     /* Subroutine */ int s_stop(char *, ftnlen);
 
     /* Local variables */

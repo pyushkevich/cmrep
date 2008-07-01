@@ -29,6 +29,12 @@ public:
     const Vec &C, const Vec &u, const Vec &v,
     size_t nAtomSubs, size_t nCoeffSubs);
 
+  /** 
+   * Returns the number of coefficients per mesh control point. It's usually
+   * 4 (x,y,z,r) or 5 (x,y,z,rho,tau)
+   */
+  virtual size_t GetNumberOfComponents() const = 0;
+
   /** Get the number of optimizable coefficients that define this model */
   size_t GetNumberOfCoefficients() const
     { return xCoefficients.size(); }

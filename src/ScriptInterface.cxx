@@ -1663,8 +1663,9 @@ void SubdivisionMPDE::BruteForceToPDE()
   // try { pde->ComputeAtoms(hint.data_block()); } catch(...) {}
 
   // Compute the Laplace-Beltrami operator, using the current phi values
-  vnl_vector<double> rho_atom = 
-    pde->ComputeLBO(brute->GetPhi().data_block());
+  // vnl_vector<double> rho_atom = 
+  //  pde->ComputeLBO(brute->GetPhi().data_block());
+  vnl_vector<double> rho_atom(brute->GetNumberOfAtoms(), 0.0);
   vnl_vector<double> rho_ctl;
 
   // If there is subdivision in the model, we have to do a least square fit
