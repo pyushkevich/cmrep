@@ -630,6 +630,22 @@ MedialPDE::GenerateCoefficientMapping(OptimizationParameters &p)
       throw ModelIOException("Reflection coefficient mapping works only for subdivision models");
       }
     }
+  else if(p.xMapping == OptimizationParameters::LAPLACE_BASIS)
+    {
+    try
+      {
+      SubdivisionMedialModel *smm = 
+        reinterpret_cast<SubdivisionMedialModel *>(xMedialModel);
+      xMapping = new MeshBasisCoefficientMapping(
+        smm->GetCoefficientMesh(), 
+        p.xLaplaceBasisSize, 
+        smm->GetNumberOfComponents());
+      }
+    catch(...)
+      {
+      throw ModelIOException("Laplace basis mapping works only for subdivision models");
+      }
+    }
   else
     {
     throw ModelIOException("Unknown coefficient mapping specified");
@@ -1394,7 +1410,7 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
       "SubdivisionMPDE given a cmrep not based on subdivision surfaces");
 
   // Get the coefficient-level mesh
-  SubdivisionSurface::MeshLevel mlCoeffOld = smm->GetCoefficientMesh();
+  const SubdivisionSurface::MeshLevel *mlCoeffOld = smm->GetCoefficientMesh();
   vnl_vector<double> xCoeffOld = smm->GetCoefficientArray();
   vnl_vector<double> uCoeffOld = smm->GetCoefficientU();
   vnl_vector<double> vCoeffOld = smm->GetCoefficientV();
@@ -1406,7 +1422,7 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
   if(iCoeffSub > 0)
     {
     // Subdivide the coefficient-level mesh as requested
-    SubdivisionSurface::RecursiveSubdivide(&mlCoeffOld, &mlCoeffNew, iCoeffSub);
+    SubdivisionSurface::RecursiveSubdivide(mlCoeffOld, &mlCoeffNew, iCoeffSub);
 
     // Compute the coefficients for the new cm-rep
     size_t nc = smm->GetNumberOfComponents();
@@ -1429,7 +1445,7 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
     {
     // Use the same mesh as before
     xCoeffNew = xCoeffOld;
-    mlCoeffNew = mlCoeffOld;
+    mlCoeffNew = *mlCoeffOld;
     uCoeffNew = uCoeffOld;
     vCoeffNew = vCoeffOld;
     }
@@ -1453,7 +1469,7 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
   if(iAtomSub > 0)
     {
     // Get the mesh currently stored in the medial model
-    SubdivisionSurface::MeshLevel mCurrentAtomLevel = smm->GetAtomMesh();
+    SubdivisionSurface::MeshLevel mCurrentAtomLevel = *smm->GetAtomMesh();
 
     // Set this mesh as root for subdivision
     mCurrentAtomLevel.SetAsRoot();
@@ -1499,8 +1515,7 @@ void SubdivisionMPDE::Remesh()
       "SubdivisionMPDE given a cmrep not based on subdivision surfaces");
 
   // Get the coefficient-level mesh
-  SubdivisionSurface::MeshLevel mlCoeffOld = smm->GetCoefficientMesh(); 
-  SubdivisionSurface::MeshLevel mlAtomsOld = smm->GetAtomMesh(); 
+  SubdivisionSurface::MeshLevel mlCoeffOld = *smm->GetCoefficientMesh(); 
 
   size_t nc = smm->GetNumberOfCoefficients();
 
@@ -1554,7 +1569,7 @@ void SubdivisionMPDE::Remesh()
   mlCoeffOld.MakeDelaunay(X);
 
   // Check consistency
-  SubdivisionSurface::CheckMeshLevel(mlCoeffOld);
+  SubdivisionSurface::CheckMeshLevel(&mlCoeffOld);
 
   // Get rid of bad off-edge triangles
   SubdivisionSurface::MeshLevel mlCoeffNew;
@@ -1660,7 +1675,7 @@ void SubdivisionMPDE::BruteForceToPDE()
   // pde->SetMesh(brute->GetCoefficientMesh(), C, u, v, 
   //  brute->GetSubdivisionLevel(), 0);
   //  cout << "START HERE" << endl;
-  pde->SetMesh(brute->GetAtomMesh(), Ca, ua, va, 0, 0);
+  pde->SetMesh(*brute->GetAtomMesh(), Ca, ua, va, 0, 0);
   // cout << "GOT HERE" << endl;
 
   // vnl_vector<double> hint(brute->GetAtomMesh().nVertices, 0.0);
@@ -1678,7 +1693,7 @@ void SubdivisionMPDE::BruteForceToPDE()
     {
     // Perform a least squares fit in order to get the control point rho
     // this involves solving the system W'Wx = W'y
-    vnl_matrix<double> W = brute->GetAtomMesh().weights.GetDenseMatrix();
+    vnl_matrix<double> W = brute->GetAtomMesh()->weights.GetDenseMatrix();
     vnl_matrix<double> WT = W.transpose();
 
     // Now we are going to set the columns in WT that correspond to boundary 
@@ -1687,7 +1702,7 @@ void SubdivisionMPDE::BruteForceToPDE()
     // the rows we don't want to fit). The solution is W'J'JWx = W'J'Jy, so
     // the matrix WT below is actually W'J'J. 
     for(size_t i = 0; i < WT.cols(); i++)
-      if(!pde->GetAtomMesh().IsVertexInternal(i))
+      if(!pde->GetAtomMesh()->IsVertexInternal(i))
         WT.set_column(i, 0.0);
 
     // Solve the system for rho
@@ -1737,7 +1752,7 @@ void SubdivisionMPDE::BruteForceToPDE()
   double diff = 0.0; size_t ndiff = 0;
   for(size_t q = 0; q < pde->GetNumberOfAtoms(); q++)
     {
-    if(pde->GetAtomMesh().IsVertexInternal(q))
+    if(pde->GetAtomMesh()->IsVertexInternal(q))
       {
       double d = pde->GetAtomArray()[q].xLapR - rho_atom[q];
       diff += d * d;

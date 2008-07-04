@@ -406,7 +406,7 @@ void SubdivisionSurface
   }
 }
 
-bool SubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
+bool SubdivisionSurface::CheckMeshLevel (MeshLevel *mesh)
 {
   // Check the following rules for all triangles in the mesh
   // 1. T[T[i].nbr[j]].nbr[T[i].ne[j]] == i for all i, j    (i am my neighbors neighbor)
@@ -414,14 +414,14 @@ bool SubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
   // 3. T[i].v[j] == T[T[i].nbr[j+k]].v[T[i].ne[j+k]+k] for all i, j, k=(1, 2),
   // with modulo 3 addition
   size_t nerr = 0;
-  for(size_t i = 0; i < mesh.triangles.size(); i++)
+  for(size_t i = 0; i < mesh->triangles.size(); i++)
   {
-    Triangle &t = mesh.triangles[i];
+    Triangle &t = mesh->triangles[i];
     for(size_t j = 0; j < 3; j++)
     {
       if(t.neighbors[j] != NOID)
       {
-        Triangle &tn = mesh.triangles[t.neighbors[j]];
+        Triangle &tn = mesh->triangles[t.neighbors[j]];
         if(tn.neighbors[t.nedges[j]] != i)
         {
           cout << "Error " << nerr++ <<
@@ -437,7 +437,7 @@ bool SubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
       {
         if(t.neighbors[(j+k) % 3] != NOID)
         {
-          Triangle &tk = mesh.triangles[t.neighbors[(j+k) % 3]];
+          Triangle &tk = mesh->triangles[t.neighbors[(j+k) % 3]];
           if(t.vertices[j] != tk.vertices[(t.nedges[(j+k) % 3] + k ) % 3])
           {
             cout << "Error " << nerr++ <<

@@ -377,7 +377,51 @@ protected:
 };
 
 
+class TriangleMesh;
 
+/**
+ * This class uses a set of N eigenfunctions of the LBO operator to 
+ * create a basis for mesh deformation. The eigenfunctions are global,
+ * orthonormal and increase in frequency.
+ */
+class MeshBasisCoefficientMapping : public CoefficientMapping
+{
+public:
+  typedef vnl_vector<double> Vec;
+  typedef vnl_matrix<double> Mat;
+
+  /** Create the basis coefficient mapping */
+  MeshBasisCoefficientMapping(
+    const TriangleMesh *mesh, size_t basisSize, size_t nComponents);
+
+  /** Apply the coefficient mapping C' = T(C, P) */
+  Vec Apply(const Vec &C, const Vec &p);
+
+  /** Compute the variation J_T(P) * v_P given C, P and v_P */
+  Vec ApplyJacobianInParameters(const Vec &C, const Vec &P, const Vec &varP);
+
+  /** Compute the variation J_T(C) * v_C given C, P and v_C */
+  Vec ApplyJacobianInCoefficients(const Vec &C, const Vec &P, const Vec &varC);
+
+  /** Access the basis */
+  double GetBasisComponent(size_t iBasis, size_t iVertex)
+    { return V[iBasis][iVertex]; }
+
+
+protected:
+  // The number of basis vectors
+  size_t nb;
+
+  // The number of components per vertex
+  size_t nc;
+
+  // The number of vertices
+  size_t nv;
+
+  // Eigenvectors of the Laplace operator
+  
+  Mat V;
+};
 
 
 

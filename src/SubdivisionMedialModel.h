@@ -92,12 +92,12 @@ public:
     GetCoarseToFineMappingDescriptor() const;
 
   /** Get a pointer to the coefficient mesh stored in this model */
-  const MeshLevel &GetCoefficientMesh() const
-    { return mlCoefficient; }
+  const MeshLevel *GetCoefficientMesh() const
+    { return &mlCoefficient; }
 
   /** Get a pointer to the atom mesh stored in this model */
-  const MeshLevel &GetAtomMesh() const
-    { return mlAtom; }
+  const MeshLevel *GetAtomMesh() const
+    { return &mlAtom; }
 
   /** Get the vector of phi-values for this model (equal to xAtoms.F) */
   Vec GetPhi() const 

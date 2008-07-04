@@ -68,7 +68,7 @@ public:
   static void LoadMeshLevel(Registry &registry);
 
   /** Test the correctness of a mesh level */
-  static bool CheckMeshLevel(MeshLevel &mesh);
+  static bool CheckMeshLevel(MeshLevel *mesh);
 
 private:
   // Mutable sparse matrix

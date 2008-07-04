@@ -2,6 +2,7 @@
 #include "BasisFunctions2D.h"
 #include "MedialAtom.h"
 #include "CartesianMedialModel.h"
+#include "SubdivisionMedialModel.h"
 #include "OptimizationTerms.h"
 #include "DiffeomorphicEnergyTerm.h"
 #include "JacobianDistortionPenaltyTerm.h"
@@ -636,6 +637,21 @@ int TestDerivativesNoImage(const char *fnMPDE)
 
   // Extract the medial model itself
   GenericMedialModel *model = mp.GetMedialModel();
+
+  // Test eigendecomposition gradient computation
+  SubdivisionMedialModel *smm = dynamic_cast<SubdivisionMedialModel *>(model);
+  if(smm)
+    {
+    // Create the laplace basis mapping
+    MeshBasisCoefficientMapping xMapping(smm->GetCoefficientMesh(), 
+      10, smm->GetNumberOfComponents());
+
+    cout << "**************************************************" << endl;
+    cout << "** TESTIING Laplace Basis Coefficient Mapping   **" << endl;
+    cout << "**************************************************" << endl;
+
+    iReturn += TestGradientComputation(model, &xMapping, 10);
+    }
 
   // Test straight-through gradient computation
   cout << "**************************************************" << endl;

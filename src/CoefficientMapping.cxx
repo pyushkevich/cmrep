@@ -149,3 +149,88 @@ ReflectionCoefficientMapping
   return dY;
 }
 
+/* ============================================================ */
+
+#include <vnl/algo/vnl_generalized_eigensystem.h>
+
+MeshBasisCoefficientMapping
+::MeshBasisCoefficientMapping(const TriangleMesh *mesh, size_t basisSize, size_t nComponents)
+  {
+  // Get the characeteristics of the mesh
+  this->nb = basisSize;
+  this->nv = mesh->nVertices;
+  this->nc = nComponents;
+
+  // Number of parameters
+  this->n = nb * nComponents;
+
+  // Number of coefficients
+  this->m = nv * nComponents;
+
+  // Solve the problem A x = l B x
+  // A is the laplace matrix (for now trivially implemented)
+  // B is a diagonal weight matrix (hmm)
+
+  // Create the adjacency matrix
+  // TODO: use sparse code
+  typedef vnl_matrix<double> Mat;
+  Mat A(nv, nv, 0.0), B(nv, nv, 0.0);
+
+  // Initialize the matrices
+  for(size_t i = 0; i < nv; i++)
+    {
+    for(EdgeWalkAroundVertex it(mesh, i); !it.IsAtEnd(); ++it)
+      {
+      size_t j = it.MovingVertexId();
+      A[i][i] += 1.0;
+      A[i][j] -= 1.0;
+      B[i][i] += 1.0;
+      }
+    }
+  
+  // Solve the eigenvalue problem
+  vnl_generalized_eigensystem gev(A, B);
+
+
+  // Get the first nb rows (this is the worst possible way to compute eigenvalues,
+  // but it does not require linking to other libraries)
+  this->V = gev.V.get_n_columns(0, nb).transpose();
+  Vec test = gev.V.get_row(1);
+  }
+
+/** Apply the coefficient mapping C' = T(C, P) */
+MeshBasisCoefficientMapping::Vec 
+MeshBasisCoefficientMapping
+::Apply(const Vec &C, const Vec &p)
+  {
+  Vec X = C;
+  
+  for(size_t iv = 0, j = 0; iv < nv; iv++)
+    for(size_t ic = 0; ic < nc; ic++, j++)
+      for(size_t ib = 0, ip = ic; ib < nb; ib++, ip+=nc)
+        X[j] += p[ip] * V[ib][iv];
+  
+  return X;
+  }
+
+MeshBasisCoefficientMapping::Vec 
+MeshBasisCoefficientMapping
+::ApplyJacobianInParameters(const Vec &C, const Vec &P, const Vec &varP)
+  {
+  Vec dX(C.size(), 0.);
+
+  for(size_t iv = 0, j = 0; iv < nv; iv++)
+    for(size_t ic = 0; ic < nc; ic++, j++)
+      for(size_t ib = 0, ip = ic; ib < nb; ib++, ip+=nc)
+        dX[j] += varP[ip] * V[ib][iv];
+
+  return dX;
+  }
+
+MeshBasisCoefficientMapping::Vec 
+MeshBasisCoefficientMapping
+::ApplyJacobianInCoefficients(const Vec &C, const Vec &P, const Vec &varC)
+  {
+  return varC;
+  }
+

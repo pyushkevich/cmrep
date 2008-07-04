@@ -2953,11 +2953,15 @@ MedialOptimizationProblem
   for(iTerm = 0; iTerm < xTerms.size(); iTerm++)
     xTerms[iTerm]->EndGradientComputation();
 
+  
+
   // Store the information about the gradient
   xLastGradPoint = vnl_vector<double>(xEvalPoint, nCoeff);
   xLastGradient = vnl_vector<double>(xGradient, nCoeff);
   xLastGradHint = xMedialModel->GetHintArray();
   flagGradientComputed = true;
+
+  // cout << "Last gradient : " << xLastGradient << endl;
 
   // Random quality control check
   /*
@@ -3032,11 +3036,11 @@ void MedialOptimizationProblem::DumpGradientMesh()
     throw string("DumpGradientMesh operation applied only to subdivision models");
 
   // Get the control mesh
-  const SubdivisionSurface::MeshLevel &mctl = model->GetCoefficientMesh();
+  const SubdivisionSurface::MeshLevel *mctl = model->GetCoefficientMesh();
 
   // Check that the number of parameters matches
   size_t nc = model->GetNumberOfComponents();
-  if(xCoeff->GetNumberOfCoefficients() != mctl.nVertices * nc)
+  if(xCoeff->GetNumberOfCoefficients() != mctl->nVertices * nc)
     throw string("Coefficient mapping does not support DumpGradientMesh");
 
   // Save the cm-rep file for this model

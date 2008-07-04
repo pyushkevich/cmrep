@@ -15,6 +15,7 @@ OptimizationParameters
   xMappingRegMap.AddPair(RADIUS_SUBSET, "RadiusSubset");
   xMappingRegMap.AddPair(POSITION_SUBSET, "PositionSubset");
   xMappingRegMap.AddPair(REFLECTION, "Reflection");
+  xMappingRegMap.AddPair(LAPLACE_BASIS, "LaplaceBasis");
 
   xImageMatchRegMap.AddPair(VOLUME, "VolumeOverlap");
   xImageMatchRegMap.AddPair(BOUNDARY, "BoundaryIntegral");
@@ -60,6 +61,8 @@ OptimizationParameters
   xOptimizer = CONJGRAD;
   xImageMatch = VOLUME;
   xMapping = IDENTITY;
+
+  xLaplaceBasisSize = 0;
 }
 
 OptimizationParameters
@@ -126,5 +129,10 @@ OptimizationParameters
     xReflectionPlane[1] = R["Reflection.Normal[1]"][0.0];
     xReflectionPlane[2] = R["Reflection.Normal[2]"][0.0];
     xReflectionIntercept = R["Reflection.Intercept"][0.0];
+    }
+
+  else if(xMapping == LAPLACE_BASIS)
+    {
+    xLaplaceBasisSize = R["LaplaceBasis.Size"][10];
     }
 }

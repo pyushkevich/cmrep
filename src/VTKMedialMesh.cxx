@@ -12,6 +12,7 @@
 #include "ITKImageWrapper.h"
 #include "itkImage.h"
 #include "OptimizationTerms.h"
+#include "CoefficientMapping.h"
 
 vtkFloatArray *AddMedialScalarField(vtkPolyData *target, GenericMedialModel *model, char *name)
 {
@@ -43,11 +44,11 @@ vtkFloatArray *AddBndTriScalarField(vtkPolyData *target, GenericMedialModel *mod
   return array;
 }
 
-vtkFloatArray *AddMedialVectorField(vtkPolyData *target, GenericMedialModel *model, char *name)
+vtkFloatArray *AddMedialVectorField(vtkPolyData *target, GenericMedialModel *model, char *name, size_t nc = 3)
 {
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetName(name);
-  array->SetNumberOfComponents(3);
+  array->SetNumberOfComponents(nc);
   array->SetNumberOfTuples(model->GetNumberOfAtoms());
   target->GetPointData()->AddArray(array);
   return array;
@@ -94,6 +95,14 @@ void ExportMedialMeshToVTK(
 
   vtkFloatArray *lSpoke1 = AddMedialVectorField(pMedial, xModel, "Spoke1");
   vtkFloatArray *lSpoke2 = AddMedialVectorField(pMedial, xModel, "Spoke2");
+
+  // A computation of the Laplace basis
+  vtkFloatArray *lBasis = AddMedialVectorField(pMedial, xModel, "LaplaceBasis", 10); 
+  MeshBasisCoefficientMapping xBasMap(
+    xModel->GetIterationContext()->GetMedialMesh(), 10, 4);
+  for(size_t i = 0; i < xModel->GetNumberOfAtoms(); i++)
+    for(size_t j = 0; j < 10; j++)
+      lBasis->SetComponent(i, j, xBasMap.GetBasisComponent(j, i));
 
   vtkFloatArray *lContraOffDiag = 
     AddMedialScalarField(pMedial, xModel, "Off Diagonal Term of Contravariant MT");
@@ -227,6 +236,7 @@ void ExportMedialMeshToVTK(
   pMedial->Delete();
   lSpoke2->Delete();
   lSpoke1->Delete();
+  lBasis->Delete();
 }
 
 vtkUnstructuredGrid *

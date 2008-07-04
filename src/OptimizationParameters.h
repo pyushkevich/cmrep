@@ -11,7 +11,7 @@ public:
   enum Optimizer{ CONJGRAD, GRADIENT, EVOLUTION };
   enum Mapping { 
     AFFINE, COARSE_TO_FINE, IDENTITY, PCA, 
-    RADIUS_SUBSET, POSITION_SUBSET, REFLECTION }; 
+    RADIUS_SUBSET, POSITION_SUBSET, REFLECTION, LAPLACE_BASIS }; 
   enum ImageMatch { VOLUME, BOUNDARY, RADIUS_VALUES };
   enum PenaltyTerm { 
     BOUNDARY_JACOBIAN = 0, MEDIAL_REGULARITY, ATOM_BADNESS, 
@@ -37,6 +37,9 @@ public:
   
   /** Number of PCA modes to use in PCA-based optimization */
   size_t nPCAModes;
+
+  /** Number of eigenfunctions to use in coefficient mapping */
+  size_t xLaplaceBasisSize;
 
   /** Reflection plane information (only defined for reflection mapping) */
   SMLVec3d xReflectionPlane;
