@@ -1,31 +1,41 @@
 #include "PardisoInterface.h"
 #include <iostream>
 
+
 using namespace std;
 
-// BLAS/PARDISO references
-#ifdef PARDISO_FOUND
-
-extern "C" {
-  void pardisoinit_(size_t *, int *, int *);
-  void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
-    int *, int *, int *, int *, double *, double *, int*);
-}
-
-#else
-
-void pardisoinit_(size_t *, int *, int *)
-  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
-
-void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
-    int *, int *, int *, int *, double *, double *, int*)
-  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
-
-#endif
 
 
 GenericRealPARDISO::GenericRealPARDISO(int type)
 {
+
+#ifdef PARDISO_DYNLOAD
+
+#ifdef WIN32
+
+  // Load the DLL (hardcoding the name for now)
+  hLib = LoadLibrary("libpardiso_GNU_MINGW32.dll");
+  if(hLib==NULL) 
+    throw std::exception("Unable to load PARDISO library libpardiso_GNU_MINGW32.dll!");
+
+  // Print the library name
+  // char mod[512];
+  // GetModuleFileName((HMODULE)hLib, (LPTSTR)mod, 512);
+  // cout << "Library loaded: " << mod << endl;
+
+  // Get addresses of functions
+  pardisoinit_ = (PardisoInitFunc) GetProcAddress((HMODULE)hLib, "pardisoinit_");
+  pardiso_ = (PardisoMainFunc) GetProcAddress((HMODULE)hLib, "pardiso_");
+  
+  // Check that the functions are real
+  if(pardisoinit_ == NULL || pardiso_ == NULL)
+    throw std::exception("Unable to load functions from PARDISO DLL");  
+
+#endif // WIN32
+
+#endif // PARDISO_DYNLOAD
+
+
   // Set the type of matrix to unsymmetric real
   MTYPE = type; 
 
@@ -42,7 +52,10 @@ GenericRealPARDISO::GenericRealPARDISO(int type)
 
   // Whether the index arrays are owned
   flagOwnIndexArrays = false;
+
+  flagVerbose = false;
 }
+
 
 void 
 GenericRealPARDISO
@@ -58,12 +71,13 @@ GenericRealPARDISO
 ::SymbolicFactorization(size_t n, int *idxRows, int *idxCols, double *xMatrix)
 {
   // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = 11, N = n, NRHS = 1, MSGLVL = 0, ERROR = 0; 
+  int MAXFCT = 1, MNUM = 1, PHASE = 11, N = n, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
   
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     xMatrix, idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &ERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
   // Record the parameter for next phase
   ResetIndices();
@@ -79,31 +93,32 @@ void
 GenericRealPARDISO
 ::SymbolicFactorization(const ImmutableSparseMatrix<double> &mat)
 {
-  // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = 11, N = n, NRHS = 1, MSGLVL = 0, ERROR = 0; 
-
   // Init the index arrays
   ResetIndices();
 
   // We are going to own the indices
   flagOwnIndexArrays = true;
 
+  // Record the parameter for next phase
+  this->n = mat.GetNumberOfRows();
+
   // The arrays have to be incremented by one before calling PARDISO
-  idxCols = new int[mat.GetNumberOfRows() + 1];
+  idxRows = new int[mat.GetNumberOfRows() + 1];
   for(size_t i = 0; i <= mat.GetNumberOfRows(); i++)
     idxRows[i] = (int)(1 + mat.GetRowIndex()[i]);
 
-  idxCols = new int[mat.GetNumberOfColumns()];
-  for(size_t j = 0; j <= mat.GetNumberOfColumns(); j++)
+  idxCols = new int[mat.GetNumberOfSparseValues()];
+  for(size_t j = 0; j < mat.GetNumberOfSparseValues(); j++)
     idxCols[j] = (int)(1 + mat.GetColIndex()[j]);
   
+  // Set the various parameters
+  int MAXFCT = 1, MNUM = 1, PHASE = 11, N = n, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
+
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(mat.GetSparseData()), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &ERROR);
-
-  // Record the parameter for next phase
-  this->n = mat.GetNumberOfRows();
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
   // Set the flag so we know that pardiso was launched before
   flagPardisoCalled = true;
@@ -114,12 +129,13 @@ GenericRealPARDISO
 ::NumericFactorization(const double *xMatrix)
 {
   // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = 22, N = n, NRHS = 1, MSGLVL = 0, ERROR = 0; 
+  int MAXFCT = 1, MNUM = 1, PHASE = 22, N = n, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
   
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &ERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
   // Record the parameter for next phase
   this->xMatrix = xMatrix;
@@ -130,40 +146,77 @@ GenericRealPARDISO
 ::Solve(double *xRhs, double *xSoln)
 {
   // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = 33, N = n, NRHS = 1, MSGLVL = 0, ERROR = 0; 
-  
+  int MAXFCT = 1, MNUM = 1, PHASE = 33, N = n, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
+
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &ERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
 }
 
-void 
+void                              
 GenericRealPARDISO
 ::Solve(size_t nRHS, double *xRhs, double *xSoln)
 {
   // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = 33, N = n, NRHS = nRHS, MSGLVL = 0, ERROR = 0; 
+  int MAXFCT = 1, MNUM = 1, PHASE = 33, N = n, NRHS = nRHS, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
   
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &ERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
 }
 
 GenericRealPARDISO::
 ~GenericRealPARDISO()
 {
   // Set the various parameters
-  int MAXFCT = 1, MNUM = 1, PHASE = -1, N = n, NRHS = 1, MSGLVL = 0, ERROR = 0; 
+  int MAXFCT = 1, MNUM = 1, PHASE = -1, N = n, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
   
-  // Perform the symbolic factorization phase
+  // Deallocate data
   if(flagPardisoCalled)
     pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
       const_cast<double *>(xMatrix), idxRows, idxCols,
-      NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &ERROR);
+      NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
   // Reset the arrays
   ResetIndices();
+
+#if defined(PARDISO_DYNLOAD) && defined(WIN32)
+  FreeLibrary((HMODULE)hLib);
+#endif
 }
 
+  // Initialize the solver 
+UnsymmetricRealPARDISO::UnsymmetricRealPARDISO()
+: GenericRealPARDISO(11) 
+{
+  // Small test
+  int ia[] = {1,5,8,10,12,13,16,18,21};
+  int ja[] = {1,3,6,7,2,3,5,3,8,4,7,2,3,6,8,2,7,3,7,8};
+  double val[] = {7.,1.,2.,7.,-4.,8.,2.,1.,5.,7.,9.,-4.,7.,3.,5.,17.,11.,-3.,2.,5.};
+  double rhs[] = {6.,1.,0.,6.,4.,9.,1.,9.};
+  double sol[] = {0.,0.,0.,0.,0.,0.,0.,0.};
+
+  /* 
+
+  // Set the various parameters
+  int MAXFCT = 1, MNUM = 1, PHASE = 13, N = 8, NRHS = 1, PERROR = 0; 
+  int MSGLVL = (flagVerbose) ? 1 : 0; 
+  
+  // Perform the symbolic factorization phase
+  pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
+    val, ia, ja,
+    NULL, &NRHS, IPARM, &MSGLVL, rhs, sol, &PERROR);
+
+  // Check result
+  if(PERROR == 0 && fabs(sol[0] + 2.25) < 1.0e-6)
+    cout << "PARDISO library initialized and tested" << endl;
+  else
+    throw exception("PARDISO library unable to solve test problem");
+
+  */
+};

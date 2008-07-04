@@ -57,9 +57,10 @@ ReflectionCoefficientMapping
   this->b = b;
   this->n = model->GetNumberOfCoefficients();
   this->m = model->GetNumberOfCoefficients();
+  this->nc = model->GetNumberOfComponents();
 
   // Assuming 4 coefficients per node (standard for this code)
-  this->k = m >> 2;
+  this->k = m * nc;
 
   // Resize opp array
   opp.resize(k);
@@ -93,16 +94,18 @@ ReflectionCoefficientMapping
   Vec X = C+P, Y(n,0.0);
   for(size_t i = 0; i < k; i++)
     {
+    size_t ci = i * nc, co = opp[i] * nc;
+
     // Get the vector component
-    SMLVec3d Xi = X.extract(3,i<<2);
-    SMLVec3d Xj = X.extract(3,opp[i] << 2);
+    SMLVec3d Xi = X.extract(3, ci);
+    SMLVec3d Xj = X.extract(3, co);
     SMLVec3d Yi = 0.5 * (Xi + Xj) - (dot_product(p,Xj) - b) * p;
-    double Ri = X[(i<<2)+3], Rj = X[(opp[i] << 2) + 3];
+    double Ri = X[ci + 3], Rj = X[co + 3];
     double Qi = 0.5 * (Ri + Rj);
     
     // Set the output
-    Y.update(Yi, i<<2);
-    Y[(i<<2)+3] = Qi;
+    Y.update(Yi, ci);
+    Y[ci + 3] = Qi;
     }
   return Y;
 }
@@ -115,12 +118,14 @@ ReflectionCoefficientMapping
   Vec dY(n, 0.0);
   for(size_t i = 0; i < k; i++)
     {
-    SMLVec3d Vi = varC.extract(3,i<<2);
-    SMLVec3d Vj = varC.extract(3,opp[i]<<2);
+    size_t ci = i * nc, co = opp[i] * nc;
+
+    SMLVec3d Vi = varC.extract(3,ci);
+    SMLVec3d Vj = varC.extract(3,co);
     SMLVec3d dYi = 0.5 * (Vi + Vj) - dot_product(Vj,p) * p;
-    double dQi = 0.5 * (varC[(i<<2)+3] + varC[(opp[i]<<2)+3]);
-    dY.update(dYi,i<<2);
-    dY[(i<<2)+3] = dQi;
+    double dQi = 0.5 * (varC[ci+3] + varC[co+3]);
+    dY.update(dYi,ci);
+    dY[ci+3] = dQi;
     }
   return dY;
 }
@@ -132,12 +137,14 @@ ReflectionCoefficientMapping
   Vec dY(n, 0.0);
   for(size_t i = 0; i < k; i++)
     {
-    SMLVec3d Vi = varP.extract(3,i<<2);
-    SMLVec3d Vj = varP.extract(3,opp[i]<<2);
+    size_t ci = i * nc, co = opp[i] * nc;
+
+    SMLVec3d Vi = varP.extract(3,ci);
+    SMLVec3d Vj = varP.extract(3,co);
     SMLVec3d dYi = 0.5 * (Vi + Vj) - dot_product(Vj,p) * p;
-    double dQi = 0.5 * (varP[(i<<2)+3] + varP[(opp[i]<<2)+3]);
-    dY.update(dYi,i<<2);
-    dY[(i<<2)+3] = dQi;
+    double dQi = 0.5 * (varP[ci+3] + varP[co+3]);
+    dY.update(dYi,ci);
+    dY[ci+3] = dQi;
     }
   return dY;
 }

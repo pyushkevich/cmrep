@@ -291,7 +291,7 @@ private:
     const size_t *ri = W.GetRowIndex();
     const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y;
+    SMLVec3d y(0.0);
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
       y += W.GetSparseData()[i].w[d] * atoms[ci[i]].X;
 
@@ -303,7 +303,7 @@ private:
     const size_t *ri = W.GetRowIndex();
     const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y;
+    SMLVec3d y(0.0);
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
       y += W.GetSparseData()[i].w[d] * atoms[ci[i]].N;
 
@@ -318,7 +318,7 @@ private:
     const size_t *ri = W.GetRowIndex();
     const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y;
+    SMLVec3d y(0.0);
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
       y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Xu;
 
@@ -333,7 +333,7 @@ private:
     const size_t *ri = W.GetRowIndex();
     const size_t *ci = W.GetColIndex();
 
-    SMLVec3d y;
+    SMLVec3d y(0.0);
     for(size_t i = ri[v]; i < ri[v+1]; ++i)
       y += W.GetSparseData()[i].w[d] * atoms[ci[i]].Xv;
 

@@ -1409,9 +1409,10 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
     SubdivisionSurface::RecursiveSubdivide(&mlCoeffOld, &mlCoeffNew, iCoeffSub);
 
     // Compute the coefficients for the new cm-rep
-    xCoeffNew.set_size(mlCoeffNew.nVertices * 4);
+    size_t nc = smm->GetNumberOfComponents();
+    xCoeffNew.set_size(mlCoeffNew.nVertices * nc);
     SubdivisionSurface::ApplySubdivision(
-      xCoeffOld.data_block(), xCoeffNew.data_block(), 4, mlCoeffNew);
+      xCoeffOld.data_block(), xCoeffNew.data_block(), nc, mlCoeffNew);
 
     // Interpolate u and v arrays
     uCoeffNew.set_size(mlCoeffNew.nVertices);
@@ -1501,13 +1502,14 @@ void SubdivisionMPDE::Remesh()
   SubdivisionSurface::MeshLevel mlCoeffOld = smm->GetCoefficientMesh(); 
   SubdivisionSurface::MeshLevel mlAtomsOld = smm->GetAtomMesh(); 
 
+  size_t nc = smm->GetNumberOfCoefficients();
 
   // We need to get a list of coordinates for remeshing
   typedef vnl_vector_fixed<double, 3> Vec;
   Vec *X = new Vec[mlCoeffOld.nVertices];
   for(size_t i = 0; i < mlCoeffOld.nVertices; i++)
     for(size_t k = 0; k < 3; k++)
-      X[i][k] = smm->GetCoefficient(i * 4 + k);
+      X[i][k] = smm->GetCoefficient(i * nc + k);
 
 
 
@@ -1573,7 +1575,7 @@ void SubdivisionMPDE::Remesh()
   tmg.GenerateMesh();
 
   // Find all unused vertices and create a vertex replacement rule
-  vnl_vector<double> C(smm->GetCoefficientArray().data_block(), mlCoeffOld.nVertices * 4);
+  vnl_vector<double> C(smm->GetCoefficientArray().data_block(), mlCoeffOld.nVertices * nc);
   vnl_vector<double> Cu(smm->GetCoefficientU().data_block(), mlCoeffOld.nVertices);
   vnl_vector<double> Cv(smm->GetCoefficientV().data_block(), mlCoeffOld.nVertices);
 
@@ -1585,8 +1587,8 @@ void SubdivisionMPDE::Remesh()
   for(size_t j = 0; j < mlCoeffOld.nVertices; j++)
     {
     vmap[j] = vcnt[j] ? idx : NOID;    
-    for(size_t c = 0; c < 4; c++)
-      C[idx * 4 + c] = C[j * 4 + c];
+    for(size_t c = 0; c < nc; c++)
+      C[idx * nc + c] = C[j * nc + c];
     Cu[idx] = Cu[j];
     Cv[idx] = Cv[j];
     idx += vcnt[j];
@@ -1605,7 +1607,7 @@ void SubdivisionMPDE::Remesh()
   try 
     {
     smm->SetMesh(mlCoeffNew, 
-      C.extract(4*idx), 
+      C.extract(nc*idx), 
       Cu.extract(idx), 
       Cv.extract(idx), 
       smm->GetSubdivisionLevel(), 0);
@@ -1621,6 +1623,8 @@ void SubdivisionMPDE::Remesh()
 
 void SubdivisionMPDE::BruteForceToPDE()
 {
+  // TODO: THIS IS GOING TO CRASH! MUST BE FIXED!!!
+
   // Get the brute force model, or throw exception
   BruteForceSubdivisionMedialModel *brute = 
     dynamic_cast<BruteForceSubdivisionMedialModel *>(xMedialModel);

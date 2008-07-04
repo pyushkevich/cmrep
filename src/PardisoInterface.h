@@ -4,6 +4,43 @@
 #include <iostream>
 #include "SparseMatrix.h"
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
+// BLAS/PARDISO references
+#ifdef HAVE_PARDISO
+
+#ifdef PARDISO_DYNLOAD
+
+  // Declarations for dynamic loading (tested in Win32 only)
+  typedef void (__cdecl *PardisoInitFunc)(size_t *, int *, int *);
+  typedef void (__cdecl *PardisoMainFunc)(size_t *, int *, int *, int *, 
+    int *, int *, double *, int *, int *, 
+    int *, int *, int *, int *, double *, double *, int*);
+
+#else
+
+extern "C" {
+  void pardisoinit_(size_t *, int *, int *);
+  void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
+    int *, int *, int *, int *, double *, double *, int*);
+}
+
+#endif
+
+#else
+
+void pardisoinit_(size_t *, int *, int *)
+  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
+
+void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
+    int *, int *, int *, int *, double *, double *, int*)
+  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
+
+#endif
+
+
 class GenericRealPARDISO
 {
 public:
@@ -28,6 +65,10 @@ public:
   // is NULL, will solve in-place
   void Solve(size_t nRHS, double *xRhs, double *xSoln);
 
+  // Outut dumping
+  void SetVerbose(bool flag)
+    { flagVerbose = flag; }
+
 protected:
   
   // Constructor, takes the problem type
@@ -39,7 +80,16 @@ protected:
   // Reset the index arrays()
   void ResetIndices();
 
-private:
+  /** Function pointers used to access PARDISO */
+#ifdef PARDISO_DYNLOAD
+#ifdef WIN32
+  HINSTANCE hLib;
+#endif
+
+  PardisoInitFunc pardisoinit_;
+  PardisoMainFunc pardiso_;
+#endif
+
   /** Internal data for PARDISO */
   size_t PT[64];
   int MTYPE;
@@ -48,14 +98,14 @@ private:
   // Storage for data in intermediate steps
   int n, *idxRows, *idxCols;
   const double *xMatrix;
-  bool flagPardisoCalled, flagOwnIndexArrays;
+  bool flagPardisoCalled, flagOwnIndexArrays, flagVerbose;
 };
 
 class UnsymmetricRealPARDISO : public GenericRealPARDISO
 {
 public:
   // Initialize the solver 
-  UnsymmetricRealPARDISO() : GenericRealPARDISO(11) {};
+  UnsymmetricRealPARDISO();
 };
 
 class SymmetricPositiveDefiniteRealPARDISO : public GenericRealPARDISO

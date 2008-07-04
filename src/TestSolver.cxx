@@ -271,6 +271,10 @@ int TestGradientComputation(
         tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A4);
 
+        // Revert to original values
+        xSolver->SetCoefficientArray(xMapping->Apply(C0, P0));
+        xSolver->ComputeAtoms(xHint.data_block());
+
         // Exit loop 
         break;
         }

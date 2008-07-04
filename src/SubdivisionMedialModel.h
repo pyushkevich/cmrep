@@ -15,6 +15,7 @@ public:
   typedef SubdivisionSurface::MeshLevel MeshLevel;
 
   SubdivisionMedialModel();
+  virtual ~SubdivisionMedialModel();
 
   /**
    * This method associates the medial model with a mesh. The two parameters
@@ -80,7 +81,7 @@ public:
    * managed by the child of GenericMedialModel.
    */
   const AffineTransformDescriptor *GetAffineTransformDescriptor() const
-    { return &xAffineDescriptor; }
+    { return xAffineDescriptor; }
 
   /**
    * Get a pointer to the coarse-to-fine masking descriptor corresponding to
@@ -130,10 +131,10 @@ protected:
   Vec uCoeff, vCoeff, uAtom, vAtom;
 
   // Coarse-to-fine mapping descriptor (dummy)
-  SubdivisionSurfaceCoarseToFineMappingDescriptor xCTFDescriptor;
+  SubdivisionSurfaceCoarseToFineMappingDescriptor *xCTFDescriptor;
 
   // Affine transform mapping descriptor
-  PointArrayAffineTransformDescriptor xAffineDescriptor;
+  PointArrayAffineTransformDescriptor *xAffineDescriptor;
 
   // The subdivision level (number of subdivisions from mlCoefficient to
   // mlAtom)

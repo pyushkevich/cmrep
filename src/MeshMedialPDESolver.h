@@ -106,7 +106,7 @@ private:
   SparseMat M;
 
   // Right hand side and the solution of the PDE
-  vnl_vector<double> xRHS, xPhi;
+  vnl_vector<double> xRHS, xSolution;
 
   // A pointer to the mesh topology
   MeshLevel *topology;
@@ -162,18 +162,16 @@ private:
   // Scheme for computing tangent vectors
   MedialAtomLoopScheme xLoopScheme;
 
-  // This utility array maps the entries in the nbr sparse array stored in the
-  // mesh to elements of the sparse matrix A. This mapping is needed because
-  // the entries of array A are sorted and include diagonal entries
-  size_t *xMapVertexNbrToA, *xMapVertexToA;
-
   // For gradient computation, there is an array W, which contains the
   // Jacobian of each finite difference equation with respect to each of the
   // neighbor atoms's positions. This is an array of vectors
-  SMLVec3d *W;
+  SMLVec3d *WX;
 
-  // Pardiso-compatible 1-based index into the matrix A (redundant, really)
-  int *xPardisoRowIndex, *xPardisoColIndex;
+  // For gradient computation of the Neumann boundary condition, we have 
+  // some weights for the derivatives of differential geometric properties
+  struct NeumannDerivWeights 
+    { double wgt_g12, wgt_g22, wgt_g, wgt_f, wgt_fv; } *Wfu;
+  
 
   // Array of medial atoms managed by this solver (should it be managed
   // elsewhere?)

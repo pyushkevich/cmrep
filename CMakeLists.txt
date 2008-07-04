@@ -24,6 +24,24 @@ ELSE(VTK_FOUND)
     "Cannot build without VTK.  Please set VTK_DIR.")
 ENDIF(VTK_FOUND)
 
+# Optionally, support PARDISO
+OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
+IF(USE_PARDISO)
+  IF(WIN32)
+    # On Windows, the library can only be loaded dynamically
+    ADD_DEFINITIONS(-DHAVE_PARDISO -DPARDISO_DYNLOAD)  
+  ELSE(WIN32)
+    FIND_LIBRARY(PARDISO_LIB pardiso DOC "The location of the PARDISO shared library")
+    IF(PARDISO_LIB)
+      ADD_DEFINITIONS(-DHAVE_PARDISO)
+      LINK_LIBRARIES(${PARDISO_LIB})
+    ENDIF(PARDISO_LIB)  
+  ENDIF(WIN32)
+ELSE(USE_PARDISO)
+  ADD_DEFINITIONS(-UHAVE_PARDISO)
+ENDIF(USE_PARDISO)
+
+
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src)
 

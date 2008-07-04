@@ -1,12 +1,22 @@
 #include "SubdivisionMedialModel.h"
 #include "SubdivisionSurfaceMedialIterationContext.h"
 
-SubdivisionMedialModel::SubdivisionMedialModel() :
-  xCTFDescriptor(0)
+SubdivisionMedialModel::SubdivisionMedialModel() 
 {
+  xCTFDescriptor = NULL;
+  xAffineDescriptor = NULL;
+
   xAtoms = NULL;
   xIterationContext = NULL;
   xSubdivisionLevel = 0;
+}
+
+SubdivisionMedialModel::~SubdivisionMedialModel()
+{
+  if(xCTFDescriptor)
+    delete xCTFDescriptor;
+  if(xAffineDescriptor)
+    delete xAffineDescriptor;
 }
 
 void
@@ -29,7 +39,7 @@ SubdivisionMedialModel
   SubdivisionSurface::RecursiveSubdivide(&mesh, &mlCoefficient, nCoeffSubs);
 
   // Get number of components per control point
-  size_t nc = this->GetNumberOfComponents();
+  size_t nc = GetNumberOfComponents();
 
   // Compute the coefficients and u/v arrays from the input data
   if(nCoeffSubs > 0)
@@ -85,7 +95,15 @@ SubdivisionMedialModel
   this->xIterationContext = new SubdivisionSurfaceMedialIterationContext(&mlAtom);
 
   // Set the coarse-to-fine descriptor
-  xCTFDescriptor = SubdivisionSurfaceCoarseToFineMappingDescriptor(mlCoefficient.nVertices);
+  if(xCTFDescriptor)
+    delete xCTFDescriptor;
+  xCTFDescriptor = new SubdivisionSurfaceCoarseToFineMappingDescriptor(mlCoefficient.nVertices);
+
+
+  if(xAffineDescriptor)
+    delete xAffineDescriptor;
+  xAffineDescriptor = new PointArrayAffineTransformDescriptor(GetNumberOfComponents());
+
 }
 
 void
@@ -110,6 +128,6 @@ const CoarseToFineMappingDescriptor *
 SubdivisionMedialModel
 ::GetCoarseToFineMappingDescriptor() const
 {
-  return &xCTFDescriptor;
+  return xCTFDescriptor;
 
 }

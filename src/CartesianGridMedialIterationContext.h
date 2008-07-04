@@ -87,12 +87,18 @@ public:
     // Create a new boundary mesh
     xBoundaryMesh = new TriangleMesh();
     TriangleMeshGenerator tgbnd(xBoundaryMesh, this->GetNumberOfBoundaryPoints());
-    for(MedialBoundaryTriangleIterator it(this); !it.IsAtEnd(); ++it)
+
+    // TODO: How to deal with this?
+    try 
       {
-      tgbnd.AddTriangle(
-        it.GetBoundaryIndex(0), it.GetBoundaryIndex(1), it.GetBoundaryIndex(2));
-      }
-    tgbnd.GenerateMesh();
+      for(MedialBoundaryTriangleIterator it(this); !it.IsAtEnd(); ++it)
+        {
+        tgbnd.AddTriangle(
+          it.GetBoundaryIndex(0), it.GetBoundaryIndex(1), it.GetBoundaryIndex(2));
+        }
+      tgbnd.GenerateMesh();
+      } 
+    catch(...) {}
     };
 
   ~CartesianGridMedialIterationContext()

@@ -370,7 +370,7 @@ protected:
   // The plane of reflection
   SMLVec3d p;
   double b;
-  size_t k;
+  size_t k, nc;
 
   // The mapping from points to opposite points
   std::vector<size_t> opp;

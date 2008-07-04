@@ -267,33 +267,30 @@ MeshMedialPDESolver
     // Sort the list, because Pardiso requires it to be that way
     sort(ring.begin(), ring.end());
 
-    // Now create entries for the sparse matrix
-    for(vector<int>::iterator ir = ring.begin(); ir != ring.end(); ++ir)
+    if(topology->IsVertexInternal(i))
       {
-      // Get the vertex id and index in the mesh's neighbor sparse array
-      size_t j = *ir;
-
-      if(topology->IsVertexInternal(i))
+      for(vector<int>::iterator ir = ring.begin(); ir != ring.end(); ++ir)
         {
+        size_t j = *ir;
+
         // Add entry in A(phi)
         S[i].push_back(make_pair(j, 0.0));
 
         // Add entry in A(omega)
         S[n+i].push_back(make_pair(n+j, 0.0));
-
-        // Add entry in U1
-        if(i == j)
-          S[i].push_back(make_pair(n + i, -1.0));
-        }
-      else
+        }                     
+      S[i].push_back(make_pair(n + i, -1.0));
+      }
+    else
+      {
+      for(vector<int>::iterator ir = ring.begin(); ir != ring.end(); ++ir)
         {
+        size_t j = *ir;
+
         // Add entry in N
         S[i+n].push_back(make_pair(j, 0.0));
-
-        // Add entry in U2
-        if(i == j)
-          S[i].push_back(make_pair(i, 1.0));
-        }      
+        }
+      S[i].push_back(make_pair(i, 1.0));
       }
     }
 
@@ -301,7 +298,7 @@ MeshMedialPDESolver
   M.SetFromSTL(S, 2 * n);
 
   // Perform PARDISO symbolic factorization
-  xPardiso.SymbolicFactorization(M);
+  // xPardiso.SymbolicFactorization(M);
 
   // For each of the 'interesting' quadrants in M (A-phi, A-omega, N)
   // we need to create an index mapping the topology neighborhood 
@@ -318,7 +315,7 @@ MeshMedialPDESolver
       size_t j = rM.Column();
       if(i == j)
         xIndexAPhi.xSelfIndex[i] = rM.SparseIndex();
-      else if(i < n)
+      else if(j < n)
         xIndexAPhi.xNbrIndex[Nt.FindEntryIndex(i, j)] = rM.SparseIndex();
       }
 
@@ -341,14 +338,14 @@ MeshMedialPDESolver
         if(i == j - n)
           xIndexAOmega.xSelfIndex[i] = rM.SparseIndex();
         else
-          xIndexAOmega.xNbrIndex[Nt.FindEntryIndex(i, j)] = rM.SparseIndex();
+          xIndexAOmega.xNbrIndex[Nt.FindEntryIndex(i, j - n)] = rM.SparseIndex();
         }
       }
     }
 
   // Initialize right hand side and solution arrays
   xRHS.set_size(2 * n);
-  xPhi.set_size(2 * n);
+  xSolution.set_size(2 * n);
 
   // Initialize the triangle area array and other such arrays
   xTriangleGeom = new TriangleGeom[topology->triangles.size()];
@@ -361,8 +358,12 @@ MeshMedialPDESolver
   // and are managed by the parent
   xAtoms = inputAtoms;
 
-  // Initialize the weight array for gradient computation
-  W = new SMLVec3d[M.GetNumberOfSparseValues()];
+  // Initialize the weight arrays for gradient computation
+  WX = new SMLVec3d[M.GetNumberOfSparseValues()];
+  Wfu = new NeumannDerivWeights[n];
+
+  // Allocate vector for derivative computation
+  xTempDerivativeTerms = TempDerivativeTermsArray(topology->nVertices);
 }
 
 MeshMedialPDESolver
@@ -370,13 +371,10 @@ MeshMedialPDESolver
 {
   xTriangleGeom = NULL;
   xVertexGeom = NULL;
-  xMapVertexNbrToA = NULL;
-  xMapVertexToA = NULL;
   topology = NULL;
-  xPardisoColIndex = NULL;
-  xPardisoRowIndex = NULL;
   xAtoms = NULL;
-  W = NULL;
+  WX = NULL;
+  Wfu = NULL;
 }
 
 MeshMedialPDESolver
@@ -391,11 +389,8 @@ MeshMedialPDESolver
 {
   reset_ptr(xTriangleGeom);
   reset_ptr(xVertexGeom);
-  reset_ptr(xMapVertexNbrToA);
-  reset_ptr(xMapVertexToA);
-  reset_ptr(xPardisoColIndex); 
-  reset_ptr(xPardisoRowIndex);
-  reset_ptr(W);
+  reset_ptr(WX);
+  reset_ptr(Wfu);
 }
 
 void
@@ -507,9 +502,9 @@ MeshMedialPDESolver
     // Compute the normal vector
     a.ComputeNormalVector();
 
-    // For the boundary atoms, also compute Fu, which is static
+    // For the boundary atoms, also compute Fv, which is static
     if(!topology->IsVertexInternal(i))
-      a.Fu = xLoopScheme.Fu(i, xAtoms);
+      a.Fv = xLoopScheme.Fv(i, xAtoms);
     } 
 }
 
@@ -573,12 +568,12 @@ MeshMedialPDESolver
       // The matrix will only have the expression for Phi_v, which is the
       // weights of the tangent vectors. Another option would be to put here
       // the expression for Phi_,nu. But let's leave that for now.
-      M.GetSparseData()[xIndexN.xSelfIndex[i]] = xLoopScheme.GetOwnWeight(1, i);
+      M.GetSparseData()[xIndexN.xSelfIndex[i]] = xLoopScheme.GetOwnWeight(0, i);
       for(EdgeWalkAroundVertex it(topology, i); !it.IsAtEnd(); ++it)
         {
         size_t idxMesh = it.GetPositionInMeshSparseArray();
         M.GetSparseData()[xIndexN.xNbrIndex[idxMesh]] = 
-          xLoopScheme.GetNeighborWeight(1, it);
+          xLoopScheme.GetNeighborWeight(0, it);
         }
       }
     }
@@ -601,18 +596,40 @@ MeshMedialPDESolver
       }
     else
       {
-      // This is the hairy part, where we compute
-      // (-fu g12 - Sqrt[fu^2 g12^2 + 4 f0 g22 - fu^2 g11 g22])/g22
-      double f = xAtoms[i].F;
-      double fu = xAtoms[i].Fu;
-      double g11 = xAtoms[i].G.xContravariantTensor[1][1];
-      double g12 = xAtoms[i].G.xContravariantTensor[1][2];
-      double g22 = xAtoms[i].G.xContravariantTensor[2][2];
-      double gInv = xAtoms[i].G.gInv;
-
+      // The top part (Dirichlet condition) is trivial
       xRHS[i] = xAtoms[i].R * xAtoms[i].R;
-      xRHS[n + i] = 
-        ( - fu * g12 - sqrt(4 * f * g22 - fu * fu * gInv)) / g22;
+
+      // This is the hairy part, where we compute
+      //   ( - fv * g12 - sqrt(4 * f * g11 - fv * fv * gInv)) / g11
+      // Equivalently, using covariant tensor 
+      //   ( fv * g12 - sqrt( (4 * f * g22 - fv * fv ) * g ) / g22
+      double f = xAtoms[i].F;
+      double fv = xAtoms[i].Fv;
+      double g12 = xAtoms[i].G.xCovariantTensor[0][1];
+      double g22 = xAtoms[i].G.xCovariantTensor[1][1];
+      double g = xAtoms[i].G.g;
+
+      // We combine this code with computing the terms for the derivative
+      // of the boundary condition. This may have a little overhead, but 
+      // it should not be serious. It's nicer to have this code here because
+      // all the intermediate variables can be defined only once
+      double S2 = (4 * f * g22 - fv * fv );
+      double S1 = sqrt( S2 * g );
+      double g22inv = 1.0 / g22;
+      double S1inv = 1.0 / S1;
+
+      // This is the Neumann condition
+      double fu = ( fv * g12 - S1 ) * g22inv;
+
+      // Here are the derivative terms
+      Wfu[i].wgt_g22 = (-fu - 2 * f * g * S1inv) * g22inv;
+      Wfu[i].wgt_fv  = (g12 + fv * S1inv * g) * g22inv;
+      Wfu[i].wgt_g12 = (fv * g22inv);
+      Wfu[i].wgt_g = - 0.5 * S2 * S1inv * g22inv;
+      Wfu[i].wgt_f = - 2 * S1inv * g;
+
+      // We will save intermediate terms for later derivative computation
+      xRHS[n + i] = fu;
       }
     }
 }
@@ -759,154 +776,7 @@ MeshMedialPDESolver
 
 */
 
-/*
-void
-MeshMedialPDESolver
-::BacktrackNRC(
-  const Vec &xold,          // Starting point for Newton's method
-  double fold,              // Value of the function 0.5 F.F at this point
-  const Vec &g,             // The gradient direction at xold
-  const Vec &p,             // The Newton step direction
-  Vec &x,                   // Output: the new point along Newton direction
-  double &f)                // Output: the value of the function at the new point
-{
 
-
-}
-*/
-
-/*
- NEWTON METHOD
-
-
-void
-MeshMedialPDESolver
-::SolveEquation(double *xInitSoln, bool flagGradient)
-{
-  size_t i;
-
-  cout << "MeshMedialPDESolver::SolveEquation()" << endl;
-
-  // Compute the mesh geometry
-  ComputeMeshGeometry(flagGradient);
-
-  // Set the solution to the current values of phi (or to the initial solution
-  // passed in to the method)
-  vnl_vector<double> xSoln(topology->nVertices);
-  for(i = 0; i < topology->nVertices; i++)
-    xSoln[i] = xInitSoln == NULL ? xAtoms[i].F : xInitSoln[i];
-  vnl_vector<double> xStartingSoln = xSoln;
-
-  // Flag indicating that Newton's method converged (without tricks)
-  bool flagConverge = false;
-
-  // Run for up to 50 iterations
-  for(i = 0; i < 20; i++)
-    {
-    // First, fill in the A matrix (only a part of it during most iterations)
-    FillNewtonMatrix(xSoln.data_block(), i == 0);
-
-    // Now, fill in the right hand side 
-    double xStartingRHS = FillNewtonRHS(xSoln.data_block());
-
-    printf("Iteration: %3d\t Max RHS: %g\t Max PHI: %g\n", 
-      i, xRHS.inf_norm(), xSoln.inf_norm());
-
-    // If the right hand side is close enough to zero, we can exit
-    if(xRHS.inf_norm() < 1.0e-10) 
-      {
-      // Set the converge flag
-      flagConverge = true;
-
-      // Exit the loop
-      break;
-      }
-
-    // During the first iteration perform factorization
-    if(i == 0)
-      xPardiso.SymbolicFactorization(
-        topology->nVertices, xPardisoRowIndex, xPardisoColIndex, A.GetSparseData());
-
-    // In the subsequent iterations, only do the numeric factorization and solve
-    xPardiso.NumericFactorization(A.GetSparseData());
-    xPardiso.Solve(xRHS.data_block(), xEpsilon.data_block());
-
-    // Add epsilon to the current guess
-    xSoln += xEpsilon;
-    }
-  
-  // If the system fails to converge, use the SVD-based method, which works
-  // with ill-conditioned Jacobians
-  if(!flagConverge)
-    {
-    // Revert to the starting point
-    xSoln = xStartingSoln;
-
-    // Do a loop
-    for(i = 0; i < 20; i++)
-      {
-      // Compute the Jacobian matrix and the right hand side
-      FillNewtonMatrix(xSoln.data_block(), false);
-
-      // Now, fill in the right hand side 
-      FillNewtonRHS(xSoln.data_block());
-
-      // Compute the SVD of the Jacobian matrix
-
-      }
-
-
-
-    cout << "{Conv. Fail. " << xRHS.inf_norm() << "}" << endl;
-
-    throw MedialModelException("Convergence Failure");
-    }
-
-  // If Newton fails to converge revert to gradient descent
-#ifdef GARBAGE  
-  if(xPostSolveRHS > 1e-10) 
-    {
-    cout << "REVERTING TO GRADIENT DESCENT" << endl;
-
-    // Set up the optimizer with target functions
-    gsl_multimin_function_fdf my_func;
-    my_func.f = &MeshMedialPDESolver::gsl_f;
-    my_func.df = &MeshMedialPDESolver::gsl_df;
-    my_func.fdf = &MeshMedialPDESolver::gsl_fdf;
-    my_func.n = topology->nVertices;
-    my_func.params = this;
-
-    // Create the initial solution
-    gsl_vector *my_start = gsl_vector_alloc(my_func.n);
-    memcpy(my_start->data, xSoln.data_block(), sizeof(double) * my_func.n);
-
-    // Create conjugate gradient minimizer
-    gsl_multimin_fdfminimizer *my_min = 
-      gsl_multimin_fdfminimizer_alloc( gsl_multimin_fdfminimizer_conjugate_pr, my_func.n);
-
-    // Set up the parameters of the optimizer
-    gsl_multimin_fdfminimizer_set(my_min, &my_func, my_start, 0.1, 1e-7);
-
-    // Iterate until we converge
-    while(0 == gsl_multimin_fdfminimizer_iterate(my_min))
-      {
-      cout << gsl_multimin_fdfminimizer_minimum(my_min) << endl;
-      }
-    cout << endl;
-
-    // Report
-    cout << "Conj Grad Final Value: " << gsl_multimin_fdfminimizer_minimum(my_min);
-    
-    // Get the best solution
-    xSoln.copy_in(gsl_multimin_fdfminimizer_x(my_min)->data);
-    }
-#endif GARBAGE
-
-  // Compute the medial atoms
-  ComputeMedialAtoms(xSoln.data_block());
-}
-
-*/
 
 void
 MeshMedialPDESolver
@@ -924,107 +794,68 @@ MeshMedialPDESolver
   FillRHS();
 
   // Use pardiso to solve the problem
+  xPardiso.SetVerbose(false);
+  xPardiso.SymbolicFactorization(M);
   xPardiso.NumericFactorization(M);
-  xPardiso.Solve(xRHS.data_block(), xPhi.data_block());
+  xPardiso.Solve(xRHS.data_block(), xSolution.data_block());
+
+  // The solution must be positive, otherwise this is an ill-posed problem
+  for(size_t i = 0; i < topology->nVertices; i++)
+    if(xSolution[i] < 0.)
+      throw MedialModelException("PDE solution negative");
 
   // Compute the medial atoms
-  ComputeMedialAtoms(xPhi.data_block());
+  ComputeMedialAtoms(xSolution.data_block());
 }
 
-/*
 
-double
-MeshMedialPDESolver::gsl_f(const gsl_vector *x, void *params)
-{
-  // Get the pointer to the solver
-  MeshMedialPDESolver *solver = static_cast<MeshMedialPDESolver *>(params);
-
-  // Compute the function for this data
-  return solver->FillNewtonRHS(x->data);
-}
-
-void
-MeshMedialPDESolver::gsl_fdf(const gsl_vector *v, void *params, double *f, gsl_vector *df)
-{
-  // Get the pointer to the solver
-  MeshMedialPDESolver *solver = static_cast<MeshMedialPDESolver *>(params);
-
-  // Compute the Jacobian matrix and the function value
-  solver->FillNewtonMatrix(v->data, false);
-  *f = solver->FillNewtonRHS(v->data);
-
-  // Compute the gradient vector
-  Vec grad = -2.0 * solver->A.MultiplyTransposeByVector(solver->xRHS);
-
-  // Copy the gradient in
-  std::copy(grad.data_block(), grad.data_block() + grad.size(), df->data);
-}
-
-void
-MeshMedialPDESolver::gsl_df(const gsl_vector *v, void *params, gsl_vector *df)
-{
-  double dummy;
-  MeshMedialPDESolver::gsl_fdf(v, params, &dummy, df);
-}
-
-*/
-
-
-void
-MeshMedialPDESolver
-::BeginGradientComputation()
-{
-}
-
-void
-MeshMedialPDESolver
-::ComputeAtomVariationalDerivative(MedialAtom *dAtoms)
-{
-}
-
-#ifdef DOITLATER
 
 void
 MeshMedialPDESolver
 ::ComputeRHSGradientMatrix()
 {
   // Fill the elements of matrix W
-  size_t i, j;
+  size_t n = topology->nVertices;
 
   // At this point, the structure of the matrix W has been specified. We have
   // to specify the values. This is done one vertex at a time.
-  for(i = 0; i < topology->nVertices; i++)
+  for(size_t i = 0; i < n; i++)
     {
     // Get a reference to the atom, which contains the current solution
     MedialAtom &a = xAtoms[i];
 
-    // Walk around the vertex
-    EdgeWalkAroundVertex it(topology, i);
-    if(!it.IsOpen())
+    // Split over vertex type
+    if(topology->IsVertexInternal(i))
       {
-      // Compute the laplacian of phi (TODO: is it needed?)
-      double xLapPhi = 0.0;
-      for(j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
-        xLapPhi += A.GetSparseData()[j] * xAtoms[A.GetColIndex()[j]].F;
-      
-      // The first component of the partial derivative is the derivative 
-      // of the term (xFanArea). It is relatively easy to compute.
-      double xRhoOverFanArea = xLapPhi / xVertexGeom[i].xFanArea;
+      // Compute the laplacian of phi (equal to omega)
+      double xLapPhi = xSolution[i + n];
+      double xLapOmega = xAtoms[i].xLapR;
 
       // Scaling factor for cotangent derivatives
       double xScale = 1.5 / xVertexGeom[i].xFanArea;
-      
+
       // Reference to the weight for the fixed vertex
-      SMLVec3d &wii = W[xMapVertexToA[i]];
-      wii.fill(0.0);
+      SMLVec3d &wiiPhi = WX[xIndexAPhi.xSelfIndex[i]];
+      SMLVec3d &wiiOmega = WX[xIndexAOmega.xSelfIndex[i]];
+      wiiPhi.fill(0.0);
+      wiiOmega.fill(0.0);
 
       // Get the value of phi at the center
-      double phiFixed = a.F;
+      double phiFixed = xSolution[i];
+      double omegaFixed = xSolution[i+n];
 
-      for( ; !it.IsAtEnd(); ++it)
+      // Go over the neighbors
+      for(EdgeWalkAroundVertex it(topology, i) ; !it.IsAtEnd(); ++it)
         {
         // The weight vector for the moving vertex
-        SMLVec3d &wij = W[xMapVertexNbrToA[it.GetPositionInMeshSparseArray()]];
+        size_t j = it.MovingVertexId();
+
+        size_t idxMesh = it.GetPositionInMeshSparseArray();
+        size_t idxAPhi = xIndexAPhi.xNbrIndex[idxMesh];
+        size_t idxAOmega = xIndexAOmega.xNbrIndex[idxMesh];
+
+        SMLVec3d &wijPhi = WX[idxAPhi];
+        SMLVec3d &wijOmega = WX[idxAOmega];
 
         // Get the triangle index in front and behind
         size_t ta = it.TriangleAhead(), tb = it.TriangleBehind();
@@ -1036,60 +867,37 @@ MeshMedialPDESolver
         size_t pb = it.FixedVertexIndexInTriangleBehind();
 
         // Get the phi's at the surrounding vertices
-        double phiAhead = xAtoms[it.VertexIdAhead()].F;
-        double phiBehind = xAtoms[it.VertexIdBehind()].F;
-        double phiMoving = xAtoms[it.MovingVertexId()].F;
+        double phiAhead = xSolution[it.VertexIdAhead()];
+        double phiBehind = xSolution[it.VertexIdBehind()];
+        double phiMoving = xSolution[it.MovingVertexId()];
 
-        // Assign the first component of the weight
-        wij = (phiMoving - phiFixed) *
-          (xTriangleGeom[ta].xCotGrad[qa][va] + xTriangleGeom[tb].xCotGrad[qb][vb]);
-        wij += (phiAhead - phiFixed) * xTriangleGeom[ta].xCotGrad[va][va];
-        wij += (phiBehind - phiFixed) * xTriangleGeom[tb].xCotGrad[vb][vb];
+        double omegaAhead = xSolution[n + it.VertexIdAhead()];
+        double omegaBehind = xSolution[n + it.VertexIdBehind()];
+        double omegaMoving = xSolution[n + it.MovingVertexId()];
 
-        // Scale the vector accumulated so far
-        wij *= xScale;
+        SMLVec3d wMF = xTriangleGeom[ta].xCotGrad[qa][va] + xTriangleGeom[tb].xCotGrad[qb][vb];
+        SMLVec3d wAF = xTriangleGeom[ta].xCotGrad[va][va];
+        SMLVec3d wBF = xTriangleGeom[tb].xCotGrad[vb][vb];
+        SMLVec3d dA = 
+          (xTriangleGeom[ta].xAreaGrad[va] + xTriangleGeom[tb].xAreaGrad[vb])
+          / xVertexGeom[i].xFanArea;
 
-        // Assign the second half of the value to the vector
-        wij -= xRhoOverFanArea * 
-          (xTriangleGeom[ta].xAreaGrad[va] + xTriangleGeom[tb].xAreaGrad[vb]);
+        // Compute the weights
+        wijPhi = xScale * (
+          (phiMoving - phiFixed) * wMF + 
+          (phiAhead  - phiFixed) * wAF + 
+          (phiBehind - phiFixed) * wBF )
+          - xLapPhi * dA;
+        wiiPhi -= wijPhi;
 
-        // The cental value can be computed based on the fact that all weights must
-        // add up to zero, so the sum of the derivatives should also be zero
-        // wii += xScale * (phiMoving - phiFixed) *
-        //  (xTriangleGeom[ta].xCotGrad[qa][pa] + xTriangleGeom[tb].xCotGrad[qb][pb]);
-        // wii -= xRhoOverFanArea * xTriangleGeom[ta].xAreaGrad[pa];
-        wii -= wij;
+        // Compute the weights
+        wijOmega = xScale * (
+          (omegaMoving - omegaFixed) * wMF + 
+          (omegaAhead  - omegaFixed) * wAF + 
+          (omegaBehind - omegaFixed) * wBF )
+          - xLapOmega * dA;
+        wiiOmega -= wijOmega;
         }
-      }
-    else
-      {
-      // In this step, we must compute the weights of nu_j (j in Nhd(i)) as
-      // they contribute to the right hand side of the variational PDE. To see
-      // the derivation, look in the March 27, 2006 notebook (red), page with three
-      // stars in the top right corner.
-      
-      // Get references to the differential geometry
-      double (*g)[2] = a.G.xContravariantTensor;
-
-      // Compute the tensor h
-      double p1 = g[0][0] * a.Fu + g[1][0] * a.Fv;
-      double p2 = g[0][1] * a.Fu + g[1][1] * a.Fv;
-      double h11 = - 2 * p1 * p1, h12 = - 2 * p1 * p2, h22 = - 2 * p2 * p2;
-      
-      // Compute the vectors Y1 and Y2
-      SMLVec3d Y1 = h11 * a.Xu + h12 * a.Xv;
-      SMLVec3d Y2 = h12 * a.Xu + h22 * a.Xv;
-
-      // Add up to get the weights in the sparse matrix
-      for(EdgeWalkAroundVertex it(topology, i); !it.IsAtEnd(); ++it)
-        W[xMapVertexNbrToA[it.GetPositionInMeshSparseArray()]] = 
-          xLoopScheme.GetNeighborWeight(0, it) * Y1 +
-          xLoopScheme.GetNeighborWeight(1, it) * Y2;
-
-      // Finally, add the weight for the point itself (-4 \epsilon)
-      W[xMapVertexToA[i]] = 
-        xLoopScheme.GetOwnWeight(0, i) * Y1 + 
-        xLoopScheme.GetOwnWeight(1, i) * Y2;
       }
     }
 }
@@ -1103,15 +911,7 @@ MeshMedialPDESolver
   // Compute the weight matrix for the right hand side computations
   this->ComputeRHSGradientMatrix();
 
-  // We must initialize pardiso
-  xPardiso.SymbolicFactorization(
-    topology->nVertices, xPardisoRowIndex, xPardisoColIndex, A.GetSparseData());
-
-  // In the subsequent iterations, only do the numeric factorization and solve
-  xPardiso.NumericFactorization(A.GetSparseData());
-
-  // Precompute common terms for atom derivatives
-  xTempDerivativeTerms = TempDerivativeTermsArray(topology->nVertices);
+  // Precompute common terms for atom derivatives  
   for(i = 0; i < topology->nVertices; i++)
     xAtoms[i].ComputeCommonDerivativeTerms(xTempDerivativeTerms[i]);
 }
@@ -1122,47 +922,136 @@ MeshMedialPDESolver
 {
   size_t i;
 
+  const TriangleMesh::NeighborMatrix &NB = topology->GetNeighborMatrix();
+  size_t n = topology->nVertices;
+
   // Each variational derivative is a linear system Ax = b. The matrix A
   // should be set correctly from the last call to Solve() and all we have to
   // change are the vectors B.
-  vnl_vector<double> rhs(topology->nVertices, 0.0);
-  vnl_vector<double> soln(topology->nVertices, 0.0);
+  vnl_vector<double> rhs(2 * n, 0.0);
+  vnl_vector<double> soln(2 * n, 0.0);
 
-  // Repeat for each atom
-  for(i = 0; i < topology->nVertices; i++) 
+  // Compute F at boundary atoms, reset at edge atoms
+  for(i = 0; i < n; i++) 
     {
-    // Set up the initial right hand side value
-    rhs[i] = (topology->IsVertexInternal(i)) ? dAtoms[i].xLapR : 0.0;
-
-    // Compute the rest of the right hand side
-    for(size_t j = A.GetRowIndex()[i]; j < A.GetRowIndex()[i+1]; j++)
-      rhs[i] -= dot_product(W[j], dAtoms[A.GetColIndex()[j]].X);
+    dAtoms[i].F = topology->IsVertexInternal(i) ? 
+      0.0 : 2.0 * xAtoms[i].R * dAtoms[i].R;
     }
 
-  // Solve the partial differential equation (dPhi/dVar)
-  xPardiso.Solve(rhs.data_block(), soln.data_block());
-
-  // Compute each atom
-  for(i = 0; i < topology->nVertices; i++) 
+  // Repeat for each atom
+  for(i = 0; i < n; i++) 
     {
-    // For each atom, compute F, Fu, Fv, Xu and Xv
+
+    // First, we need some derivatives
+    // TODO: All of these can be precomputed in SetVariationalBasis
     MedialAtom &da = dAtoms[i];
-    da.F = soln[i];
-    da.Fu = xLoopScheme.GetPartialDerivative(0, i, soln.data_block());
-    da.Fv = xLoopScheme.GetPartialDerivative(1, i, soln.data_block());
     da.Xu = xLoopScheme.Xu(i, dAtoms);
     da.Xv = xLoopScheme.Xv(i, dAtoms);
+    da.Fv = xLoopScheme.Fv(i, dAtoms);
     da.Xuu = da.Xuv = da.Xvv = SMLVec3d(0.0); 
 
     // Compute the metric tensor derivatives of the atom
     xAtoms[i].ComputeMetricTensorDerivatives(dAtoms[i]);
 
+    // Compute the right hand side expression
+    if(topology->IsVertexInternal(i))
+      {
+      // For internal vertices, the derivative wrt X is encoded in WX
+      rhs[i]   = dot_product(dAtoms[i].X, WX[xIndexAPhi.xSelfIndex[i]]);
+      SMLVec3d wx = WX[xIndexAOmega.xSelfIndex[i]];
+      rhs[i+n] = dot_product(dAtoms[i].X, WX[xIndexAOmega.xSelfIndex[i]]);
+
+      // Go over the neighbors of i
+      for(size_t k = NB.GetRowIndex()[i]; k < NB.GetRowIndex()[i+1]; k++)
+        {
+        size_t j = NB.GetColIndex()[k];
+        SMLVec3d &dX = dAtoms[j].X;
+        rhs[i]   += dot_product(dX, WX[xIndexAPhi.xNbrIndex[k]]);
+        rhs[i+n] += dot_product(dX, WX[xIndexAOmega.xNbrIndex[k]]);        
+        }
+
+      // There is also a derivative wrt rho
+      rhs[i+n] -= dAtoms[i].xLapR;
+      }
+
+    // For edge vertices things are a bit more complicated
+    else
+      {
+      // The top part is simple, of course (derivative of Tau)
+      rhs[i] = - dAtoms[i].F;
+
+      // The bottom part is the derivative of that hideous square root
+      rhs[i+n] = - (
+        Wfu[i].wgt_g12 * dAtoms[i].G.xCovariantTensor[0][1] + 
+        Wfu[i].wgt_g22 * dAtoms[i].G.xCovariantTensor[1][1] +
+        Wfu[i].wgt_g   * dAtoms[i].G.g +
+        Wfu[i].wgt_f   * dAtoms[i].F +
+        Wfu[i].wgt_fv  * dAtoms[i].Fv);
+      }
+    }
+
+  // Solve the partial differential equation (dPhi/dVar)
+  xPardiso.Solve(rhs.data_block(), soln.data_block());
+
+  
+
+  /* // ( a little test code )
+
+  // At this point, test the gradient computation
+  double eps = 1.0e-4;
+  MedialAtom *m1 = new MedialAtom[n];
+  MedialAtom *m2 = new MedialAtom[n];
+  for(size_t i = 0; i < n; i++)
+    {
+    m1[i].X     = xAtoms[i].X     - eps * dAtoms[i].X;
+    m1[i].R     = xAtoms[i].R     - eps * dAtoms[i].R;
+    m1[i].xLapR = xAtoms[i].xLapR - eps * dAtoms[i].xLapR;
+    m1[i].F = m1[i].R * m1[i].R;
+
+    m2[i].X     = xAtoms[i].X     + eps * dAtoms[i].X;
+    m2[i].R     = xAtoms[i].R     + eps * dAtoms[i].R;
+    m2[i].xLapR = xAtoms[i].xLapR + eps * dAtoms[i].xLapR;
+    m2[i].F = m2[i].R * m2[i].R;
+    }
+
+  MeshMedialPDESolver s1;
+  s1.SetMeshTopology(topology, m1);
+  s1.SolveEquation();
+
+  MeshMedialPDESolver s2;
+  s2.SetMeshTopology(topology, m2);
+  s2.SolveEquation();
+
+  Vec q1 = s1.M.MultiplyByVector(xSolution) - s1.xRHS;
+  Vec q2 = s2.M.MultiplyByVector(xSolution) - s2.xRHS;
+  Vec dqApp = (q2-q1) / (2 * eps);
+
+  cout << "Error: " << (dqApp - rhs).inf_norm() << endl;
+
+  Vec p1 = s1.xSolution;
+  Vec p2 = s2.xSolution;
+  Vec dpApp = (p2-p1) / (2 * eps);
+
+  */ 
+
+  // Compute each atom
+  for(i = 0; i < n; i++) 
+    {
+    MedialAtom &da = dAtoms[i];
+    
+    // For each atom, compute F, Fu, Fv
+    da.F = - soln[i];
+    da.Fu = - xLoopScheme.GetPartialDerivative(0, i, soln.data_block());
+    da.Fv = - xLoopScheme.GetPartialDerivative(1, i, soln.data_block());
+
     // Compute the derivatives of the boundary nodes
     xAtoms[i].ComputeBoundaryAtomDerivatives(dAtoms[i], xTempDerivativeTerms[i]);
     }
+
+
 }
 
-#endif
+
 
 /*
 void

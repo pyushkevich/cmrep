@@ -196,13 +196,19 @@ SubdivisionMedialModelIO
   if(nSubs == -1)
     throw ModelIOException("Missing SubdivisionLevel in model file");
 
+  // Get the model subtype
+  string subtype = R["Grid.Model.SolverType"]["PDE"];
+  
+  // Get the number of components
+  size_t nc = (subtype == "PDE") ? 5 : 4;
+
   // Generate a mesh level from the model
   SubdivisionSurface::MeshLevel mesh;
   SubdivisionSurface::ImportLevelFromVTK(poly, mesh);
 
   // Read coefficient data. For both PDE and brute force meshes, the
   // coefficients are XYZ + [R|Rho], so we can pack them in accordingly
-  vnl_vector<double> C(mesh.nVertices * 4, 0.0);
+  vnl_vector<double> C(mesh.nVertices * nc, 0.0);
   vnl_vector<double> u(mesh.nVertices, 0.0), v(mesh.nVertices, 0.0);
 
   // Get the texture arrays
@@ -212,7 +218,7 @@ SubdivisionMedialModelIO
   for(i = 0; i < mesh.nVertices; i++)
     {
     for(size_t d = 0; d < 3; d++)
-      C[i * 4 + d] = poly->GetPoint(i)[d];
+      C[i * nc + d] = poly->GetPoint(i)[d];
 
     // If the u, v arrays are not present, we use x, y coordinates as u, v
     if(uv)
@@ -222,24 +228,28 @@ SubdivisionMedialModelIO
       }
     else
       {
-      u[i] = C[i * 4];
-      v[i] = C[i * 4 + 1];
+      u[i] = C[i * nc];
+      v[i] = C[i * nc + 1];
       }
     }
-
-  // Get the model subtype
-  string subtype = R["Grid.Model.SolverType"]["PDE"];
 
   // Branch by model type (read rho or radius)
   if(subtype == "PDE")
   {
     // Get the default rho (constant)
-    double xDefaultRho = R["Grid.Model.Coefficient.ConstantRho"][-0.25];
+    double xDefaultRho = R["Grid.Model.Coefficient.ConstantRho"][0.0];
     vtkDataArray *daRho = poly->GetPointData()->GetScalars("Rho");
+
+    // Get the default edge radius, tau (constant)
+    double xDefaultTau = R["Grid.Model.Coefficient.ConstantTau"][0.0];
+    vtkDataArray *daTau = poly->GetPointData()->GetScalars("Radius");
 
     // Copy to the coefficient vector
     for(i = 0; i < mesh.nVertices; i++)
-      C[4 * i + 3] = daRho ? daRho->GetTuple1(i) : xDefaultRho;
+      {
+      C[nc * i + 3] = daRho ? daRho->GetTuple1(i) : xDefaultRho;
+      C[nc * i + 4] = daTau ? daTau->GetTuple1(i) : xDefaultTau;
+      }
 
     // Create the medial model
     PDESubdivisionMedialModel *smm = new PDESubdivisionMedialModel();
@@ -339,23 +349,20 @@ SubdivisionMedialModelIO
   points->Allocate(model->mlCoefficient.nVertices);
   poly->SetPoints(points);
 
-  // Set an auxilliary array
-  vtkDoubleArray *xAux = vtkDoubleArray::New();
-  xAux->SetNumberOfComponents(1);
-  xAux->SetNumberOfTuples(model->mlCoefficient.nVertices);
-  poly->GetPointData()->AddArray(xAux);
-
   // Set the UV (texture coordinate) array
   vtkDoubleArray *xUV = vtkDoubleArray::New();
   xUV->SetNumberOfComponents(2);
   xUV->SetNumberOfTuples(model->mlCoefficient.nVertices);
   poly->GetPointData()->SetTCoords(xUV);
 
+  // Get the number of components
+  size_t nc = model->GetNumberOfComponents();
+
   // Set the values of X (for now this is the same for all models)
   for(size_t i = 0; i < model->mlCoefficient.nVertices; i++)
   {
     // Set the point's coordinates
-    points->InsertNextPoint(model->xCoefficients.data_block() + i * 4);
+    points->InsertNextPoint(model->xCoefficients.data_block() + i * nc);
 
     // Set the texture coordinates
     xUV->SetTuple2(i, model->uCoeff[i], model->vCoeff[i]);
@@ -369,18 +376,36 @@ SubdivisionMedialModelIO
 
   if(mpde)
   {
-    // Allocate the array for rho
-    xAux->SetName("Rho");
+    // Set the auxilliary arrays
+    vtkDoubleArray *xRad = vtkDoubleArray::New();
+    xRad->SetNumberOfComponents(1);
+    xRad->SetNumberOfTuples(model->mlCoefficient.nVertices);
+    xRad->SetName("Radius");
+    poly->GetPointData()->AddArray(xRad);
 
-    // Set the values of X and Rho
+    // Allocate the array for rho
+    vtkDoubleArray *xRho = vtkDoubleArray::New();
+    xRho->SetNumberOfComponents(1);
+    xRho->SetNumberOfTuples(model->mlCoefficient.nVertices);
+    xRho->SetName("Rho");
+    poly->GetPointData()->AddArray(xRho);
+
+    // Set the values of X, Rad and Rho
     for(size_t i = 0; i < model->mlCoefficient.nVertices; i++)
     {
       // Set rho
-      xAux->SetTuple1(i, model->xCoefficients[i * 4 + 3]);
+      xRho->SetTuple1(i, model->xCoefficients[i * nc + 3]);
+      xRad->SetTuple1(i, model->xCoefficients[i * nc + 4]);
     }
   }
   else if(mbf)
   {
+    // Set an auxilliary array
+    vtkDoubleArray *xAux = vtkDoubleArray::New();
+    xAux->SetNumberOfComponents(1);
+    xAux->SetNumberOfTuples(model->mlCoefficient.nVertices);
+    poly->GetPointData()->AddArray(xAux);
+
     // Allocate the array for rho
     xAux->SetName("Radius");
 
@@ -388,7 +413,7 @@ SubdivisionMedialModelIO
     for(size_t i = 0; i < model->mlCoefficient.nVertices; i++)
     {
       // Set rho
-      xAux->SetTuple1(i, model->xCoefficients[i * 4 + 3]);
+      xAux->SetTuple1(i, model->xCoefficients[i * nc + 3]);
     }
   }
   else throw ModelIOException("Total nonsense!");
@@ -407,10 +432,12 @@ SubdivisionMedialModelIO
   writer->SetFileTypeToBinary();
   writer->Update();
 
+  // Delete all of the arrays
+  for(size_t i = 0; i < poly->GetPointData()->GetNumberOfArrays(); i++)
+    poly->GetPointData()->GetArray(i)->Delete();
+
   // Clean up
   writer->Delete();
-  xAux->Delete();
-  xUV->Delete();
   points->Delete();
   poly->Delete();
 }

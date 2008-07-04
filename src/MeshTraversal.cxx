@@ -247,7 +247,7 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
     // Insert the half-edge and check for uniqueness
     pair<TriangleMap::iterator, bool> rc = tmap.insert(make_pair(he, trep));
     if(!rc.second)
-      throw string("Half-edge appears twice in the mesh, that is illegal!");
+      throw exception("Half-edge appears twice in the mesh, that is illegal!");
   }
 
   // Store the triangle
@@ -645,11 +645,11 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
         // Mark each of the neighbor edges
         size_t enbr[] = {eik, eil, ejk, ejl};
         for(size_t p = 0; p < 4; p++)
-        if(edges[enbr[p]].mark == 0)
-          {
-          edges[enbr[p]].mark = 1;
-          edge_que.push_back(enbr[p]);
-          }
+          if(edges[enbr[p]].mark == 0)
+            {
+            edges[enbr[p]].mark = 1;
+            edge_que.push_back(enbr[p]);
+            }
         }
       }
     }

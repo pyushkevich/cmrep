@@ -273,6 +273,12 @@ MedialAtom::ComputeBoundaryAtomDerivatives(
   dAtom.xGradRMagSqr = z1iRi * dt.Ru + z2iRi * dt.Rv 
     + 2.0 * (dt.g1iRi * Pu + dt.g2iRi * Pv);
 
+  double test = 
+    z11 * dt.Ru * dt.Ru + 2 * g11 * Pu * dt.Ru +
+    z22 * dt.Rv * dt.Rv + 2 * g22 * Pv * dt.Rv +
+    2.0 * (z12 * dt.Ru * dt.Rv + g12 * Pu * dt.Rv + g12 * dt.Ru * Pv);
+
+
   // Compute the 
 
   // Address the edge case first

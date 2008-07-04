@@ -80,7 +80,7 @@ private:
     double xLapR;
     double R;
     VariationalBasisAtomData() 
-      : X(0.0), Xu(0.0), Xv(0.0), Xuu(0.0), Xuv(0.0), Xvv(0.0), xLapR(0.0) {}
+      : X(0.0), Xu(0.0), Xv(0.0), Xuu(0.0), Xuv(0.0), Xvv(0.0), xLapR(0.0), R(0.0) {}
   };
 
   // Matrix storing all data associated with a variational basis

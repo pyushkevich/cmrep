@@ -117,12 +117,21 @@ public:
  * some applications, i.e., where the points are unevenly spaced over the
  * surface. However, the center of rotation is not that important, and simply
  * needs to be somewhere close to the object
+ *
+ * The constructor takes as a parameter the number of components per point
  */
 class PointArrayAffineTransformDescriptor : public AffineTransformDescriptor
 {
 public:
   typedef vnl_vector<double> Vec;
   typedef vnl_matrix<double> Mat;
+
+  /** Constructor, pass #components */
+  PointArrayAffineTransformDescriptor(size_t nComponents)
+    : AffineTransformDescriptor()
+    {
+    this->nc = nComponents;
+    }
 
   /** 
    * Get the center of rotation given a coefficient vector. This is the first
@@ -131,9 +140,9 @@ public:
   SMLVec3d GetCenterOfRotation(const Vec &C) const
     { 
     SMLVec3d xCenter(0.0);
-    for(size_t i = 0; i < C.size(); i+=4)
+    for(size_t i = 0; i < C.size(); i+=nc)
       xCenter += C.extract(3, i);
-    return xCenter * (4.0 / C.size());
+    return xCenter * (nc * 1.0 / C.size());
     }
 
   /** 
@@ -148,7 +157,7 @@ public:
     SMLVec3d v = ctr + b;
 
     // For the rest of the coefficients, multiply by A
-    for(size_t i = 0; i < C.size(); i+=4)
+    for(size_t i = 0; i < C.size(); i+=nc)
       CPrime.update(A * (C.extract(3, i) - ctr) + v, i);
 
     return CPrime;
@@ -171,7 +180,7 @@ public:
     Vec dCPrime(C.size(), 0.0);
 
     // Apply the variation in the rest of the coefficients
-    for(size_t i = 0; i < C.size(); i+=4)
+    for(size_t i = 0; i < C.size(); i+=nc)
       dCPrime.update(dA * (C.extract(3, i) - ctr) + db, i);
 
     return dCPrime;
@@ -188,11 +197,15 @@ public:
     Vec dCPrime = dC;
 
     // Apply the variation in the rest of the coefficients
-    for(size_t i = 0; i < dC.size(); i+=4)
+    for(size_t i = 0; i < dC.size(); i+=nc)
       dCPrime.update(A * dC.extract(3, i), i);
 
     return dCPrime;
     }
+
+private:
+  size_t nc;
+
 };
 
 #endif // __AffineTransformDescriptor_h_

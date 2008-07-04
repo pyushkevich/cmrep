@@ -3035,7 +3035,8 @@ void MedialOptimizationProblem::DumpGradientMesh()
   const SubdivisionSurface::MeshLevel &mctl = model->GetCoefficientMesh();
 
   // Check that the number of parameters matches
-  if(xCoeff->GetNumberOfCoefficients() != mctl.nVertices * 4)
+  size_t nc = model->GetNumberOfComponents();
+  if(xCoeff->GetNumberOfCoefficients() != mctl.nVertices * nc)
     throw string("Coefficient mapping does not support DumpGradientMesh");
 
   // Save the cm-rep file for this model
@@ -3067,14 +3068,14 @@ void MedialOptimizationProblem::DumpGradientMesh()
   string nameX = string("X_NET");
   gradXnet->SetName(nameX.c_str());
   gradXnet->SetNumberOfComponents(3);
-  gradXnet->SetNumberOfTuples(nCoeff / 4);
+  gradXnet->SetNumberOfTuples(nCoeff / nc);
   poly->GetPointData()->AddArray(gradXnet);
   
   vtkFloatArray *gradRnet = vtkFloatArray::New();
   string nameR = string("R_NET");
   gradRnet->SetName(nameR.c_str());
   gradRnet->SetNumberOfComponents(1);
-  gradRnet->SetNumberOfTuples(nCoeff / 4);
+  gradRnet->SetNumberOfTuples(nCoeff / nc);
   poly->GetPointData()->AddArray(gradRnet);
 
   // For each term, generate a new data array
@@ -3084,24 +3085,24 @@ void MedialOptimizationProblem::DumpGradientMesh()
     string nameX = string("X_") + xTerms[iTerm]->GetShortName();
     gradX->SetName(nameX.c_str());
     gradX->SetNumberOfComponents(3);
-    gradX->SetNumberOfTuples(nCoeff / 4);
+    gradX->SetNumberOfTuples(nCoeff / nc);
     poly->GetPointData()->AddArray(gradX);
     
     vtkFloatArray *gradR = vtkFloatArray::New();
     string nameR = string("R_") + xTerms[iTerm]->GetShortName();
     gradR->SetName(nameR.c_str());
     gradR->SetNumberOfComponents(1);
-    gradR->SetNumberOfTuples(nCoeff / 4);
+    gradR->SetNumberOfTuples(nCoeff / nc);
     poly->GetPointData()->AddArray(gradR);
 
-    for(size_t i = 0; i < nCoeff / 4; i++)
+    for(size_t i = 0; i < nCoeff / nc; i++)
       {
       SMLVec3d dX(
-        xLastGradientPerTerm[iTerm][i * 4 + 0],
-        xLastGradientPerTerm[iTerm][i * 4 + 1],
-        xLastGradientPerTerm[iTerm][i * 4 + 2]);
+        xLastGradientPerTerm[iTerm][i * nc + 0],
+        xLastGradientPerTerm[iTerm][i * nc + 1],
+        xLastGradientPerTerm[iTerm][i * nc + 2]);
       SMLVec3d wdX = xWeights[iTerm] * dX;
-      double dR = xLastGradientPerTerm[iTerm][i * 4 + 3];
+      double dR = xLastGradientPerTerm[iTerm][i * nc + 3];
       double wdR = xWeights[iTerm] * dR;
 
       gradX->SetTuple3(i, wdX[0], wdX[1], wdX[2]);
