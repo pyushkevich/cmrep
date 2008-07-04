@@ -31,11 +31,20 @@ IF(USE_PARDISO)
     # On Windows, the library can only be loaded dynamically
     ADD_DEFINITIONS(-DHAVE_PARDISO -DPARDISO_DYNLOAD)  
   ELSE(WIN32)
+
+    # Search for PARDISO
     FIND_LIBRARY(PARDISO_LIB pardiso DOC "The location of the PARDISO shared library")
     IF(PARDISO_LIB)
       ADD_DEFINITIONS(-DHAVE_PARDISO)
       LINK_LIBRARIES(${PARDISO_LIB})
     ENDIF(PARDISO_LIB)  
+
+    # On Linux, Lapack is also required
+    INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
+    IF(LAPACK_FOUND)
+      LINK_LIBRARIES(${LAPACK_LIBS})
+    ENDIF(LAPACK_FOUND)
+
   ENDIF(WIN32)
 ELSE(USE_PARDISO)
   ADD_DEFINITIONS(-UHAVE_PARDISO)

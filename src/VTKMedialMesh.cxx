@@ -14,7 +14,7 @@
 #include "OptimizationTerms.h"
 #include "CoefficientMapping.h"
 
-vtkFloatArray *AddMedialScalarField(vtkPolyData *target, GenericMedialModel *model, char *name)
+vtkFloatArray *AddMedialScalarField(vtkPolyData *target, GenericMedialModel *model, const char *name)
 {
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetName(name);
@@ -24,7 +24,7 @@ vtkFloatArray *AddMedialScalarField(vtkPolyData *target, GenericMedialModel *mod
   return array;
 }
 
-vtkFloatArray *AddBndScalarField(vtkPolyData *target, GenericMedialModel *model, char *name)
+vtkFloatArray *AddBndScalarField(vtkPolyData *target, GenericMedialModel *model, const char *name)
 {
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetName(name);
@@ -34,7 +34,7 @@ vtkFloatArray *AddBndScalarField(vtkPolyData *target, GenericMedialModel *model,
   return array;
 }
 
-vtkFloatArray *AddBndTriScalarField(vtkPolyData *target, GenericMedialModel *model, char *name)
+vtkFloatArray *AddBndTriScalarField(vtkPolyData *target, GenericMedialModel *model, const char *name)
 {
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetName(name);
@@ -44,7 +44,7 @@ vtkFloatArray *AddBndTriScalarField(vtkPolyData *target, GenericMedialModel *mod
   return array;
 }
 
-vtkFloatArray *AddMedialVectorField(vtkPolyData *target, GenericMedialModel *model, char *name, size_t nc = 3)
+vtkFloatArray *AddMedialVectorField(vtkPolyData *target, GenericMedialModel *model, const char *name, size_t nc = 3)
 {
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetName(name);

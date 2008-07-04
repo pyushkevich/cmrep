@@ -1,4 +1,5 @@
 #include "MeshTraversal.h"
+#include "MedialException.h"
 #include <algorithm>
 
 using namespace std;
@@ -247,7 +248,7 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
     // Insert the half-edge and check for uniqueness
     pair<TriangleMap::iterator, bool> rc = tmap.insert(make_pair(he, trep));
     if(!rc.second)
-      throw exception("Half-edge appears twice in the mesh, that is illegal!");
+      throw MedialModelException("Half-edge appears twice in the mesh, that is illegal!");
   }
 
   // Store the triangle
