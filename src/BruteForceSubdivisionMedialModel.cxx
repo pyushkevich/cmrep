@@ -29,7 +29,7 @@ BruteForceSubdivisionMedialModel
 
 void
 BruteForceSubdivisionMedialModel
-::ComputeAtoms(const double *xHint)
+::ComputeAtoms(bool flagAllowErrors, const double *xHint)
 {
   size_t i;
 
@@ -52,7 +52,7 @@ BruteForceSubdivisionMedialModel
       }
 
     // Negative R should be disallowed
-    if(a.R < 0.0)
+    if(!flagAllowErrors && a.R < 0.0)
       throw MedialModelException("Negative F in BruteForceModel");
     }
 
@@ -93,7 +93,7 @@ BruteForceSubdivisionMedialModel
       double g12 = a.G.xCovariantTensor[0][1];
       double g22 = a.G.xCovariantTensor[1][1];
       double z = g22 - a.Rv * a.Rv;
-      if(z < 0)
+      if(!flagAllowErrors && z < 0)
         throw MedialModelException("Excessive Rv in BruteForceModel");
 
       // we store the square root of z for further derivative compn
@@ -106,7 +106,7 @@ BruteForceSubdivisionMedialModel
 
     a.ComputeBoundaryAtomsUsingR(!mlAtom.IsVertexInternal(i));
 
-    if(!a.flagValid)
+    if(!flagAllowErrors && !a.flagValid)
       throw MedialModelException("Invalid Atom in BruteForceModel");
     }
 }

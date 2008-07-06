@@ -78,6 +78,7 @@ void ExportMedialMeshToVTK(
   vtkFloatArray *lMetric = AddMedialScalarField(pMedial, xModel, "Covariant Tensor Determinant");
   vtkFloatArray *lRho = AddMedialScalarField(pMedial, xModel, "Rho Function");
   vtkFloatArray *lRadius = AddMedialScalarField(pMedial, xModel, "Radius Function");
+  vtkFloatArray *lPhi = AddMedialScalarField(pMedial, xModel, "Phi");
   vtkFloatArray *lDummy1 = AddMedialScalarField(pMedial, xModel, "Dummy1");
   vtkFloatArray *lBending = AddMedialScalarField(pMedial, xModel, "Bending Energy");
   vtkFloatArray *lRegularity = AddMedialScalarField(pMedial, xModel, "Regularity Penalty");
@@ -98,11 +99,14 @@ void ExportMedialMeshToVTK(
 
   // A computation of the Laplace basis
   vtkFloatArray *lBasis = AddMedialVectorField(pMedial, xModel, "LaplaceBasis", 10); 
-  MeshBasisCoefficientMapping xBasMap(
-    xModel->GetIterationContext()->GetMedialMesh(), 10, 4);
-  for(size_t i = 0; i < xModel->GetNumberOfAtoms(); i++)
-    for(size_t j = 0; j < 10; j++)
-      lBasis->SetComponent(i, j, xBasMap.GetBasisComponent(j, i));
+  if(xModel->GetNumberOfAtoms() < 1000)
+    {
+    MeshBasisCoefficientMapping xBasMap(
+      xModel->GetIterationContext()->GetMedialMesh(), 10, 4);
+    for(size_t i = 0; i < xModel->GetNumberOfAtoms(); i++)
+      for(size_t j = 0; j < 10; j++)
+        lBasis->SetComponent(i, j, xBasMap.GetBasisComponent(j, i));
+    }
 
   vtkFloatArray *lContraOffDiag = 
     AddMedialScalarField(pMedial, xModel, "Off Diagonal Term of Contravariant MT");
@@ -140,6 +144,7 @@ void ExportMedialMeshToVTK(
     lMetric->SetTuple1(i, a.G.g);
     lRadius->SetTuple1(i, a.R);
     lRho->SetTuple1(i, a.xLapR);
+    lPhi->SetTuple1(i, a.F);
 
     lCoordU->SetTuple1(i, a.u);
     lCoordV->SetTuple1(i, a.v);
@@ -237,6 +242,7 @@ void ExportMedialMeshToVTK(
   lSpoke2->Delete();
   lSpoke1->Delete();
   lBasis->Delete();
+  lPhi->Delete();
 }
 
 vtkUnstructuredGrid *

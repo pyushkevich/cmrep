@@ -32,7 +32,7 @@ public:
   virtual Vec GetHintArray() const;
 
   /** Compute the atoms from given a set of coefficients.  */
-  void ComputeAtoms(const double *xHint = NULL);
+  void ComputeAtoms(bool flagAllowErrors, const double *xHint = NULL);
 
   /** 
    * Specify the set of directions (variations) for repeated gradient computations

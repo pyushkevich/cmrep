@@ -62,7 +62,7 @@ public:
   Vec GetHintArray() const;
 
   /** Compute the PDE solution and the atoms */
-  void ComputeAtoms(const double *xHint = NULL)
+  void ComputeAtoms(bool flagAllowErrors, const double *xHint = NULL)
     { this->Solve(xHint); }
 
   /** 

@@ -157,7 +157,7 @@ void MedialPDE::LoadFromParameterFile(const char *file)
 
 void MedialPDE::Solve()
 {
-  xMedialModel->ComputeAtoms();
+  xMedialModel->ComputeAtoms(false);
 }
 
 /*
@@ -811,7 +811,7 @@ void MedialPDE
 
   // After optimization, apply the best result
   xMedialModel->SetCoefficientArray(xMapping->Apply(xInitialCoeff, xSolution));
-  xMedialModel->ComputeAtoms();
+  xMedialModel->ComputeAtoms(true);
 
   // Delete the mapping
   delete xMapping;
@@ -864,7 +864,7 @@ void MedialPDE
 
   // After optimization, apply the best result
   xMedialModel->SetCoefficientArray(xCoeffMapping.Apply(xInitialCoeff, xSolution));
-  xMedialModel->ComputeAtoms();
+  xMedialModel->ComputeAtoms(true);
 }
 
 
@@ -907,7 +907,7 @@ void MedialPDE
 
   // After optimization, apply the best result
   xMedialModel->SetCoefficientArray(xCoeffMapping.Apply(xInitialCoeff, xSolution));
-  xMedialModel->ComputeAtoms();
+  xMedialModel->ComputeAtoms(true);
 }
 
 
@@ -1080,7 +1080,7 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
     xMedialModel->SetCoefficientArray(xRotatedCoeff[f]);
 
     // Compute the boundary
-    xMedialModel->ComputeAtoms();
+    xMedialModel->ComputeAtoms(true);
 
     // Create a solution object and a volume match term
     SolutionData SRot(xMedialModel->GetIterationContext(), xMedialModel->GetAtomArray());
@@ -1098,7 +1098,7 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
 
   // Use the best surface as the new surface
   xMedialModel->SetCoefficientArray(xRotatedCoeff[iBestSurface]);
-  xMedialModel->ComputeAtoms();
+  xMedialModel->ComputeAtoms(true);
 
   // Test the results
   SolutionData S1(xMedialModel->GetIterationContext(), xMedialModel->GetAtomArray());
@@ -1492,7 +1492,7 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
     smmNew->SetPhi(phiNew);
 
     // Solve the PDE without hints
-    smmNew->ComputeAtoms();
+    smmNew->ComputeAtoms(true);
     }
   else
     {
@@ -1517,7 +1517,7 @@ void SubdivisionMPDE::Remesh()
   // Get the coefficient-level mesh
   SubdivisionSurface::MeshLevel mlCoeffOld = *smm->GetCoefficientMesh(); 
 
-  size_t nc = smm->GetNumberOfCoefficients();
+  size_t nc = smm->GetNumberOfComponents();
 
   // We need to get a list of coordinates for remeshing
   typedef vnl_vector_fixed<double, 3> Vec;
@@ -1821,7 +1821,7 @@ void CartesianMPDE::SetGridSize(
     cmmnew->ComputeAtoms(xHint.data_block());
     }
   else
-    cmmnew->ComputeAtoms();
+    cmmnew->ComputeAtoms(true);
 
   // Get rid of the old surface and model
   this->SetMedialModel(cmmnew);
@@ -1863,7 +1863,7 @@ void CartesianMPDE::SetNumberOfCoefficients(unsigned int m, unsigned int n)
     xCartesianMedialModel->GetMedialSurface());
   xSurface->SetNumberOfCoefficients(m, n);
   xCartesianMedialModel->AdoptMedialSurface(xSurface);
-  xCartesianMedialModel->ComputeAtoms();
+  xCartesianMedialModel->ComputeAtoms(true);
 }
 
 vnl_vector<double> GetDoubleVectorInStides(const void *p, size_t n, size_t sz)
@@ -1967,7 +1967,7 @@ void CartesianMPDE::ImportFromPointData(
   // Compute the atoms, this may produce a bogus model, but that is OK
   try 
     {
-    xMedialModel->ComputeAtoms();
+    xMedialModel->ComputeAtoms(false);
     } 
   catch(MedialModelException &)
     {
@@ -2033,7 +2033,7 @@ void CartesianMPDE::ImportFromPointData(
 
     // Now, use the actual rho supplied to us
     xSurface->FitToData(k, 3, ul.data_block(), vl.data_block(), wl.data_block());
-    xCartesianMedialModel->ComputeAtoms();
+    xCartesianMedialModel->ComputeAtoms(false);
     }
 
   // Now, the model's XYZ geometry should be pretty reasonable, and we can
@@ -2151,7 +2151,7 @@ void CartesianMPDE::LoadFromDiscreteMRep(const char *file, double xRhoInit)
 
   // Compute the atoms
   try {
-    xCartesianMedialModel->ComputeAtoms();
+    xCartesianMedialModel->ComputeAtoms(false);
     this->SaveToParameterFile("import01.cmrep");
   }
   catch(...) {
@@ -2181,7 +2181,7 @@ void CartesianMPDE::LoadFromDiscreteMRep(const char *file, double xRhoInit)
 
     // Fit the rho function to a constant or by default, zero
     xSurface->FitToData(xAtoms.size(), 3, uu, vv, rr);
-    xCartesianMedialModel->ComputeAtoms();
+    xCartesianMedialModel->ComputeAtoms(false);
 
     // Fit to the radius values to get the radius field (temporary)
     xSurface->FitToData(xAtoms.size(), 3, uu, vv, rd);
@@ -2243,7 +2243,7 @@ void CartesianMPDE::GenerateSampleModel()
   xSurface->FitToData(nPoints, 3, uPoints, vPoints, rhoPoints);
 
   // Generate the atoms
-  xCartesianMedialModel->ComputeAtoms();
+  xCartesianMedialModel->ComputeAtoms(false);
 }
 
 

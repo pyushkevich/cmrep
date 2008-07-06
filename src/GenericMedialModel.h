@@ -141,7 +141,7 @@ public:
    * this step involves solving the PDE. The optional parameter is the hint
    * array that may increase the efficiency of the computation
    */
-  virtual void ComputeAtoms(const double *xHint = NULL) = 0;
+  virtual void ComputeAtoms(bool flagAllowErrors, const double *xHint = NULL) = 0;
 
   /** 
    * Specify the set of directions (variations) for repeated gradient computations

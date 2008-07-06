@@ -958,7 +958,7 @@ CartesianMedialModel
   vnl_vector<double> hint = this->GetHintArray();
   try
     {
-    this->ComputeAtoms();
+    this->ComputeAtoms(false);
     }
   catch(...)
     {

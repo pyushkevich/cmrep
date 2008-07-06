@@ -509,18 +509,18 @@ int TestBasisFunctionVariation(const char *fnMPDE)
 
     // Evaluate the surface at finite differences
     model->SetCoefficientArray(vm[i]->Apply(C0, P + eps * dP));
-    model->ComputeAtoms();
+    model->ComputeAtoms(true);
     mp.GetMedialSurface()->Evaluate(0.5, 0.5, f1.data_block());
 
     model->SetCoefficientArray(vm[i]->Apply(C0, P - eps * dP));
-    model->ComputeAtoms();
+    model->ComputeAtoms(true);
     mp.GetMedialSurface()->Evaluate(0.5, 0.5, f2.data_block());
 
     dfNum = (f1 - f2) * 0.5 / eps;
 
     // Same evaluation using analytical derivative
     model->SetCoefficientArray(vm[i]->Apply(C0, P));
-    model->ComputeAtoms();
+    model->ComputeAtoms(true);
 
     // Get the variation corresponding to dP
     IHyperSurface2D *xVariation = mp.GetMedialSurface()->GetVariationSurface(
@@ -774,7 +774,7 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
   
   // Define a test image (this in not a real thing)
   GenericMedialModel *model = mp.GetMedialModel();
-  model->ComputeAtoms();
+  model->ComputeAtoms(true);
 
   SMLVec3d C = model->GetCenterOfRotation();
   double rLogSum = 0;

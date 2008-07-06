@@ -204,7 +204,7 @@ int TestGradientComputation(
 
   // Solve the medial PDE for all these variations
   tInitialSolver.Start();
-  xSolver->ComputeAtoms();
+  xSolver->ComputeAtoms(false);
   tInitialSolver.Stop();
 
   // Make three copies of the atom array
@@ -253,27 +253,27 @@ int TestGradientComputation(
         {
         // Solve for the forward difference
         xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + 1.5 * eps * xVar));
-        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        tCentral.Start(); xSolver->ComputeAtoms(false, xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A1);
 
         // Solve for the forward difference
         xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 + 0.5 * eps * xVar));
-        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        tCentral.Start(); xSolver->ComputeAtoms(false, xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A2);
 
         // Solve for the backward difference
         xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - 0.5 * eps * xVar));
-        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        tCentral.Start(); xSolver->ComputeAtoms(false, xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A3);
 
         // Solve for the backward difference
         xSolver->SetCoefficientArray(xMapping->Apply(C0, P0 - 1.5 * eps * xVar));
-        tCentral.Start(); xSolver->ComputeAtoms(xHint.data_block()); tCentral.Stop();
+        tCentral.Start(); xSolver->ComputeAtoms(false, xHint.data_block()); tCentral.Stop();
         std::copy(xSolver->GetAtomArray(), xSolver->GetAtomArray() + nAtoms, A4);
 
         // Revert to original values
         xSolver->SetCoefficientArray(xMapping->Apply(C0, P0));
-        xSolver->ComputeAtoms(xHint.data_block());
+        xSolver->ComputeAtoms(false, xHint.data_block());
 
         // Exit loop 
         break;

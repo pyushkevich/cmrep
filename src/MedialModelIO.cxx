@@ -120,7 +120,7 @@ CartesianMedialModelIO::ReadModel(Registry &R)
 
   // Pass the registry to the model to do the rest
   cmm->ReadFromRegistry(R);
-  cmm->ComputeAtoms();
+  cmm->ComputeAtoms(true);
 
   // Return the model
   return cmm;
@@ -241,7 +241,7 @@ SubdivisionMedialModelIO
     vtkDataArray *daRho = poly->GetPointData()->GetScalars("Rho");
 
     // Get the default edge radius, tau (constant)
-    double xDefaultTau = R["Grid.Model.Coefficient.ConstantTau"][0.0];
+    double xDefaultTau = R["Grid.Model.Coefficient.ConstantRadius.Boundary"][0.5];
     vtkDataArray *daTau = poly->GetPointData()->GetScalars("Radius");
 
     // Copy to the coefficient vector
@@ -265,11 +265,11 @@ SubdivisionMedialModelIO
       for(i = 0; i < phi.size(); i++)
         phi[i] = F.Entry(F.Key("Element[%d]",i))[0.0];
 
-      smm->ComputeAtoms(phi.data_block());
+      smm->ComputeAtoms(true, phi.data_block());
       }
     else
       {
-      smm->ComputeAtoms();
+      smm->ComputeAtoms(true);
       }
 
     // Return the model
@@ -305,7 +305,7 @@ SubdivisionMedialModelIO
     // Create the medial model
     BruteForceSubdivisionMedialModel *smm = new BruteForceSubdivisionMedialModel();
     smm->SetMesh(mesh, C, u, v, nSubs, 0);
-    smm->ComputeAtoms();
+    smm->ComputeAtoms(true);
     return smm;
   }
   else

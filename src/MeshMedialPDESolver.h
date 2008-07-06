@@ -48,13 +48,9 @@ public:
   // passed to the sparse solver
   void SetMeshTopology(MeshLevel *topology, MedialAtom *managedAtoms);
 
-  // Set the input data as an array of positions and rho values. Another way
-  // to set the input data is to manipulate the values of the atoms directly
-  void SetInputData(const SMLVec3d *X, const double *rho, const double *tau);
-
   // Our first attempt at a solver method. The flag specifies whether the
   // terms involved in gradient computation should also be computed
-  void SolveEquation(bool flagGradient = false);
+  void SolveEquation(bool flagGradient = false, bool flagAllowErrors = false);
 
   // Compute the common part of the gradient computation
   void BeginGradientComputation();

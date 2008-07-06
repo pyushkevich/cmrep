@@ -2771,9 +2771,9 @@ bool MedialOptimizationProblem::SolvePDE(double *xEvalPoint)
 
   // Solve the PDE using the last phi field if we have it
   if(flagGradientComputed)
-    xMedialModel->ComputeAtoms(xLastGradHint.data_block());
+    xMedialModel->ComputeAtoms(false, xLastGradHint.data_block());
   else
-    xMedialModel->ComputeAtoms();
+    xMedialModel->ComputeAtoms(false);
 
   // Stop timing
   xSolveTimer.Stop();
