@@ -5,6 +5,7 @@
 #include <vnl/vnl_math.h>
 #include <vnl/vnl_random.h>
 #include <algorithm>
+#include <fstream>
 
 using namespace std;
 
@@ -786,6 +787,16 @@ MeshMedialPDESolver
   // Compute the right hand side
   FillRHS();
 
+  // Check validity (TODO: remove later)
+  for(size_t i = 0; i < xRHS.size(); i++)
+    if(vnl_math_isinf(xRHS[i]) || vnl_math_isnan(xRHS[i]))
+      throw MedialModelException("PDE r.h.s. infinite or nan");
+
+  // Check validity (TODO: remove later)
+  for(size_t i = 0; i < M.GetNumberOfSparseValues(); i++)
+    if(!vnl_math_isfinite(M.GetSparseData()[i]))
+      throw MedialModelException("PDE sparse matrix infinite or nan");
+
   // Use pardiso to solve the problem
   xPardiso.SetVerbose(false);
   xPardiso.SymbolicFactorization(M);
@@ -795,7 +806,17 @@ MeshMedialPDESolver
   // The solution must be positive, otherwise this is an ill-posed problem
   if(!flagAllowErrors)
     for(size_t i = 0; i < topology->nVertices; i++)
-      if(xSolution[i] < 0.)
+      if(!vnl_math_isfinite(xSolution[i]))
+        {
+        // Dump the matrix for examination
+        ofstream ofs("sparsematdump.txt");
+        M.PrintSelfMathematica(ofs);
+        ofs << xRHS << endl;
+        ofs.close();
+
+        throw MedialModelException("PDE solution infinite or nan");
+        }
+      else if(xSolution[i] < 0.)
         throw MedialModelException("PDE solution negative");
 
   // Compute the medial atoms

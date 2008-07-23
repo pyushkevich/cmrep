@@ -245,6 +245,9 @@ public:
 
   // Print to the standard stream
   void PrintSelf(std::ostream &out) const;
+
+  // Print for importing into MMA
+  void PrintSelfMathematica(std::ostream &out) const;
 };
 
 // Print the matrix to an output stream

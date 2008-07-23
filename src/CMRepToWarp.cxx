@@ -140,6 +140,8 @@ int usage()
   cout << "                    the model's boundary (i.e., 2 0.1). The step " << endl;
   cout << "                    size affects the size of tetrahedra used to " << endl;
   cout << "                    the warp field" << endl;
+  cout << "  -f              : flip atom normal, i.e., map spoke1 in cmrep1 to " << endl;
+  cout << "                    spoke2 in cmrep2" << endl;
   return -1;
 }
 
@@ -156,6 +158,7 @@ int main(int argc, char *argv[])
   // Get the options
   string fnext = "nii.gz";
   double xiMax = 1, xiStep = 0.1;
+  bool flip = false;
 
   // Parse the options
   for(size_t iopt = 1; iopt < argc-4; iopt++)
@@ -163,6 +166,10 @@ int main(int argc, char *argv[])
     if(!strcmp(argv[iopt], "-e"))
       {
       fnext = argv[++iopt];
+      }
+    else if(!strcmp(argv[iopt], "-f"))
+      {
+      flip = true;
       }
     else if(!strcmp(argv[iopt], "-x"))
       {
@@ -218,8 +225,18 @@ int main(int argc, char *argv[])
   spoke1[0] = m1->GetPointData()->GetArray("Spoke1");
   spoke1[1] = m1->GetPointData()->GetArray("Spoke2");
   rad1 = m1->GetPointData()->GetArray("Radius Function");
-  spoke2[0] = m2->GetPointData()->GetArray("Spoke1");
-  spoke2[1] = m2->GetPointData()->GetArray("Spoke2");
+  
+  if(!flip)
+    {
+    spoke2[0] = m2->GetPointData()->GetArray("Spoke1");
+    spoke2[1] = m2->GetPointData()->GetArray("Spoke2");
+    }
+  else
+    {
+    spoke2[0] = m2->GetPointData()->GetArray("Spoke2");
+    spoke2[1] = m2->GetPointData()->GetArray("Spoke1");
+    }
+
   rad2 = m2->GetPointData()->GetArray("Radius Function");
 
   if(spoke1[0] == NULL || spoke1[1] == NULL || rad1 == NULL)

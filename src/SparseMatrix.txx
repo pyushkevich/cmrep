@@ -294,6 +294,30 @@ ImmutableSparseMatrix<TVal>
   out << "]";
 }
 
+
+template<class TVal>
+void
+ImmutableSparseMatrix<TVal>
+::PrintSelfMathematica(std::ostream &out) const 
+{
+  size_t i, j;
+  out << "SparseArray[{";
+  for(i = 0; i < this->nRows; i++) 
+    {
+    for(j = this->xRowIndex[i]; j < this->xRowIndex[i+1]; j++)
+      {
+      out << "{" << i+1 << "," << this->xColIndex[j]+1 << "} -> " << this->xSparseValues[j];
+      if(j < this->nSparseEntries - 1)
+        out << ", ";
+      else
+        out << "} ";
+      }
+    out << endl;
+    }
+    
+  out << ", " << this->nRows << ", " << this->nColumns << "]; " << endl;
+}
+
 template<class TVal>
 void
 ImmutableSparseArray<TVal>
