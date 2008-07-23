@@ -312,10 +312,10 @@ ImmutableSparseMatrix<TVal>
       else
         out << "} ";
       }
-    out << endl;
+    out << std::endl;
     }
     
-  out << ", " << this->nRows << ", " << this->nColumns << "]; " << endl;
+  out << ", " << this->nRows << ", " << this->nColumns << "]; " << std::endl;
 }
 
 template<class TVal>
