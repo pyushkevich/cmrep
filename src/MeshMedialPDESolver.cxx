@@ -817,7 +817,15 @@ MeshMedialPDESolver
         throw MedialModelException("PDE solution infinite or nan");
         }
       else if(xSolution[i] < 0.)
+        {
+#if defined(TRANSFER_R2)
+
         throw MedialModelException("PDE solution negative");
+
+#elif defined(TRANSFER_LOGR2)
+
+#endif
+        }
 
   // Compute the medial atoms
   ComputeMedialAtoms(xSolution.data_block());

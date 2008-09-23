@@ -2854,11 +2854,39 @@ MedialOptimizationProblem
   return acc.inf_norm();
 }
 
+#include "PDESubdivisionMedialModel.h"
+
 double 
 MedialOptimizationProblem
 ::ComputeGradient(double *xEvalPoint, double *xGradient)
 {
   size_t iTerm;
+
+  // TODO: REMOVE THIS!!!
+  PDESubdivisionMedialModel *smm = dynamic_cast<PDESubdivisionMedialModel *>(xMedialModel);
+  if(smm)
+    {
+    SubdivisionSurface::MeshLevel mlCoeffOld = *smm->GetCoefficientMesh(); 
+
+    size_t nc = smm->GetNumberOfComponents();
+
+    // We need to get a list of coordinates for remeshing
+    typedef vnl_vector_fixed<double, 3> Vec;
+    Vec *X = new Vec[mlCoeffOld.nVertices];
+    for(size_t i = 0; i < mlCoeffOld.nVertices; i++)
+      for(size_t k = 0; k < 3; k++)
+        X[i][k] = smm->GetCoefficient(i * nc + k);
+
+    mlCoeffOld.MakeDelaunay(X);
+
+    smm->SetMesh(mlCoeffOld, 
+      smm->GetCoefficientArray(), 
+      smm->GetCoefficientU(),
+      smm->GetCoefficientV(),
+      smm->GetSubdivisionLevel(), 0);
+
+    flagLastEvalAvailable = false;
+    }
 
   // Solve the PDE
   SolvePDE(xEvalPoint);

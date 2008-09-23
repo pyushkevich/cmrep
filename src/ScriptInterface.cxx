@@ -14,6 +14,7 @@
 #include "DiffeomorphicEnergyTerm.h"
 #include "JacobianDistortionPenaltyTerm.h"
 
+#include "itkImage.h"
 #include "itkImageRegionConstIteratorWithIndex.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
 #include "itkLinearInterpolateImageFunction.h"

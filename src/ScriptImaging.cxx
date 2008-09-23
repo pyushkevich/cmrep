@@ -1,6 +1,7 @@
 #include "ScriptInterface.h"
 #include "ITKImageWrapper.h"
 
+#include <itkImage.h>
 #include <itkCastImageFilter.h>
 #include <itkDiscreteGaussianImageFilter.h>
 #include <itkGradientMagnitudeImageFilter.h>
