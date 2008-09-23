@@ -6,7 +6,7 @@
 #include "vtkPolyDataWriter.h"
 #include "vtkUnstructuredGrid.h"
 // #include "ITKImageWrapper.h"
-// #include "itkImage.h"
+// #include "itkOrientedRASImage.h"
 
 void ExportMedialMeshToVTK(
   GenericMedialModel *model, /* ITKImageWrapper<float> *xImage, */ const char *file)

@@ -11,7 +11,7 @@
 #include "PrincipalComponents.h"
 #include "ITKImageWrapper.h"
 #include "SmoothedImageSampler.h"
-#include "itkImage.h"
+#include "itkOrientedRASImage.h"
 #include "TestSolver.h"
 #include "vnl/vnl_erf.h"
 #include "vnl/vnl_random.h"

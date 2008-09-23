@@ -1,6 +1,6 @@
 #include "ITKImageWrapper.h"
 
-#include "itkImage.h"
+#include "itkOrientedRASImage.h"
 #include "itkLinearInterpolateImageFunction.h"
 #include "itkBSplineInterpolateImageFunction.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"

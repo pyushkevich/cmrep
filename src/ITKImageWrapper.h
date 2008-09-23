@@ -4,7 +4,7 @@
 #include "smlmath.h"
 
 namespace itk {
-  template <typename TPixel, unsigned int VDim> class Image;
+  template <typename TPixel, unsigned int VDim> class OrientedRASImage;
 };
 
 template<typename TPixel>
@@ -15,7 +15,7 @@ public:
   virtual ~ITKImageWrapper() {};
     
   // The wrapped ITK image
-  typedef itk::Image<TPixel, 3> ImageType;
+  typedef itk::OrientedRASImage<TPixel, 3> ImageType;
   
   // Load the image from a file
   virtual void LoadFromFile(const char *file) = 0;

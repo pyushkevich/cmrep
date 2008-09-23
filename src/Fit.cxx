@@ -11,7 +11,7 @@
 #include <itksys/SystemTools.hxx>
 
 // ITK includes 
-#include <itkImage.h>
+#include <itkOrientedRASImage.h>
 #include <itkVTKImageExport.h>
 
 // VTK includes
@@ -19,6 +19,9 @@
 #include <vtkImageImport.h>
 #include <vtkMarchingCubes.h>
 #include <vtkPolyDataWriter.h>
+#include <vtkTransformPolyDataFilter.h>
+#include <vtkMatrixToLinearTransform.h>
+#include <vtkMatrix4x4.h>
 
 int usage()
 {
@@ -39,12 +42,15 @@ int usage()
 // Generate contour and save to file
 void GenerateContour(FloatImage *image, string file)
 {
-  typedef itk::Image<float,3> ImageType;
+  typedef itk::OrientedRASImage<float,3> ImageType;
   typedef itk::VTKImageExport<ImageType> VTKExportType;
   typedef itk::SmartPointer<VTKExportType> VTKExportPointer;
+  typedef ImageType::TransformMatrixType TransformMatrixType; 
   VTKExportPointer m_VTKExporter;
   vtkImageImport *m_VTKImporter;
   vtkMarchingCubes *     m_MarchingCubesFilter;
+  vtkTransformPolyDataFilter *m_TransformFilter;
+  vtkMatrixToLinearTransform *m_Transform;
 
   // Initialize the VTK Exporter
   m_VTKExporter = VTKExportType::New();
@@ -90,15 +96,30 @@ void GenerateContour(FloatImage *image, string file)
   m_MarchingCubesFilter->SetValue(0,0.0f);
   m_MarchingCubesFilter->SetInput(m_VTKImporter->GetOutput());
 
+
+
+  // Create a transform into RAS coordinates
+  m_Transform = vtkMatrixToLinearTransform::New();
+  TransformMatrixType mat = 
+    image->GetInternalImage()->GetInternalImage()
+    ->GetSpacingOriginPhysicalSpaceToRASPhysicalSpaceMatrix();
+  m_Transform->GetMatrix()->DeepCopy(mat.GetVnlMatrix().data_block());  
+  m_TransformFilter = vtkTransformPolyDataFilter::New();
+  m_TransformFilter->SetTransform(m_Transform);
+  m_TransformFilter->SetInput(m_MarchingCubesFilter->GetOutput());
+  m_TransformFilter->Update();
+
   // Create a writer
   vtkPolyDataWriter *m_Writer = vtkPolyDataWriter::New();
   m_Writer->SetFileName(file.c_str());
-  m_Writer->SetInput(m_MarchingCubesFilter->GetOutput());
+  m_Writer->SetInput(m_TransformFilter->GetOutput());
   m_Writer->Update();
 
   // Destroy the filters
   m_VTKImporter->Delete();
   m_MarchingCubesFilter->Delete();
+  m_TransformFilter->Delete();
+  m_Transform->Delete();
   m_Writer->Delete();
 }
 

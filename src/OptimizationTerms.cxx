@@ -2,7 +2,7 @@
 #include "MedialAtomGrid.h"
 #include "MedialAtom.h"
 #include "ITKImageWrapper.h"
-#include "itkImage.h"
+#include "itkOrientedRASImage.h"
 #include <iostream>
 #include <vnl/algo/vnl_svd.h>
 #include <vnl/vnl_random.h>

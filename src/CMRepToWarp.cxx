@@ -13,7 +13,7 @@
 #include <itkImageRegionIteratorWithIndex.h>
 #include <itkImageFileReader.h>
 #include <itkImageFileWriter.h>
-#include <itkImage.h>
+#include <itkOrientedRASImage.h>
 
 using namespace itk;
 using namespace std;

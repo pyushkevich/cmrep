@@ -1,7 +1,7 @@
 #include "ScriptInterface.h"
 #include "ITKImageWrapper.h"
 
-#include <itkImage.h>
+#include <itkOrientedRASImage.h>
 #include <itkCastImageFilter.h>
 #include <itkDiscreteGaussianImageFilter.h>
 #include <itkGradientMagnitudeImageFilter.h>
@@ -118,8 +118,8 @@ void FloatImage::SaveToPath(const char *filebase, const char *ext)
 void FloatImage::SetToGradientMagnitude(BinaryImage *imgSource, double xSigma)
 {
   // Blur the image with a Gaussian
-  typedef itk::Image<unsigned char, 3> BinaryImageType;
-  typedef itk::Image<float, 3> FloatImageType;
+  typedef itk::OrientedRASImage<unsigned char, 3> BinaryImageType;
+  typedef itk::OrientedRASImage<float, 3> FloatImageType;
   typedef itk::CastImageFilter<BinaryImageType, FloatImageType> CasterType;
   typedef itk::DiscreteGaussianImageFilter<FloatImageType, FloatImageType>
     GaussianType;
@@ -192,8 +192,8 @@ void FloatImage
 ::SetToBlurredBinary(BinaryImage *imgSource, double xSigma, double xErrorScale)
 {
   // Blur the image with a Gaussian
-  typedef itk::Image<unsigned char, 3> BinaryImageType;
-  typedef itk::Image<float, 3> FloatImageType;
+  typedef itk::OrientedRASImage<unsigned char, 3> BinaryImageType;
+  typedef itk::OrientedRASImage<float, 3> FloatImageType;
   typedef itk::UnaryFunctorImageFilter<
     BinaryImageType, FloatImageType, BinaryFloatFunctor> MapperType;
   typedef itk::DiscreteGaussianImageFilter<FloatImageType, FloatImageType>
@@ -242,7 +242,7 @@ void FloatImage
 double FloatImage::IntegratePositiveVoxels()
 {
   // Create an iterator
-  typedef itk::Image<float, 3> FloatImageType;
+  typedef itk::OrientedRASImage<float, 3> FloatImageType;
   typedef itk::ImageRegionConstIterator<FloatImageType> IteratorType;
 
   // Take the sum of all positive voxels in the image
@@ -268,7 +268,7 @@ double FloatImage::IntegratePositiveVoxels()
 double FloatImage::ComputeObjectVolume()
 {
   // Create an iterator
-  typedef itk::Image<float, 3> FloatImageType;
+  typedef itk::OrientedRASImage<float, 3> FloatImageType;
   typedef itk::ImageRegionConstIterator<FloatImageType> IteratorType;
 
   // Create the volume accumulator

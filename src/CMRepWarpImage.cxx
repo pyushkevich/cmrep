@@ -14,7 +14,7 @@
 #include <itkImageRegionIteratorWithIndex.h>
 #include <itkImageFileReader.h>
 #include <itkImageFileWriter.h>
-#include <itkImage.h>
+#include <itkOrientedRASImage.h>
 #include <itkInterpolateImageFunction.h>
 #include <itkNearestNeighborInterpolateImageFunction.h>
 #include <itkLinearInterpolateImageFunction.h>

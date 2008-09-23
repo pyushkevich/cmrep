@@ -10,7 +10,7 @@
 #include "MedialAtomGrid.h"
 #include "GenericMedialModel.h"
 #include "ITKImageWrapper.h"
-#include "itkImage.h"
+#include "itkOrientedRASImage.h"
 #include "OptimizationTerms.h"
 #include "CoefficientMapping.h"
 
