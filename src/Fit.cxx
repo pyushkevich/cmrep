@@ -109,6 +109,13 @@ void GenerateContour(FloatImage *image, string file)
   m_TransformFilter->SetInput(m_MarchingCubesFilter->GetOutput());
   m_TransformFilter->Update();
 
+  cout << "Transform: " << m_Transform << endl;
+  cout << "VOX2RAS: " << image->GetInternalImage()->GetInternalImage()->
+    GetVoxelSpaceToRASPhysicalSpaceMatrix() << endl;
+
+  cout << "SOS2RAS: " << image->GetInternalImage()->GetInternalImage()->
+    GetSpacingOriginPhysicalSpaceToRASPhysicalSpaceMatrix() << endl;
+
   // Create a writer
   vtkPolyDataWriter *m_Writer = vtkPolyDataWriter::New();
   m_Writer->SetFileName(file.c_str());

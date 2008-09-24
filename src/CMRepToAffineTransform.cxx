@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
   typedef itk::TransformFileWriter WriterType;
   WriterType::Pointer w = WriterType::New();
   w->SetInput(atran);
-  w->SetFileName(fn_out);
+  w->SetFileName(fn_out.c_str());
   w->Update();
 
   cout << "Transform: " << tran << endl;

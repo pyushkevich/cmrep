@@ -717,7 +717,7 @@ void MedialPDE::ConfigureEnergyTerms(
       case OptimizationParameters::MEDIAL_REGULARITY:
         xTermPenalty = new MedialRegularityTerm(xMedialModel); break;
       case OptimizationParameters::MEDIAL_ANGLES:
-        xTermPenalty = new MedialAnglesPenaltyTerm(xMedialModel); break;
+        xTermPenalty = new MedialTriangleAnglePenaltyTerm(xMedialModel); break;
       case OptimizationParameters::MEDIAL_CURVATURE:
         xTermPenalty = new MedialCurvaturePenalty(); break;
       case OptimizationParameters::BND_CURVATURE:

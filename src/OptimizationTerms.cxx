@@ -1595,65 +1595,121 @@ double CosineSquareTupleDerivative(MedialAtom *A, MedialAtom *dA, MedialTriangle
   return dC0 + dC1 + dC2;
 }
 
-/*
-MedialMinimumTriangleAnglePenaltyTerm
-::MedialMinimumTriangleAnglePenaltyTerm(GenericMedialModel *model)
+MedialTriangleAnglePenaltyTerm
+::MedialTriangleAnglePenaltyTerm(GenericMedialModel *model)
 {
 
 }
 
 double 
-MedialMinimumTriangleAnglePenaltyTerm
+MedialTriangleAnglePenaltyTerm
 ::UnifiedComputeEnergy(SolutionData *S, bool flagGradient)
 {
   // Reset the penalty terms
-  sMinAngle.Reset(); sPenalty.Reset();
+  sCosSquare.Reset(); sPenalty.Reset();
 
   // Loop over all medial triangles
   for(MedialTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
     {
-    // Get the vertices
-    const SMLVec3d &X0 = S->xAtoms[it.GetAtomIndex(0)].X;
-    const SMLVec3d &X1 = S->xAtoms[it.GetAtomIndex(1)].X;
-    const SMLVec3d &X2 = S->xAtoms[it.GetAtomIndex(2)].X;
-
-    // Compute the egdes
-    SMLVec3d D10 = X1 - X0;
-    SMLVec3d D21 = X2 - X1;
-    SMLVec3d D02 = X0 - X2;
-
-    // Compute the edge lengths squared
-    double L10 = dot_product(D10, D10);
-    double L21 = dot_product(D21, D21);
-    double L02 = dot_product(D02, D02);
-
-    // Compute the cosines squared
-    double A0 = dot_product(D10, D02);
-    double A1 = dot_product(D21, D10);
-    double A2 = dot_product(D02, D21);
-
-    // Compute the actual values
-    double C[3] = 
-      { (A0 * A0) / (L10 * L02), 
-        (A1 * A1) / (L21 * L10), 
-        (A2 * A2) / (L02 * L21) };
-
-    // For each cosine compare it to the threshold
-    for(size_t j = 0; j < 3; j++)
+    for(size_t v = 0; v < 3; v++)
       {
-      if(C[j] > xCosineThreshold)
-        {
-        // Assign the penalty
-        double angle = acos(sqrt(C[j]));
-        double penalty = (angle - xAngleThreshold) * (angle - xAngleThreshold);
-        sPenalty.Update(penalty);
-        }
+      // Get the vertices around angle
+      const SMLVec3d &X0 = S->xAtoms[it.GetAtomIndex(v)].X;
+      const SMLVec3d &X1 = S->xAtoms[it.GetAtomIndex((v+1) % 3)].X;
+      const SMLVec3d &X2 = S->xAtoms[it.GetAtomIndex((v+2) % 3)].X;
+
+      // Get the edges
+      SMLVec3d D1 = X1 - X0, D2 = X2 - X0;
+
+      // Get the squared lengths
+      double L1 = dot_product(D1, D1);
+      double L2 = dot_product(D2, D2);
+
+      // Get the dot product
+      double Z = dot_product(D1, D2);
+
+      // Get the squared cosine
+      double csq = (Z / L1) * (Z / L2);
+
+      // Generate penalty
+      double penalty = 0.001 / (1 - csq);
+
+      // Update penalties
+      sCosSquare.Update(csq);
+      sPenalty.Update(penalty);
       }
-
-
     }
+
+  return sPenalty.GetMean();
 }
-*/
+
+double
+MedialTriangleAnglePenaltyTerm
+::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  // Reset derivative accumulator
+  sDPenalty.Reset();
+
+  // Loop over all medial triangles
+  for(MedialTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
+    {
+    for(size_t v = 0; v < 3; v++)
+      {
+      // Get the vertices around angle
+      const SMLVec3d &X0 = S->xAtoms[it.GetAtomIndex(v)].X;
+      const SMLVec3d &X1 = S->xAtoms[it.GetAtomIndex((v+1) % 3)].X;
+      const SMLVec3d &X2 = S->xAtoms[it.GetAtomIndex((v+2) % 3)].X;
+      const SMLVec3d &dX0 = dS->xAtoms[it.GetAtomIndex(v)].X;
+      const SMLVec3d &dX1 = dS->xAtoms[it.GetAtomIndex((v+1) % 3)].X;
+      const SMLVec3d &dX2 = dS->xAtoms[it.GetAtomIndex((v+2) % 3)].X;
+
+      // Get the edges
+      SMLVec3d D1 = X1 - X0, D2 = X2 - X0;
+      SMLVec3d dD1 = dX1 - dX0, dD2 = dX2 - dX0;
+
+      // Get the squared lengths
+      double L1 = dot_product(D1, D1);
+      double L2 = dot_product(D2, D2);
+      double dL1 = 2.0 * dot_product(D1, dD1);
+      double dL2 = 2.0 * dot_product(D2, dD2);
+
+      // Get the dot product
+      double Z = dot_product(D1, D2);
+      double dZ = dot_product(dD1, D2) + dot_product(D1, dD2);
+
+      // Get the squared cosine
+      double csq = (Z / L1) * (Z / L2);
+      double dcsq = 
+        (Z / L1) * ((dZ * L2 - Z * dL2) / (L2 * L2)) +
+        ((dZ * L1 - Z * dL1) / (L1 * L1)) * (Z / L2);
+
+      // Generate penalty
+      double penalty = 0.001 / (1 - csq);
+      double dpenalty = penalty * (dcsq / (1. - csq));
+
+      // Update penalties
+      sDPenalty.Update(dpenalty);
+      }
+    }
+
+  return sDPenalty.GetMean();
+}
+
+void 
+MedialTriangleAnglePenaltyTerm
+::PrintReport(ostream &sout)
+{
+  sout << "  Medial Triangle Angle Penalty Term : " << endl;
+  sout << "    min angle                : " << acos(sqrt(sCosSquare.GetMin())) << endl;
+  sout << "    max angle                : " << acos(sqrt(sCosSquare.GetMax())) << endl;
+  sout << "    avg cos sq.              : " << sCosSquare.GetMean() << endl;
+  sout << "    max penalty              : " << sPenalty.GetMax() << endl;
+  sout << "    mean penalty (r.v.)      : " << sPenalty.GetMean() << endl;
+}
+
+
+
+
 
 /*********************************************************************************
  * Angles penalty term
@@ -2863,6 +2919,8 @@ MedialOptimizationProblem
   size_t iTerm;
 
   // TODO: REMOVE THIS!!!
+  // 
+  /* 
   PDESubdivisionMedialModel *smm = dynamic_cast<PDESubdivisionMedialModel *>(xMedialModel);
   if(smm)
     {
@@ -2887,6 +2945,7 @@ MedialOptimizationProblem
 
     flagLastEvalAvailable = false;
     }
+  */
 
   // Solve the PDE
   SolvePDE(xEvalPoint);

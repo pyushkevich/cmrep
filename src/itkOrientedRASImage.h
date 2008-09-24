@@ -148,7 +148,7 @@ public:
         {
         mat[i][j] = ras_flip * this->GetDirection()(i,j) * this->GetSpacing()[i];
         }
-      mat[i][VImageDimension] = ras_flip * image->GetOrigin()[i]);
+      mat[i][VImageDimension] = ras_flip * this->GetOrigin()[i];
       }
 
     return mat;
@@ -169,7 +169,7 @@ public:
       mat[i][VImageDimension] = ras_flip * this->GetOrigin()[i];
       for(size_t j = 0; j < VImageDimension; j++)
         {
-        mat[i][j] = ras_flip * this->GetDirection()(i,j) * this->GetSpacing()[i];
+        mat[i][j] = ras_flip * this->GetDirection()(i,j);
         mat[i][VImageDimension] -= ras_flip * this->GetDirection()(i,j) * this->GetOrigin()[i];
         }      
       }
@@ -190,3 +190,4 @@ private:
 } //namespace itk
 
 #endif
+

@@ -688,17 +688,13 @@ private:
 };
 
 /**
- * This heuristic penalty punishes angles below a certain minimum (e.g., 20 degrees)
- * with a quadratic penalty. It should lead to quality triangulation. However, one 
- * must be aware that limiting the triangulation quality will also limit how well a
- * model can fit data. Ideally, this will be used with a remeshing algorithm
+ * Penalty on small triangle angles
  */
-/*
-class MedialMinimumTriangleAnglePenaltyTerm : public EnergyTerm
+class MedialTriangleAnglePenaltyTerm : public EnergyTerm
 {
 public:
   // Initialize the term
-  MedialMinimumTriangleAnglePenaltyTerm(GenericMedialModel *model);
+  MedialTriangleAnglePenaltyTerm(GenericMedialModel *model);
 
   // Compute the energy
   double ComputeEnergy(SolutionData *data)
@@ -716,16 +712,13 @@ public:
   void PrintReport(ostream &sout);
 
   // Print a short name
-  string GetShortName() { return string("MINANG"); }
+  string GetShortName() { return string("TRIANG"); }
   
 private:
   // A structure that holds derivative data
-  
   double UnifiedComputeEnergy(SolutionData *, bool); 
-  StatisticsAccumulator sMinAngle, sPenalty;
+  StatisticsAccumulator sCosSquare, sPenalty, sDPenalty;
 };
-*/
-
 
 class MedialAnglesPenaltyTerm : public MedialIntegrationEnergyTerm
 {
