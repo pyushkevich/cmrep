@@ -25,8 +25,8 @@ typedef float vtkFloatingPointType;
 
 
 typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
-typedef itk::Image<float, 3> ImageType;
-  typedef itk::Image<unsigned char,3> ByteImage;
+typedef itk::OrientedRASImage<float, 3> ImageType;
+typedef itk::OrientedRASImage<unsigned char,3> ByteImage;
 
 void MapPoint(const Vec &x, ImageType *img, double *vout)
 {
@@ -113,7 +113,7 @@ int main(int argc, char *argv[])
   reader->Update();
 
   vtkPolyData *mesh = reader->GetOutput();
-  typedef itk::Image<float, 3> ImageType;
+  typedef itk::OrientedRASImage<float, 3> ImageType;
   typedef itk::ImageFileReader<ImageType> ReaderType;
   ReaderType::Pointer fltReader = ReaderType::New();
   fltReader->SetFileName(argv[2]);

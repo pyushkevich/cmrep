@@ -31,8 +31,8 @@ typedef float vtkFloatingPointType;
 
 
 typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
-typedef itk::Image<float, 3> ImageType;
-typedef itk::Image<unsigned char,3> ByteImage;
+typedef itk::OrientedRASImage<float, 3> ImageType;
+typedef itk::OrientedRASImage<unsigned char,3> ByteImage;
 
 typedef itk::InterpolateImageFunction<ImageType, double> InterpType;
 
@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
   vtkPolyData *m2 = r2->GetOutput();
 
   // Read the reference image
-  typedef itk::Image<float, 3> ImageType;
+  typedef itk::OrientedRASImage<float, 3> ImageType;
   typedef itk::ImageFileReader<ImageType> ReaderType;
   ReaderType::Pointer fltReader = ReaderType::New();
   fltReader->SetFileName(fn_image_trg.c_str());
