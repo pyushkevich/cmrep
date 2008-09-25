@@ -107,7 +107,7 @@ ITKImageWrapperImpl<TPixel>
 
   // Create a continuous index from the point
   itk::Index<3> xIndex;
-  xImage->TransformPhysicalPointToIndex(xPoint, xIndex);
+  xImage->TransformRASPhysicalPointToIndex(xPoint, xIndex);
 
   // Interpolate at the index
   if(fnInterpolator->IsInsideBuffer(xIndex))
@@ -134,7 +134,7 @@ ITKImageWrapperImpl<TPixel>
 
   // Create a continuous index from the point
   itk::ContinuousIndex<double, 3> xIndex;
-  xImage->TransformPhysicalPointToContinuousIndex(xPoint, xIndex);
+  xImage->TransformRASPhysicalPointToContinuousIndex(xPoint, xIndex);
 
   // Interpolate at the index
   if(fnInterpolator->IsInsideBuffer(xIndex))
@@ -154,7 +154,7 @@ ITKImageWrapperImpl<TPixel>
 
   // Create a continuous index from the point
   itk::ContinuousIndex<double, 3> xIndex;
-  xImage->TransformPhysicalPointToContinuousIndex(xPoint, xIndex);
+  xImage->TransformRASPhysicalPointToContinuousIndex(xPoint, xIndex);
 
   // Interpolate at the index
   if(fnInterpolator->IsInsideBuffer(xIndex))
@@ -178,7 +178,7 @@ ITKImageWrapperImpl<TPixel>
 
   // Create a continuous index from the point
   itk::ContinuousIndex<double, 3> xIndex;
-  xImage->TransformPhysicalPointToContinuousIndex(xPoint, xIndex);
+  xImage->TransformRASPhysicalPointToContinuousIndex(xPoint, xIndex);
 
   // Interpolate at the index
   if(fnInterpolatorNN->IsInsideBuffer(xIndex))

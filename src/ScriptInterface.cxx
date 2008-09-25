@@ -978,7 +978,7 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
       // Get the spatial position of the point
       itk::ContinuousIndex<double, 3> iRaw(it.GetIndex());
       itk::Point<double, 3> ptPosition;
-      xImage->TransformContinuousIndexToPhysicalPoint(iRaw, ptPosition);
+      xImage->TransformContinuousIndexToRASPhysicalPoint(iRaw, ptPosition);
       SMLVec3d xPosition(ptPosition.GetDataPointer());
 
       // Add to the mean and 'covariance'
@@ -2303,7 +2303,7 @@ SampleReferenceFrameImage(FloatImage *imgInput, FloatImage *imgOutput, size_t zS
       {
       // Convert this voxel into a point
       ImageType::PointType pVoxel;
-      iOutput->TransformIndexToPhysicalPoint(itOut.GetIndex(), pVoxel);
+      iOutput->TransformIndexToRASPhysicalPoint(itOut.GetIndex(), pVoxel);
 
       // Define the extent
       double x0 = pVoxel[0] - 0.5 * iOutput->GetSpacing()[0];
@@ -2365,7 +2365,7 @@ SampleReferenceFrameImage(FloatImage *imgInput, FloatImage *imgOutput, size_t zS
     // Convert the source point to an image index
     ImageType::PointType pt; ImageType::IndexType idx;
     pt[0] = lSource[i][0]; pt[1] = lSource[i][1]; pt[2] = lSource[i][2];
-    iOutput->TransformPhysicalPointToIndex(pt, idx);
+    iOutput->TransformRASPhysicalPointToIndex(pt, idx);
     UpdateRegion(xMaskRegion, idx, i==0);
 
     // The target are the positions in cm-rep coordinate system
@@ -2404,7 +2404,7 @@ SampleReferenceFrameImage(FloatImage *imgInput, FloatImage *imgOutput, size_t zS
       {
       // Convert this voxel into a point
       ImageType::PointType pVoxel;
-      iOutput->TransformIndexToPhysicalPoint(itOut.GetIndex(), pVoxel);
+      iOutput->TransformIndexToRASPhysicalPoint(itOut.GetIndex(), pVoxel);
 
       // Map this point into the other image space
       TransformType::OutputPointType pReference =
@@ -2496,7 +2496,7 @@ SampleImage(FloatImage *fiInput, FloatImage *fiOut, size_t zSamples)
     // Create a point and a continuous index
     itk::Point<double, 3> ptZ(Z.data_block());
     itk::ContinuousIndex<double, 3> idxZ;
-    imgInput->TransformPhysicalPointToContinuousIndex(ptZ, idxZ);
+    imgInput->TransformRASPhysicalPointToContinuousIndex(ptZ, idxZ);
     float f = fInterp->EvaluateAtContinuousIndex(idxZ);
 
     // Print some random statistics
@@ -2517,7 +2517,7 @@ SampleImage(FloatImage *fiInput, FloatImage *fiOut, size_t zSamples)
     SMLVec3d Z1 = Z + 0.5;
     ImageType::IndexType idxCoord;
     itk::Point<double, 3> ptZ1(Z1.data_block());
-    imgCoord[0]->TransformPhysicalPointToIndex(ptZ1, idxCoord);
+    imgCoord[0]->TransformRASPhysicalPointToIndex(ptZ1, idxCoord);
     imgCoord[0]->SetPixel(idxCoord, xAtom.u);
     imgCoord[1]->SetPixel(idxCoord, xAtom.v);
     imgCoord[2]->SetPixel(idxCoord, itPoint.GetBoundarySide() ? tau : -tau);

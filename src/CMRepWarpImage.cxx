@@ -41,7 +41,7 @@ void MapPoint(const Vec &x, ImageType *img, Vec &vout)
   ImageType::PointType pt;
   pt[0] = x[0]; pt[1] = x[1]; pt[2] = x[2];
   ContinuousIndex<double,3> idx;
-  img->TransformPhysicalPointToContinuousIndex(pt, idx);
+  img->TransformRASPhysicalPointToContinuousIndex(pt, idx);
   vout[0] = idx[0]; vout[1] = idx[1]; vout[2] = idx[2];
 }
 

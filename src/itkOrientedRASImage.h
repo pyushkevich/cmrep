@@ -60,7 +60,7 @@ public:
    * Returns true if the resulting index is within the image, false otherwise.
    * \sa Transform */
   template<class TCoordRep>
-  bool TransformPhysicalPointToContinuousIndex(
+  bool TransformRASPhysicalPointToContinuousIndex(
               const Point<TCoordRep, VImageDimension>& point,
               ContinuousIndex<TCoordRep, VImageDimension>& index   ) const
     {
@@ -74,7 +74,7 @@ public:
    * Returns true if the resulting index is within the image, false otherwise
    * \sa Transform */
   template<class TCoordRep>
-  bool TransformPhysicalPointToIndex(
+  bool TransformRASPhysicalPointToIndex(
             const Point<TCoordRep, VImageDimension>& point,
             IndexType & index                                ) const
     {
@@ -88,7 +88,7 @@ public:
    * from a continuous index (in the index space)
    * \sa Transform */
   template<class TCoordRep>
-  void TransformContinuousIndexToPhysicalPoint(
+  void TransformContinuousIndexToRASPhysicalPoint(
             const ContinuousIndex<TCoordRep, VImageDimension>& index,
             Point<TCoordRep, VImageDimension>& point        ) const
     {
@@ -103,7 +103,7 @@ public:
    *
    * \sa Transform */
   template<class TCoordRep>
-  void TransformIndexToPhysicalPoint(
+  void TransformIndexToRASPhysicalPoint(
                       const IndexType & index,
                       Point<TCoordRep, VImageDimension>& point ) const
     {
@@ -124,7 +124,7 @@ public:
    * \sa Image
    */ 
   template<class TCoordRep>
-  void TransformLocalVectorToPhysicalVector(
+  void TransformLocalVectorToRASPhysicalVector(
     const FixedArray<TCoordRep, VImageDimension> & inputGradient,
           FixedArray<TCoordRep, VImageDimension> & outputGradient ) const
     {
