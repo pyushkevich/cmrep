@@ -124,6 +124,7 @@ int main(int argc, char *argv[])
   ByteImage::Pointer iOut = ByteImage::New();
   iOut->SetRegions(img->GetBufferedRegion());
   iOut->SetOrigin(img->GetOrigin());
+  iOut->SetDirection(img->GetDirection());
   iOut->SetSpacing(img->GetSpacing());
   iOut->Allocate();
   iOut->FillBuffer(0);

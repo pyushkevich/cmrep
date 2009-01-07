@@ -236,6 +236,7 @@ int main(int argc, char *argv[])
   ires->SetRegions(img->GetBufferedRegion());
   ires->SetOrigin(img->GetOrigin());
   ires->SetSpacing(img->GetSpacing());
+  ires->SetDirection(img->GetDirection());
   ires->Allocate();
   ires->FillBuffer(bkg);
 
