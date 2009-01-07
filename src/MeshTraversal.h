@@ -439,6 +439,7 @@ inline ostream &operator << (ostream &out, const Triangle &t)
   out << "[V=(" << t.vertices[0] << "," << t.vertices[1] << "," << t.vertices[2] << ")";
   out << " N=(" << t.neighbors[0] << "," << t.neighbors[1] << "," << t.neighbors[2] << ")";
   out << " NE=(" << t.nedges[0] << "," << t.nedges[1] << "," << t.nedges[2] << ")]";
+  return out;
 }
 
 #endif

@@ -4007,7 +4007,7 @@ L20:
     do_fio(&c__1, (char *)&v[stppar], (ftnlen)sizeof(doublereal));
     e_wsfe();
     */ 
-    printf("%i %i %d %d %d %d %f %f %d\n",
+    printf("%i %i %lf %lf %lf %lf %f %f %lf\n",
       iv[niter], nf, v[f], reldf, preldf, v[reldx], model1[m - 1], model2[m - 1], v[stppar]);
 
     goto L120;
@@ -4027,7 +4027,7 @@ L50:
     e_wsfe();
     */
 
-    printf("%i %i %d %d %d %d %d\n",
+    printf("%i %i %lf %lf %lf %lf %lf\n",
       iv[niter], nf, v[f], reldf, preldf, v[reldx], v[stppar]);
 
     goto L120;
@@ -4077,7 +4077,7 @@ L60:
     e_wsfe();
     */
 
-    printf("%i %i %d %d %d %d %f %f %d %d %d\n",
+    printf("%i %i %lf %lf %lf %lf %f %f %lf %lf %lf\n",
       iv[niter], nf, v[f], reldf, preldf, v[reldx], model1[m - 1], model2[m - 1], v[stppar], v[dstnrm], nreldf);
 
     goto L120;
@@ -4098,7 +4098,7 @@ L90:
     e_wsfe();
     */
 
-    printf("%i %i %d %d %d %d %d %d %d\n",
+    printf("%i %i %lf %lf %lf %lf %lf %lf %lf\n",
       iv[niter], nf, v[f], reldf, preldf, v[reldx], v[stppar], v[dstnrm], nreldf);
 
 L120:

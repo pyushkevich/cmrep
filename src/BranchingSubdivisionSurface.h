@@ -518,6 +518,8 @@ inline ostream &operator << (ostream &out, const BranchingSubdivisionSurface::Tr
       }
     cout << "} ";
     }
+
+  return out;
 }
 
 #endif

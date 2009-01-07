@@ -44,6 +44,9 @@ int usage()
 
 int main(int argc, char *argv[])
 {
+  typedef vnl_matrix<double> Mat;
+  typedef vnl_vector<double> Vec;
+
   if(argc < 4) return usage();
 
   // Get the main parameters
@@ -56,7 +59,7 @@ int main(int argc, char *argv[])
   bool flip = false;
 
   // Parse the options
-  for(size_t iopt = 1; iopt < argc-5; iopt++)
+  for(size_t iopt = 1; iopt < argc-3; iopt++)
     {
     if(!strcmp(argv[iopt], "-f"))
       {
@@ -131,7 +134,7 @@ int main(int argc, char *argv[])
   size_t ns = xivec.size(); 
   size_t n = np * ns;
   size_t off = 0;
-  vnl_matrix<double> X_ref(n, 4), X_mov(n, 4);
+  Mat X_ref(n, 4), X_mov(n, 4);
   for(size_t i = 0; i < np; i++)
     {
     typedef vnl_vector_fixed<double, 3> Vec;
@@ -158,16 +161,24 @@ int main(int argc, char *argv[])
       }
     }
 
-  vnl_matrix<double> M(12,12, 0.0);
-  vnl_matrix<double> XmXm = X_mov.transpose() * X_mov;
+  Mat M(12,12, 0.0);
+  Mat XmXm = X_mov.transpose() * X_mov;
   M.update(XmXm, 0, 0);
   M.update(XmXm, 4, 4);
   M.update(XmXm, 8, 8);
-  vnl_matrix<double> XrXm = X_ref.transpose() * X_mov;
-  vnl_vector<double> b(XrXm.data_block(), 12);
+  Mat XrXm = X_ref.transpose() * X_mov;
+  Vec b(XrXm.data_block(), 12);
   vnl_qr<double> qr(M);
-  vnl_vector<double> z = qr.solve(b);
-  vnl_matrix<double> tran(z.data_block(), 4, 4);
+  Vec z = qr.solve(b);
+  Mat tran(4, 4);
+  tran.set_identity();
+  tran.update(Mat(z.data_block(), 3, 4));
+
+  // Write the transformation matrix
+  ofstream fout(fn_out.c_str());
+  for(size_t i = 0; i < 4; i++)
+    fout << tran[i][0] << " " << tran[i][1] << " " << tran[i][2] << " " << tran[i][3] << endl;
+  fout.close();
 
   /* 
   // Apply transform to the mesh
@@ -185,6 +196,8 @@ int main(int argc, char *argv[])
   m_Writer->Update();
   */
 
+  /*
+
   // Write out a transform
   typedef itk::AffineTransform<double, 3> ATranType;
   ATranType::Pointer atran = ATranType::New();
@@ -195,12 +208,31 @@ int main(int argc, char *argv[])
   vec.GetVnlVector().update(tran.get_column(3).extract(3));
   atran->SetOffset(vec);
 
+  // Compute the mean squared difference
+  double diff = 0.0;
+  for(size_t i = 0; i < n; i++)
+    {
+    vnl_vector<double> p_ref = X_ref.get_row(i).extract(3);
+    vnl_vector<double> p_mov = X_mov.get_row(i).extract(3);
+    itk::Point<double, 3> pt_mov; pt_mov.GetVnlVector().update(p_mov);
+    vnl_vector<double> p_fit = atran->TransformPoint(pt_mov).GetVnlVector();
+    diff += (p_ref - p_fit).squared_magnitude();
+    }
+  diff /= n;
+  cout << "Mean Square Difference: " << diff << endl;
+
+  // Invert the transform, because what we really want is the transform
+  // from reference space to moving space
+  ATranType::Pointer ainv = ATranType::New();
+  atran->GetInverse(ainv);
+
+  // Write the inverse transform
   typedef itk::TransformFileWriter WriterType;
   WriterType::Pointer w = WriterType::New();
-  w->SetInput(atran);
+  w->SetInput(ainv);
   w->SetFileName(fn_out.c_str());
   w->Update();
 
-  cout << "Transform: " << tran << endl;
+  */
 }
 

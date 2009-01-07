@@ -340,6 +340,7 @@ int main(int argc, char *argv[])
         cout << "Gaussian smoothing with sigma = " << stages[i].blur << endl;
         imgfloat.SetToBlurredBinary(&img, stages[i].blur);
         imgfloat.SetOutsideValue(-1.0);
+        cout << "Done blurring" << endl;
         }
 
       // Subdivide the model if necessary
@@ -390,6 +391,11 @@ int main(int argc, char *argv[])
   catch(string &err)
     {
     cerr << "Exception: " << err << endl;
+    return -1;
+    }
+  catch(...)
+    {
+    cerr << "Unknown exception" << endl;
     return -1;
     }
 }

@@ -339,7 +339,7 @@ ImmutableSparseMatrix<TVal>
 {
   // Here we are going to cheat and use vnl matrices
   vnl_sparse_matrix<TVal> T(A.nColumns, A.nColumns);
-  printf("Mat [%d, %d]\n", A.nColumns, A.nColumns);
+  printf("Mat [%lu, %lu]\n", (unsigned long) A.nColumns, (unsigned long) A.nColumns);
 
   // Set the values of the sparse matrix. We only set the values in the upper triangle
   for(size_t i = 0; i < A.nRows; i++)

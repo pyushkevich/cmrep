@@ -139,7 +139,7 @@ public:
     }
 
   /** The mapping is linear if its components are */
-  bool IsLinear() { return f->IsLinear() && g->IsLinear(); }
+  bool IsLinear() const { return f->IsLinear() && g->IsLinear(); }
 
 protected:
   size_t nf, ng;
@@ -177,7 +177,9 @@ public:
     A[0][0] += 1.0; A[1][1] += 1.0; A[2][2] += 1.0;
 
     // Apply the affine transform to the coefficients
-    return xTransformDescriptor->ApplyAffineTransform(C, A, b, xCenter);
+    AffineTransformDescriptor::Mat AA(3,3);
+    AA = A;
+    return xTransformDescriptor->ApplyAffineTransform(C, AA, b, xCenter);
     }
 
   /** Compute the variation J_T(P) * v_P given C, P and v_P */
@@ -188,7 +190,8 @@ public:
     AffineVector varb = varP.extract(3, 9);
 
     // Compute the corresponding variation using the model
-    return xTransformDescriptor->ApplyJacobianInParameters(C, varA, varb, xCenter);
+    AffineTransformDescriptor::Mat AA = varA;
+    return xTransformDescriptor->ApplyJacobianInParameters(C, AA, varb, xCenter);
     }
 
   /** Compute the variation J_T(C) * v_C given C, P and v_C */
@@ -202,7 +205,8 @@ public:
     A[0][0] += 1.0; A[1][1] += 1.0; A[2][2] += 1.0;
 
     // Compute the corresponding variation using the model
-    return xTransformDescriptor->ApplyJacobianInCoefficients(varC, A, b, xCenter);
+    AffineTransformDescriptor::Mat AA = A;
+    return xTransformDescriptor->ApplyJacobianInCoefficients(varC, AA, b, xCenter);
     }
 
   /** Affine transform is linear */
@@ -264,7 +268,7 @@ public:
     { return varC; }
 
   /** This mapping is linear */
-  bool IsLinear() { return true; }
+  bool IsLinear() const { return true; }
 
 
 private:

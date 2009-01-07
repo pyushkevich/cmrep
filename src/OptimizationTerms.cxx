@@ -2989,7 +2989,7 @@ MedialOptimizationProblem
       printf("   |  TOTAL\n");
       }
 
-    printf("%4d   %4d   ",++nGradCalls,nEvalCalls);
+    printf("%4lu   %4lu   ", (long unsigned) ++nGradCalls, (long unsigned) nEvalCalls);
     }
     
   // Begin the gradient computation for each of the energy terms
@@ -3132,11 +3132,11 @@ void MedialOptimizationProblem::DumpGradientMesh()
 
   // Save the cm-rep file for this model
   char *fnout = new char[100];
-  sprintf(fnout, "dumpgrad%04i.cmrep", this->nGradCalls);
+  sprintf(fnout, "dumpgrad%04lu.cmrep", (unsigned long) this->nGradCalls);
   SubdivisionMedialModelIO::WriteModel(model, fnout);
   
   // Now load the VTK file and append with some gradient fields
-  sprintf(fnout, "dumpgrad%04i.vtk", this->nGradCalls);
+  sprintf(fnout, "dumpgrad%04lu.vtk", (unsigned long) this->nGradCalls);
   vtkPolyDataReader *reader = vtkPolyDataReader::New();
   reader->SetFileName(fnout);
   reader->Update();

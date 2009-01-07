@@ -99,10 +99,10 @@ double levenberg_marquardt(
     bool verbose = true;
     if(verbose)
       printf(
-        "   -> LM Iter: %3d    F = %8.4e    fmax = %8.4e    fmean = %8.4e"
+        "   -> LM Iter: %3lu    F = %8.4e    fmax = %8.4e    fmean = %8.4e"
         "    mu = %8.4e    "
         "|h| = %8.4e    |x| = %8.4e\n",
-        k, normsq_fx / 2, fx.inf_norm(), 
+        (long unsigned) k, normsq_fx / 2, fx.inf_norm(), 
        dot_product(fx, vnl_vector<double>(n, 1.0/n)),
         mu, norm_h, norm_x); 
     else

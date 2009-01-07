@@ -273,6 +273,8 @@ GenericBasisRepresentation2D<NComponents, NOrder, BasisFunctionU, BasisFunctionV
   for(size_t i = 0; i < mu; i++) for(size_t j = 0; j < mv; j++)
     for(size_t k = 0; k < NComponents; k++)
       C(k, i, j) = R[ R.Key("Coefficient[%d][%d][%d]", i, j, k) ][0.0];
+
+  return true;
 }
 
 template< size_t NComponents, size_t NOrder, typename BasisFunctionU, typename BasisFunctionV >

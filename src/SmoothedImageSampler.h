@@ -10,7 +10,7 @@
 #include <vnl/vnl_erf.h>
 inline double erf(double x) { return vnl_erf(x); }
 #else
-double erf(double);
+// double erf(double);
 #endif
 
 /**

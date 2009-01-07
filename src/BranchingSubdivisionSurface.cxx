@@ -906,12 +906,12 @@ void BranchingSubdivisionSurface
     Triangle &t = m.triangles[i];
     for(j = 0; j < 3; j++)
       {
-      printf("T[%d]\'s vertex %d is %d\n", i, j, t.vertices[j]);
-      printf("T[%d] has %d neighbors across edge %d\n", i, t.n_nbr[j], j);
+      printf("T[%d]\'s vertex %d is %d\n", (int) i, j, (int) t.vertices[j]);
+      printf("T[%d] has %d neighbors across edge %d\n", (int) i, (int) t.n_nbr[j], j);
       for(a = 0; a < t.n_nbr[j]; a++)
         {
         printf("T[%d]'s neighbor %d across edge %d is T[%d] (reciprocal edge %d)\n",
-          i, a, j, t.GetNeighbor(j, a), t.GetNeighborEdge(j, a));
+          (int) i, (int) a, j, (int) t.GetNeighbor(j, a), t.GetNeighborEdge(j, a));
         }
       }
     }
@@ -1042,7 +1042,7 @@ bool BranchingSubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
         if(tn.n_nbr[jn] != t.n_nbr[j])
           {
           printf("Error %d: T[%d].n_nbr[%d] != T[%d].n_nbr[%d]\n",
-            nerr++, i, j, in, jn); 
+            (int) nerr++, (int) i, (int) j, (int) in, (int) jn); 
           }
 
         // Check that one of the neighbors of tn across jn is t
@@ -1058,7 +1058,7 @@ bool BranchingSubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
             if(j != tn.GetNeighborEdge(jn, an))
               {
               printf("Error %d: T[%d].nedge[%d,%d] != T[%d].nedge[%d,%d]\n",
-                nerr++, i, j, a, in, jn, an); 
+                (int) nerr++, (int) i, (int) j, (int) a, (int) in, (int) jn, (int) an); 
               }
             }
           }
@@ -1067,12 +1067,12 @@ bool BranchingSubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
         if(tCount == 0)
           {
           printf("Error %d: T[%d] is not a neighbor of its neighbor T[%d]\n",
-            nerr++, i, in); 
+            (int) nerr++, (int) i, (int) in); 
           }
         else if(tCount > 1)
           {
           printf("Error %d: T[%d] appears %d times as a neighbor of its neighbor T[%d]\n",
-            nerr++, i, tCount, in); 
+            (int) nerr++, (int) i, (int) tCount, (int) in); 
           }
         }
       }

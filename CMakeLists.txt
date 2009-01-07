@@ -1,5 +1,12 @@
 PROJECT(CMREP)
 
+# New CMake compatibility
+CMAKE_MINIMUM_REQUIRED(VERSION 2.4)
+if(COMMAND cmake_policy)
+  cmake_policy(SET CMP0003 NEW)
+endif(COMMAND cmake_policy)
+
+
 # Get ITK
 FIND_PACKAGE(ITK)
 IF(ITK_FOUND)
