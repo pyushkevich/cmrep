@@ -1,12 +1,5 @@
 PROJECT(CMREP)
 
-# New CMake compatibility
-CMAKE_MINIMUM_REQUIRED(VERSION 2.4)
-if(COMMAND cmake_policy)
-  cmake_policy(SET CMP0003 NEW)
-endif(COMMAND cmake_policy)
-
-
 # Get ITK
 FIND_PACKAGE(ITK)
 IF(ITK_FOUND)
@@ -22,7 +15,7 @@ FIND_PACKAGE(VTK)
 IF(VTK_FOUND)
   INCLUDE(${VTK_USE_FILE})
   SET(VTK_LIBRARIES
-    vtkCommon vtkIO vtkGraphics vtkRendering vtkFiltering vtkImaging vtkHybrid)
+    vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
   IF(VTK_MAJOR_VERSION EQUAL 4)
     SET(VTK_LIBRARIES ${VTK_LIBRARIES} vtkPatented)
   ENDIF(VTK_MAJOR_VERSION EQUAL 4)
