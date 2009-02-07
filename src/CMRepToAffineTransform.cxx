@@ -11,6 +11,7 @@
 #include <vnl/vnl_vector_fixed.h>
 #include <vnl/vnl_matrix.h>
 #include <vnl/vnl_math.h>
+#include <vnl/vnl_det.h>
 #include <vnl/algo/vnl_qr.h>
 #include <vtkTransformPolyDataFilter.h>
 #include <vtkMatrixToLinearTransform.h>
@@ -39,6 +40,8 @@ int usage()
   cout << "                    the warp field" << endl;
   cout << "  -f              : flip atom normal, i.e., map spoke1 in cmrep1 to " << endl;
   cout << "                    spoke2 in cmrep2" << endl;
+  cout << "  -b              : only use boundary points for affine transform calc " << endl;
+  cout << "                    (overrides -x flag)" << endl;
   return -1;
 }
 
@@ -57,6 +60,7 @@ int main(int argc, char *argv[])
   // Get the options
   double xiMax = 1, xiStep = 0.1;
   bool flip = false;
+  bool bnd = false;
 
   // Parse the options
   for(size_t iopt = 1; iopt < argc-3; iopt++)
@@ -64,6 +68,10 @@ int main(int argc, char *argv[])
     if(!strcmp(argv[iopt], "-f"))
       {
       flip = true;
+      }
+    else if(!strcmp(argv[iopt], "-b"))
+      {
+      bnd = true;
       }
     else if(!strcmp(argv[iopt], "-x"))
       {
@@ -122,11 +130,19 @@ int main(int argc, char *argv[])
 
   // Compute the xi array 
   std::vector<double> xivec; 
-  xivec.push_back(0.0);
-  for(double xi = xiStep; xi < xiMax + 0.5 * xiStep; xi += xiStep)
+  if(bnd)
     { 
-    xivec.insert(xivec.end(), xi);
-    xivec.insert(xivec.begin(), -xi);
+    xivec.push_back(-1.0); 
+    xivec.push_back(1.0); 
+    }
+  else
+    {
+    xivec.push_back(0.0);
+    for(double xi = xiStep; xi < xiMax + 0.5 * xiStep; xi += xiStep)
+      { 
+      xivec.insert(xivec.end(), xi);
+      xivec.insert(xivec.begin(), -xi);
+      }
     }
 
   // Compute least square fit of points in m1 to m2
@@ -135,6 +151,12 @@ int main(int argc, char *argv[])
   size_t n = np * ns;
   size_t off = 0;
   Mat X_ref(n, 4), X_mov(n, 4);
+
+  cout << "Xi vector: ";
+  for(size_t j = 0; j < ns; j++)
+    cout << xivec[j] << " ";
+  cout << endl;
+
   for(size_t i = 0; i < np; i++)
     {
     typedef vnl_vector_fixed<double, 3> Vec;
@@ -180,7 +202,7 @@ int main(int argc, char *argv[])
     fout << tran[i][0] << " " << tran[i][1] << " " << tran[i][2] << " " << tran[i][3] << endl;
   fout.close();
 
-  /* 
+  /*
   // Apply transform to the mesh
   vtkMatrixToLinearTransform *m_Transform = vtkMatrixToLinearTransform::New();
   m_Transform->GetMatrix()->DeepCopy(tran.data_block());  
@@ -208,19 +230,25 @@ int main(int argc, char *argv[])
   vec.GetVnlVector().update(tran.get_column(3).extract(3));
   atran->SetOffset(vec);
 
+  */
+
   // Compute the mean squared difference
   double diff = 0.0;
+  vnl_matrix_fixed<double, 3, 3> A = tran.extract(3,3);
   for(size_t i = 0; i < n; i++)
     {
     vnl_vector<double> p_ref = X_ref.get_row(i).extract(3);
     vnl_vector<double> p_mov = X_mov.get_row(i).extract(3);
-    itk::Point<double, 3> pt_mov; pt_mov.GetVnlVector().update(p_mov);
-    vnl_vector<double> p_fit = atran->TransformPoint(pt_mov).GetVnlVector();
+    vnl_vector<double> p_fit = A * p_mov + tran.get_column(3).extract(3);
     diff += (p_ref - p_fit).squared_magnitude();
     }
   diff /= n;
-  cout << "Mean Square Difference: " << diff << endl;
+  cout << "RMS Difference: " << sqrt(diff) << endl;
 
+  // Report the Jacobian of the transformation
+  cout << "Jacobian: " << vnl_det(A) << endl;
+
+  /*
   // Invert the transform, because what we really want is the transform
   // from reference space to moving space
   ATranType::Pointer ainv = ATranType::New();
