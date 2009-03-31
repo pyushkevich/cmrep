@@ -162,7 +162,8 @@ ADD_EXECUTABLE(cmrep_fillmesh src/CMRepMeshToImage.cxx)
 ADD_EXECUTABLE(cmrep_genwarp src/CMRepToWarp.cxx)
 ADD_EXECUTABLE(cmrep_warpimage src/CMRepWarpImage.cxx)
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
+ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
 
 # Add installation targets
-INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh cmrep_subdivide 
-  cmrep_remesh cmrep_fillmesh cmrep_genwarp cmrep_warpimage)
+INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
+  cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp cmrep_warpimage)
