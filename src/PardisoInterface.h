@@ -32,11 +32,11 @@ extern "C" {
 #else
 
 void pardisoinit_(size_t *, int *, int *)
-  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
+  { std::cerr << "Pardiso unavailable; exiting." << std::endl; exit(-1); }
 
 void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
     int *, int *, int *, int *, double *, double *, int*)
-  { cerr << "Pardiso unavailable; exiting." << endl; exit(-1); }
+  { std::cerr << "Pardiso unavailable; exiting." << std::endl; exit(-1); }
 
 #endif
 
