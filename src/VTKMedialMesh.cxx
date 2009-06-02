@@ -324,6 +324,7 @@ void ExportBoundaryMeshToVTK(
   vtkFloatArray *lCurvPen = AddBndScalarField(pMedial, xModel, "Curvature Penalty");
   vtkFloatArray *lSqrMeanCrv = AddBndScalarField(pMedial, xModel, "SqrMeanCrv");
   vtkFloatArray *lCellJac = AddBndTriScalarField(pMedial, xModel, "Jacobian");
+  vtkFloatArray *lMedialIndex = AddBndScalarField(pMedial, xModel, "Medial Atom Index");
 
   vtkFloatArray *lDiffPenalty = 
     AddBndScalarField(pMedial, xModel, "Diffeomorphic Penalty");
@@ -363,6 +364,8 @@ void ExportBoundaryMeshToVTK(
     lMeanCurv->SetTuple1(i, B.curv_mean);
     lGaussCurv->SetTuple1(i, B.curv_gauss);
     lCurvPen->SetTuple1(i, 4 * B.curv_mean * B.curv_mean - 2 * B.curv_gauss);
+
+    lMedialIndex->SetTuple1(i, it.GetAtomIndex());
 
     SMLVec3d NX = (it.GetBoundarySide() > 0 ? 1.0:1.0) *  vnl_cross_3d(A.Xu, A.Xv);
     SMLVec3d NY = vnl_cross_3d(B.X_i[0], B.X_i[1]);
