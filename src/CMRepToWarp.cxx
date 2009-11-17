@@ -210,6 +210,7 @@ int main(int argc, char *argv[])
     warp[d]->SetRegions(img->GetBufferedRegion());
     warp[d]->SetOrigin(img->GetOrigin());
     warp[d]->SetSpacing(img->GetSpacing());
+    warp[d]->SetDirection(img->GetDirection());
     warp[d]->Allocate();
     warp[d]->FillBuffer(0.0);
     }

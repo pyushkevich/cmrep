@@ -85,6 +85,7 @@ void ExportMedialMeshToVTK(
   vtkFloatArray *lAngle = AddMedialScalarField(pMedial, xModel, "Metric Angle");
   vtkFloatArray *lCoordU = AddMedialScalarField(pMedial, xModel, "U Coordinate");
   vtkFloatArray *lCoordV = AddMedialScalarField(pMedial, xModel, "V Coordinate");
+  vtkFloatArray *lTexture = AddMedialVectorField(pMedial, xModel, "Texture Coordinates", 2);
   vtkFloatArray *lMeanCurv = AddMedialScalarField(pMedial, xModel, "Mean Curvature");
   vtkFloatArray *lGaussCurv = AddMedialScalarField(pMedial, xModel, "Gauss Curvature");
   vtkFloatArray *lKappa1 = AddMedialScalarField(pMedial, xModel, "Kappa1");
@@ -96,6 +97,9 @@ void ExportMedialMeshToVTK(
 
   vtkFloatArray *lSpoke1 = AddMedialVectorField(pMedial, xModel, "Spoke1");
   vtkFloatArray *lSpoke2 = AddMedialVectorField(pMedial, xModel, "Spoke2");
+
+  // Set the texture coordinates
+  pMedial->GetPointData()->SetActiveTCoords(lTexture->GetName());
 
   // A computation of the Laplace basis
   vtkFloatArray *lBasis = AddMedialVectorField(pMedial, xModel, "LaplaceBasis", 10); 
@@ -148,6 +152,7 @@ void ExportMedialMeshToVTK(
 
     lCoordU->SetTuple1(i, a.u);
     lCoordV->SetTuple1(i, a.v);
+    lTexture->SetTuple2(i, a.u, a.v);
 
     lMeanCurv->SetTuple1(i, a.xMeanCurv);
     lGaussCurv->SetTuple1(i, a.xGaussCurv);
