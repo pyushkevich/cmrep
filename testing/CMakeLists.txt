@@ -1,6 +1,3 @@
-# Testing Commands
-ENABLE_TESTING()
-
 # Configure the parameter file
 CONFIGURE_FILE(${CMREP_SOURCE_DIR}/testing/t001_param.txt ${CMREP_BINARY_DIR}/testing/t001_param.txt)
 

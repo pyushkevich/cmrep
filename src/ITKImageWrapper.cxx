@@ -7,6 +7,8 @@
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
 
+#include "vnl/vnl_inverse.h"
+
 template<typename TPixel>
 class ITKImageWrapperImpl : public virtual ITKImageWrapper<TPixel>
 {
@@ -81,9 +83,6 @@ private:
 
   // Function called when the image is updated externally
   void OnImageUpdate();
-
-  // Jacobian matrix used for image gradient computation
-  vnl_matrix_fixed<double,3,3> xRASJacobian;
 
   // Factory is our friend
   friend class ITKImageWrapperFactory<TPixel>;
@@ -165,23 +164,26 @@ ITKImageWrapperImpl<TPixel>
     typename InterpolatorType::CovariantVectorType grad = 
       fnInterpolator->EvaluateDerivativeAtContinuousIndex(xIndex);
 
-    G[0] = grad[0]; G[1] = grad[1]; G[2] = grad[2];
+    // The above method applies Jacobian based on the ITK Physical-Voxel mapping
+    // To convert to the nIFTI mapping we use, multiply by -1, -1, 1
+    G[0] = -grad[0]; G[1] = -grad[1]; G[2] = grad[2];
+
+    /* 
 
     // test derivative
-    // SMLVec3d Xd; double eps = 0.001;
-    // for(size_t d = 0; d < 3; d++)
-    //   {
-    //   SMLVec3d X1 = X, X2 = X;
-    //   X1[d] -= eps; X2[d] += eps;
-    //   Xd[d] = (this->Interpolate(X2[0],X2[1],X2[2],0.0) - this->Interpolate(X1[0],X1[1],X1[2],0.0)) / (2 * eps);
-    //   }
-    // std::cout << "Analytic = " << G << "\t Numeric = " << Xd << std::endl;
+    SMLVec3d Xd; double eps = 0.001;
+    for(size_t d = 0; d < 3; d++)
+      {
+      SMLVec3d X1 = X, X2 = X;
+      X1[d] -= eps; X2[d] += eps;
+      Xd[d] = (this->Interpolate(X2[0],X2[1],X2[2],0.0) - this->Interpolate(X1[0],X1[1],X1[2],0.0)) / (2 * eps);
+      }
+    std::cout << "Analytic = " << G << "\t Numeric = " << Xd << std::endl; */
     }
   else
     { G.fill(0.0); }
 
   // Apply jacobian of the image coordinate mapping to the gradient
-  G = xRASJacobian * G;
 }
 
 template<typename TPixel>
@@ -210,7 +212,6 @@ void ITKImageWrapperImpl<TPixel>
 {
   fnInterpolator->SetInputImage(xImage);
   fnInterpolatorNN->SetInputImage(xImage);
-  xRASJacobian = xImage->GetSpacingOriginPhysicalSpaceToRASPhysicalSpaceMatrix().GetVnlMatrix().extract(3,3);
 }
 
 static bool glob_ITKCUBFactoryRegistered = false;

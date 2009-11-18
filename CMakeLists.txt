@@ -1,28 +1,29 @@
+# Requisite CMake commands
+cmake_minimum_required(VERSION 2.6)
+if(COMMAND cmake_policy)
+  cmake_policy(SET CMP0003 NEW)
+endif(COMMAND cmake_policy)
+
+# Project name
 PROJECT(CMREP)
 
-# Get ITK
-FIND_PACKAGE(ITK)
-IF(ITK_FOUND)
-  INCLUDE(${ITK_USE_FILE})
-ELSE(ITK_FOUND)
-  MESSAGE(FATAL_ERROR
-    "Cannot build without ITK.  Please set ITK_DIR.")
-ENDIF(ITK_FOUND)
+# Testing
+ENABLE_TESTING()
+INCLUDE(CTest)
 
+# Versioning
+SET(CMREP_VERSION_MAJOR 1)
+SET(CMREP_VERSION_MINOR 0)
+SET(CMREP_VERSION_PATCH 0)
+SET(CMREP_VERSION_FULL "${CMREP_VERSION_MAJOR}.${CMREP_VERSION_MINOR}.${CMREP_VERSION_PATCH}")
+
+# Get ITK
+FIND_PACKAGE(ITK 3.14 REQUIRED)
+INCLUDE(${ITK_USE_FILE})
 
 # Get VTK
-FIND_PACKAGE(VTK)
-IF(VTK_FOUND)
-  INCLUDE(${VTK_USE_FILE})
-  SET(VTK_LIBRARIES
-    vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
-  IF(VTK_MAJOR_VERSION EQUAL 4)
-    SET(VTK_LIBRARIES ${VTK_LIBRARIES} vtkPatented)
-  ENDIF(VTK_MAJOR_VERSION EQUAL 4)
-ELSE(VTK_FOUND)
-  MESSAGE(FATAL_ERROR
-    "Cannot build without VTK.  Please set VTK_DIR.")
-ENDIF(VTK_FOUND)
+FIND_PACKAGE(VTK 5.2 REQUIRED)
+INCLUDE(${VTK_USE_FILE})
 
 # Optionally, support PARDISO
 OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
@@ -49,7 +50,6 @@ IF(USE_PARDISO)
 ELSE(USE_PARDISO)
   ADD_DEFINITIONS(-UHAVE_PARDISO)
 ENDIF(USE_PARDISO)
-
 
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src)
@@ -90,10 +90,8 @@ ENDIF(GLUT_FOUND)
 
 #  ${CMREP_SOURCE_DIR}/extras/afront/tmp/
 
-
 # Include subdirectories
 SUBDIRS(extras/toms611)
-### SUBDIRS(extras/afront/tmp/afront)
 SUBDIRS(testing)
 
 # Platform-specifics
@@ -144,6 +142,11 @@ ADD_LIBRARY(cmrep ${COMMON_SRCS})
 SET(ITK_LIBRARIES
   ITKNumerics ITKIO ITKCommon ITKBasicFilters)
 
+# Define the VTK libraries
+SET(VTK_LIBRARIES
+  vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
+
+
 
 # Set the list of required libraries
 LINK_LIBRARIES(
@@ -167,3 +170,9 @@ ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
 # Add installation targets
 INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
   cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp cmrep_warpimage)
+
+INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
+  "share/cmrep/")
+
+# Add package support
+INCLUDE(CMake/Package.cmake)
