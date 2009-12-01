@@ -178,7 +178,7 @@ int main(int argc, char *argv[])
     for(size_t side = 0; side < 2; side++)
       {
       // Get the vertices
-      Vec x[3], b[3], f[3];
+      Vec x[3], b[3];
       for(size_t i=0;i<3;i++)
         {
         x[i] = Vec(mesh->GetPoint(pts[i]));

@@ -6,7 +6,7 @@
 #include "SparseMatrix.h"
 #include "SubdivisionSurface.h"
 #include "GenericMedialModel.h"
-#include "PardisoInterface.h"
+#include "SparseSolver.h"
 #include <smlmath.h>
 #include <vnl/vnl_matrix.h>
 #include <vnl/vnl_vector.h>
@@ -174,7 +174,7 @@ private:
   MedialAtom *xAtoms;
 
   // Pardiso solver
-  UnsymmetricRealPARDISO xPardiso;
+  SparseSolver *xSolver;
 
   // LM optimizer callbacks
   static void ComputeLMResidual(void *handle, int n, double *x, double *fx);

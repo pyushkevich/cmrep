@@ -26,9 +26,9 @@ ImmutableSparseArray<TVal>
   nRows = nColumns = nSparseEntries = 0;
   if(xSparseValues)
     { 
-    delete xSparseValues; 
-    delete xRowIndex; 
-    delete xColIndex; 
+    delete[] xSparseValues; 
+    delete[] xRowIndex; 
+    delete[] xColIndex; 
     xSparseValues = NULL;
     xRowIndex = xColIndex = NULL;
     }

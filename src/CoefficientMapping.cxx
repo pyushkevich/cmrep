@@ -71,8 +71,8 @@ ReflectionCoefficientMapping
     {
     double ui = model->GetCoefficientU()[i];
     double vi = model->GetCoefficientV()[i];
-    double dist;
-    size_t iopp;
+    double dist = 0;
+    size_t iopp = NOID;
     for(size_t j = 0; j < k; j++)
       {
       double uj = model->GetCoefficientU()[j];

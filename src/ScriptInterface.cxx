@@ -414,8 +414,6 @@ private:
 /** CALLBACK FUNCTIONS FOR TOMS611 ROUTINE */
 void my_calcf(int &n, double *x, int &nf, double &f, int *dummy1, double *dummy2, void *info)
 {
-  static int it = 0;
-
   // Get a pointer to the object on which to evaluate
   MedialOptimizationProblem *mop = static_cast<MedialOptimizationProblem *>(info);
 
@@ -1042,13 +1040,12 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
   vnl_symmetric_eigensystem_compute(yCov, Vy, Dy);
 
   // Compute the scale factor
-  double s = sqrt(dot_product(Dx,Dy) / dot_product(Dy,Dy));
+  // double s = sqrt(dot_product(Dx,Dy) / dot_product(Dy,Dy));
 
   // The best set of coefficients and the associated match value
-  size_t iBestSurface; double xBestMatch;
+  size_t iBestSurface = 0; double xBestMatch = 0;
 
   // Get the numbers of coefficients
-  size_t nCoeff = xMedialModel->GetNumberOfCoefficients();
   vnl_vector<double> xRotatedCoeff[8], xInitCoeff = xMedialModel->GetCoefficientArray();
 
   // Create an affine transform for the coefficients
@@ -1262,7 +1259,7 @@ void UpdateRegion(itk::ImageRegion<3> &R, const itk::Index<3> &idx, bool first)
     {
     if(R.GetIndex(i) < idx[i])
       R.SetIndex(i, idx[i]);
-    if(R.GetSize(i) + R.GetIndex(i) <= idx[i])
+    if(R.GetIndex(i) + (int) R.GetSize(i) <= idx[i])
       R.SetSize(i, 1 + idx[i] - R.GetIndex(i));
     }
 }
@@ -2089,7 +2086,6 @@ void CartesianMPDE::LoadFromDiscreteMRep(const char *file, double xRhoInit)
   unsigned int uMax = 0, vMax = 0;
 
   // Read atoms
-  bool done = false;
   while(!fin.eof())
     {
     DiscreteAtom atom;
@@ -2327,8 +2323,8 @@ SampleReferenceFrameImage(FloatImage *imgInput, FloatImage *imgOutput, size_t zS
 
       // Locate the cell that includes this point
       vnl_vector<double> vox = pVoxel.GetVnlVector();
-      size_t iClosest = (size_t)
-        loc->FindClosestPoint(vox(0), vox(1), vox(2));
+      // size_t iClosest = (size_t)
+      //  loc->FindClosestPoint(vox(0), vox(1), vox(2));
 
       // Convert this to a pixel index
       // itOut.Set(xpix[iClosest]);
@@ -2599,7 +2595,7 @@ void MedialPCA::ComputePCA(MedialPDE *mpde)
   Mat *Abnd = new Mat[nSamples];
   Mat *Rbnd = new Mat[nSamples];
   Vec *tbnd = new Vec[nSamples];
-  double *sbnd = new double[nSamples];
+  // double *sbnd = new double[nSamples];
 
   // Populate the input matrices
   GenericMedialModel *xMedialModel = mpde->xMedialModel;

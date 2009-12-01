@@ -253,6 +253,8 @@ inline ostream & operator << (ostream &sout, const StatisticsAccumulator &S)
 class EnergyTerm 
 {
 public:
+  virtual ~EnergyTerm () {}
+
   // Compute the energy term 
   virtual double ComputeEnergy(SolutionData *data) = 0;
 
@@ -287,6 +289,8 @@ public:
 class MedialIntegrationEnergyTerm : public EnergyTerm
 {
 public:
+  virtual ~MedialIntegrationEnergyTerm () {}
+
   MedialIntegrationEnergyTerm(GenericMedialModel *model);
 
 protected:
@@ -299,7 +303,7 @@ class BoundaryImageMatchTerm : public EnergyTerm
 public:
   // Constructor
   BoundaryImageMatchTerm(GenericMedialModel *model, FloatImage *image);
-    ~BoundaryImageMatchTerm();
+  virtual ~BoundaryImageMatchTerm();
 
   // Compute the image match
   double ComputeEnergy(SolutionData *data)
@@ -340,6 +344,7 @@ class LocalDistanceDifferenceEnergyTerm : public EnergyTerm
 public:
   /** Standard initialization */
   LocalDistanceDifferenceEnergyTerm(GenericMedialModel *model);
+  virtual ~LocalDistanceDifferenceEnergyTerm () {}
 
   // Set the parameters from a registry
   void SetParameters(Registry &r);
@@ -415,7 +420,7 @@ public:
     GenericMedialModel *model, FloatImage *xGrayImage);
 
   // Destructor
-  ~CrossCorrelationImageMatchTerm();
+  virtual ~CrossCorrelationImageMatchTerm();
 
   /** Load the parameters from file */
   void SetParameters(Registry &r);
@@ -509,6 +514,7 @@ public:
    * medial sail vector */
   VolumeIntegralEnergyTerm(
     GenericMedialModel *model, EuclideanFunction *function, size_t nCuts);
+  virtual ~VolumeIntegralEnergyTerm() {} 
   
   /** Compute the volume overlap fraction between image and m-rep */
   double ComputeEnergy(SolutionData *data)
@@ -586,7 +592,7 @@ public:
   VolumeOverlapEnergyTerm(
     GenericMedialModel *model, FloatImage *image, size_t nCuts);
 
-  ~VolumeOverlapEnergyTerm()
+  virtual ~VolumeOverlapEnergyTerm()
     { delete worker; delete function; }
   
   /** Compute the volume overlap fraction between image and m-rep */
@@ -632,6 +638,7 @@ class BoundaryJacobianEnergyTerm : public EnergyTerm
 {
 public:
   BoundaryJacobianEnergyTerm();
+  virtual ~BoundaryJacobianEnergyTerm() {} 
 
   // Compute the energy
   double ComputeEnergy(SolutionData *data);
@@ -695,6 +702,7 @@ class MedialTriangleAnglePenaltyTerm : public EnergyTerm
 public:
   // Initialize the term
   MedialTriangleAnglePenaltyTerm(GenericMedialModel *model);
+  virtual ~MedialTriangleAnglePenaltyTerm() {} 
 
   // Compute the energy
   double ComputeEnergy(SolutionData *data)
@@ -725,6 +733,7 @@ class MedialAnglesPenaltyTerm : public MedialIntegrationEnergyTerm
 public:
   // Initialize the term
   MedialAnglesPenaltyTerm(GenericMedialModel *model);
+  virtual ~MedialAnglesPenaltyTerm() {} 
 
   // Compute the energy
   double ComputeEnergy(SolutionData *data);
@@ -760,6 +769,8 @@ private:
 class AtomBadnessTerm : public EnergyTerm
 {
 public:
+  virtual ~AtomBadnessTerm () {}
+
   double ComputeEnergy(SolutionData *data);
   void PrintReport(ostream &sout);
 
@@ -786,6 +797,8 @@ private:
 class BoundaryGradRPenaltyTerm : public EnergyTerm
 {
 public:
+  virtual ~BoundaryGradRPenaltyTerm () {}
+
   // Compute the penalty
   double ComputeEnergy(SolutionData *data);
 
@@ -820,6 +833,7 @@ public:
   // Constructor, takes the initial model and number of components
   MeshRegularizationPenaltyTerm(
     GenericMedialModel *model, size_t nu, size_t nv);
+  virtual ~MeshRegularizationPenaltyTerm() {} 
 
   // Compute the penalty
   double ComputeEnergy(SolutionData *data);
@@ -859,6 +873,8 @@ private:
 class MedialCurvaturePenalty : public EnergyTerm
 {
 public:
+  virtual ~MedialCurvaturePenalty () {}
+
   // Compute the penalty
   double ComputeEnergy(SolutionData *data);
 
@@ -928,6 +944,7 @@ class BoundaryCurvaturePenalty : public EnergyTerm
 public:
   // Constructr
   BoundaryCurvaturePenalty(GenericMedialModel *model);
+  virtual ~BoundaryCurvaturePenalty() {} 
 
   // Compute the penalty
   double ComputeEnergy(SolutionData *data);
@@ -990,6 +1007,7 @@ class DistanceToRadiusFieldEnergyTerm : public MedialIntegrationEnergyTerm
 public:
   /** Constructor, takes the target radius field */
   DistanceToRadiusFieldEnergyTerm(GenericMedialModel *model, double *radius);
+  virtual ~DistanceToRadiusFieldEnergyTerm() {} 
   
   double ComputeEnergy(SolutionData *data);
   
@@ -1020,6 +1038,7 @@ public:
   /** Constructor, takes the target XYZ field */
   DistanceToPointSetEnergyTerm(
     GenericMedialModel *model, double *x, double *y, double *z);
+  virtual ~DistanceToPointSetEnergyTerm() {} 
   
   double ComputeEnergy(SolutionData *data);
   
@@ -1075,6 +1094,8 @@ private:
 class RadiusPenaltyTerm : public EnergyTerm
 {
 public:
+  virtual ~RadiusPenaltyTerm () {}
+
   RadiusPenaltyTerm(
     double bndLower = 0., double bndUpper = 1.e100, 
     double sclLower = 1., double sclUpper = 1.)
@@ -1110,6 +1131,7 @@ class MedialBendingEnergyTerm : public MedialIntegrationEnergyTerm
 public:
   /** Initialize with a sample solution */
   MedialBendingEnergyTerm(GenericMedialModel *model);
+  virtual ~MedialBendingEnergyTerm() {} 
   
   /** Initialize the term with the template info */
   double ComputeEnergy(SolutionData *data);
@@ -1131,6 +1153,7 @@ class MedialRegularityTerm : public MedialIntegrationEnergyTerm
 public:
   /** Initialize with a sample solution */
   MedialRegularityTerm(GenericMedialModel *model);
+  virtual ~MedialRegularityTerm() {} 
   
   /** Initialize the term with the template info */
   double ComputeEnergy(SolutionData *data);

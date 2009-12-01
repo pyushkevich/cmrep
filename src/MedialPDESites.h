@@ -16,6 +16,8 @@ public:
   FDAbstractSite(FiniteDifferenceMask *xMask)
     { this->xMask = xMask; }
 
+  virtual ~FDAbstractSite () {}
+
   // Compute the value of the encoded equation at the site
   virtual double ComputeEquation(const Mat &Y) = 0;
 
@@ -59,9 +61,11 @@ protected:
 class FDInternalSite : public FDAbstractSite
 {
 public:
+
   // Constructor: set the site
   FDInternalSite(FiniteDifferenceMask *xMask) :
     FDAbstractSite(xMask), xDerivative(xMask->Size()) {}
+  virtual ~FDInternalSite () {}
   
   // Set the geometry of the site
   void SetGeometry(GeometryDescriptor *gd, double rho);
@@ -122,10 +126,12 @@ protected:
 class FDBorderSite : public FDAbstractSite
 {
 public:
+
   // Constructor: set the site
   FDBorderSite(FiniteDifferenceMask *xMask) :
     FDAbstractSite(xMask), xDerivativeF(xMask->Size()),
     xDerivativeFu(xMask->Size()), xDerivativeFv(xMask->Size()) {}
+  virtual ~FDBorderSite () {}
   
   // Set the geometry of the site
   void SetGeometry(GeometryDescriptor *gd, double rho);
@@ -166,7 +172,7 @@ protected:
   double F, Fu, Fv;
 
   /** Derivatives with respect to each site */
-  Vec xDerivativeFu, xDerivativeFv, xDerivativeF;
+  Vec xDerivativeF, xDerivativeFu, xDerivativeFv;
   
   /** The value of rho */
   double rho;

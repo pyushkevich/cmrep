@@ -2,6 +2,7 @@
 #define __PardisoInterface_h_
 
 #include <iostream>
+#include "SparseSolver.h"
 #include "SparseMatrix.h"
 
 #ifdef WIN32
@@ -29,19 +30,10 @@ extern "C" {
 
 #endif
 
-#else
-
-void pardisoinit_(size_t *, int *, int *)
-  { std::cerr << "Pardiso unavailable; exiting." << std::endl; exit(-1); }
-
-void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
-    int *, int *, int *, int *, double *, double *, int*)
-  { std::cerr << "Pardiso unavailable; exiting." << std::endl; exit(-1); }
-
 #endif
 
 
-class GenericRealPARDISO
+class GenericRealPARDISO : public SparseSolver
 {
 public:
   // Factor the system for arbitrary right hand sides and matrices of the same
@@ -98,7 +90,7 @@ protected:
   // Storage for data in intermediate steps
   int n, *idxRows, *idxCols;
   const double *xMatrix;
-  bool flagPardisoCalled, flagOwnIndexArrays, flagVerbose;
+  bool flagPardisoCalled, flagOwnIndexArrays;
 };
 
 class UnsymmetricRealPARDISO : public GenericRealPARDISO

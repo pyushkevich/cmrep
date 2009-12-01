@@ -9,7 +9,7 @@
 #include "MedialAtom.h"
 #include "CartesianMedialAtomGrid.h"
 #include "BasisFunctions2D.h"
-#include "PardisoInterface.h"
+#include "SparseSolver.h"
 
 using namespace std;
 
@@ -155,7 +155,7 @@ private:
   // vnl_vector<double> eps, b, y, zTest;
 
   // Sparse linear matrix solver
-  UnsymmetricRealPARDISO xPardiso;
+  SparseSolver *xSolver;
 
   // Common initialization
   void Initialize(const Vec &uGrid, const Vec &vGrid);

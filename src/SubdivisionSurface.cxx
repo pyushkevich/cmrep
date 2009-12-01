@@ -291,7 +291,7 @@ void SubdivisionSurface::ImportLevelFromVTK(vtkPolyData *mesh, MeshLevel &dest)
 
   // For each triangle, compute the neighbor. This can be done by first enumerating
   // all the edges in the mesh. For each edge there will be one or two triangles
-  for(size_t i = 0; i < mesh->GetNumberOfCells(); i++)
+  for(size_t i = 0; i < (size_t) mesh->GetNumberOfCells(); i++)
   {
     // Get the points from the current triangle
     vtkIdType npts, *pts;
@@ -427,7 +427,7 @@ bool SubdivisionSurface::CheckMeshLevel (MeshLevel *mesh)
           cout << "Error " << nerr++ <<
           " Rule 1 violated for i = " << i << " and j = " << j << endl;
         }
-        if(tn.nedges[t.nedges[j]] != j)
+        if(tn.nedges[t.nedges[j]] != (int) j)
         {
           cout << "Error " << nerr++ <<
           " Rule 2 violated for i = " << i << " and j = " << j << endl;

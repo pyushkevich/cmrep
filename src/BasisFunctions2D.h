@@ -35,6 +35,8 @@ class IMedialCoefficientMask;
 class IHyperSurface2D
 {
 public:
+  virtual ~IHyperSurface2D() {}
+
   // Typed definitions
   typedef vnl_matrix<double> MatrixType;
   typedef vnl_vector<double> VectorType;
@@ -65,6 +67,8 @@ public:
 class IMutableHyperSurface2D : virtual public IHyperSurface2D
 {
 public:
+  virtual ~IMutableHyperSurface2D () {}
+
   /** Specify a grid of values along which the function will need to be
    * evaluated repeatedly. */
   virtual void SetEvaluationGrid(const VectorType &uu, const VectorType &vv) = 0;
@@ -84,6 +88,8 @@ public:
 class ICoefficientSettable
 {
 public:
+  virtual ~ICoefficientSettable() {}
+
   virtual double *GetCoefficientArray() = 0;
   virtual void SetCoefficientArray(const double *xData) = 0;
   virtual size_t GetNumberOfCoefficients() const = 0 ;
@@ -108,6 +114,8 @@ class IBasisRepresentation2D :
   virtual public ICoefficientSettable
 {
 public:
+  virtual ~IBasisRepresentation2D () {}
+
 
   /** Fit the i-th component of the coefficients to some data points */
   virtual void FitToData(size_t n, size_t i, double *uu, double *vv, double *xx) = 0;
@@ -232,6 +240,8 @@ template< size_t NComponents, size_t NOrder,
 class GenericBasisRepresentation2D : virtual public IBasisRepresentation2D
 {
 public:
+  virtual ~GenericBasisRepresentation2D () {}
+
   // Some useful typedefs
   typedef GenericBasisRepresentation2D<
     NComponents,NOrder,BasisFunctionU,BasisFunctionV> Self;
@@ -395,11 +405,14 @@ FourierSurfaceBase;
 class FourierSurface : public FourierSurfaceBase
 {
 public:
+
   // Constructor
   FourierSurface(size_t ncu, size_t ncv);
 
   // Copy constructor
   FourierSurface(const FourierSurface &source); 
+
+  virtual ~FourierSurface () {}
 
   /** Get a surface corresponding to a variation from this surface */
   IHyperSurface2D *GetVariationSurface(const double *xCoeff);

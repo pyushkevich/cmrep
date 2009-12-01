@@ -107,6 +107,8 @@ void ComputeMedialInternalPointsPartialDerivative(
 // This is a measure that can be computed over a volume (just a R3 function)
 class EuclideanFunction {
 public:
+  virtual ~EuclideanFunction () {}
+
   virtual double Evaluate(const SMLVec3d &x) = 0;
   virtual void ComputeGradient(const SMLVec3d &x, SMLVec3d &G)
     { G.fill(0.0); }

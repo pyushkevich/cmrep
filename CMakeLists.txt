@@ -38,6 +38,7 @@ IF(USE_PARDISO)
     IF(PARDISO_LIB)
       ADD_DEFINITIONS(-DHAVE_PARDISO)
       LINK_LIBRARIES(${PARDISO_LIB})
+      SET(SOLVER_SRC src/PardisoInterface.cxx)
     ENDIF(PARDISO_LIB)  
 
     # On Linux, Lapack is also required
@@ -50,6 +51,36 @@ IF(USE_PARDISO)
 ELSE(USE_PARDISO)
   ADD_DEFINITIONS(-UHAVE_PARDISO)
 ENDIF(USE_PARDISO)
+
+# Optionally, support TAUCS
+OPTION(USE_TAUCS "Use the TAUCS sparse solver library" OFF)
+IF(USE_TAUCS)
+  FIND_PATH(TAUCS_BUILD_DIR "taucs_config_build.h")
+  IF(TAUCS_BUILD_DIR)
+    GET_FILENAME_COMPONENT(TAUCS_BUILD_DIR_PARENT ${TAUCS_BUILD_DIR} PATH)
+    GET_FILENAME_COMPONENT(TAUCS_ROOT_DIR ${TAUCS_BUILD_DIR_PARENT} PATH)
+    GET_FILENAME_COMPONENT(TAUCS_SYS ${TAUCS_BUILD_DIR} NAME_WE)
+    INCLUDE_DIRECTORIES(${TAUCS_BUILD_DIR} ${TAUCS_ROOT_DIR}/src)
+    FIND_LIBRARY(TAUCS_LIB taucs PATHS ${TAUCS_ROOT_DIR}/lib/${TAUCS_SYS} DOC "The location of the TAUCS library")
+    IF(TAUCS_LIB)
+      ADD_DEFINITIONS(-DHAVE_TAUCS)
+      LINK_LIBRARIES(${TAUCS_LIB})
+      SET(SOLVER_SRC src/TaucsInterface.cxx)
+    ENDIF(TAUCS_LIB)  
+
+    # On Linux, Lapack is also required
+    INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
+    IF(LAPACK_FOUND)
+      LINK_LIBRARIES(${LAPACK_LIBS})
+    ENDIF(LAPACK_FOUND)
+
+    FIND_LIBRARY(METIS_LIB metis)
+    IF(METIS_LIB)
+      LINK_LIBRARIES(${METIS_LIB})
+    ENDIF(METIS_LIB)
+
+  ENDIF(TAUCS_BUILD_DIR)
+ENDIF(USE_TAUCS)
 
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src)
@@ -119,7 +150,6 @@ SET(COMMON_SRCS
   src/MeshTraversal.cxx
   src/OptimizationTerms.cxx
   src/OptimizationParameters.cxx
-  src/PardisoInterface.cxx
   src/PDESubdivisionMedialModel.cxx
   src/PrincipalComponents.cxx
   src/PrincipalComponentsPenaltyTerm.cxx
@@ -129,11 +159,13 @@ SET(COMMON_SRCS
   src/ScriptInterface.cxx
   src/SmoothedImageSampler.cxx
   src/SparseMatrix.cxx
+  src/SparseSolver.cxx
   src/SubdivisionMedialModel.cxx
   src/SubdivisionSurface.cxx
   src/TestSolver.cxx
   src/VTKMedialMesh.cxx
-  src/VTKSubdivision.cxx)
+  src/VTKSubdivision.cxx
+  ${SOLVER_SRC})
 
 # Create the CM-REP library
 ADD_LIBRARY(cmrep ${COMMON_SRCS})

@@ -161,7 +161,7 @@ int TestGradientComputation(
   vnl_vector<double> C0 = xSolver->GetCoefficientArray();
 
   // Create mixed variations
-  for(size_t i = 0; i < nRandVar; i++)
+  for(size_t i = 0; i < (size_t) nRandVar; i++)
     {    
     vnl_vector<double> dx(nParams);
     for(size_t j = 0; j < nParams; j++)
@@ -226,8 +226,6 @@ int TestGradientComputation(
   tAnalytic.Stop();
   
   // Create curvature arrays
-  size_t nb = xSolver->GetNumberOfBoundaryPoints();
-
   // Compute all the other derivatives
   for(iVar = 0; iVar < nVar; iVar++) 
     {
@@ -426,7 +424,6 @@ int TestGradientComputation(
       }
 
     // Compute the area weight difference
-    double xMaxBndAreaDiff = 0.0;
     for(MedialBoundaryPointIterator it(xGrid); !it.IsAtEnd(); ++it)
       {
       dtq.Update("Weights (boundary)",

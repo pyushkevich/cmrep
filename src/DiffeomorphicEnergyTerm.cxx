@@ -106,7 +106,6 @@ DiffeomorphicEnergyTerm
   size_t *rows = xDistMat.GetRowIndex();
   size_t *cols = xDistMat.GetColIndex();
   Intersection *ints = xDistMat.GetSparseData();
-  size_t n = xDistMat.GetNumberOfRows();
 
   double xTotalDeriv = 0.0;
 

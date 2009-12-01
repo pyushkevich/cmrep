@@ -139,8 +139,8 @@ private:
 /** This simple structure defines flags to pass to optimization */
 struct OptimizationFlags 
 {
-  bool flagDumpGradientMesh;
   bool flagTestGradient;
+  bool flagDumpGradientMesh;
 
   OptimizationFlags() : 
     flagTestGradient(false), 

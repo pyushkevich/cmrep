@@ -270,6 +270,16 @@ MedialPDESolver
 
   // Compute the initial solution
   SetDefaultInitialGuess(1);
+
+  // Init solver
+  xSolver = SparseSolver::MakeSolver(false);
+}
+
+void
+MedialPDESolver
+::~MedialPDESolver()
+{
+  delete xSolver;
 }
 
 void
@@ -430,11 +440,11 @@ bool MedialPDESolver::SolveOnce(const Mat &xGuess, double delta)
     // Perform the symbolic factorization only for the first iteration
     tSolver.Start();
     if(iIter == 0)
-      xPardiso.SymbolicFactorization(nSites, xRowIndex, xColIndex, xSparseValues);
+      xSolver->SymbolicFactorization(nSites, xRowIndex, xColIndex, xSparseValues);
 
     // Compute the Jacobian inverse
-    xPardiso.NumericFactorization(xSparseValues);
-    xPardiso.Solve(b.data_block(), eps.data_block());
+    xSolver->NumericFactorization(xSparseValues);
+    xSolver->Solve(b.data_block(), eps.data_block());
     tSolver.Stop();
 
     // A plus means solver step
@@ -706,8 +716,8 @@ MedialPDESolver
   // Solve the linear system for all the RHS
   t0 = clock();
   tSolver.Start();
-  xPardiso.NumericFactorization(xSparseValues);
-  xPardiso.Solve(N, rhs.data_block(), soln.data_block());
+  xSolver->NumericFactorization(xSparseValues);
+  xSolver->Solve(N, rhs.data_block(), soln.data_block());
   tSolver.Stop();
   cout << " [SLV: " << (clock() - t0) / CLOCKS_PER_SEC << " s] " << flush;
 

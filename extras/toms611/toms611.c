@@ -84,7 +84,7 @@ integer imdcon_(integer *k)
 /*  +++  end of port version  +++ */
 
 /*  +++  non-port version follows... */
-    ret_val = mdcon[(0 + (0 + (*k - 1 << 2))) / 4];
+    ret_val = mdcon[(0 + (0 + ((*k - 1) << 2))) / 4];
 /*  +++  end of non-port version  +++ */
 
 /* L999: */
@@ -3412,8 +3412,8 @@ L240:
 	goto L250;
     }
     i__ = 0;
-    if (v[nreduc] > zero && v[nreduc] <= emax || v[nreduc] == zero && v[
-	    preduc] == zero) {
+    if ((v[nreduc] > zero && v[nreduc] <= emax) || (v[nreduc] == zero && v[
+	    preduc] == zero)) {
 	i__ = 2;
     }
     if (v[stppar] == zero && v[reldx] <= v[xctol] && goodx) {

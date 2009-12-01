@@ -10,6 +10,7 @@ class GenericMedialModel;
 
 class CoarseToFineMappingDescriptor {
 public:
+  virtual ~CoarseToFineMappingDescriptor() {}
   typedef vnl_vector<size_t> MaskVector;
 
   /** 
@@ -46,6 +47,7 @@ public:
 class FourierCoarseToFineMappingDescriptor : public CoarseToFineMappingDescriptor
 {
 public:
+  virtual ~FourierCoarseToFineMappingDescriptor() {}
 
   FourierCoarseToFineMappingDescriptor(size_t m, size_t n) 
     {
@@ -137,6 +139,7 @@ private:
 class SubdivisionSurfaceCoarseToFineMappingDescriptor : public CoarseToFineMappingDescriptor
 {
 public:
+  virtual ~SubdivisionSurfaceCoarseToFineMappingDescriptor() {}
   typedef vnl_vector<size_t> MaskVector;
 
   SubdivisionSurfaceCoarseToFineMappingDescriptor(size_t n)

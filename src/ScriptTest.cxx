@@ -820,7 +820,6 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
     tjac->SetParameters(opar.xTermParameters[OptimizationParameters::BND_JACOBIAN_DISTORTION]);
     vt.push_back(TermInfo("", tjac, 0.1));
     }
-
   // Push the other terms
   vt.push_back(TermInfo(
       "", new MedialTriangleAnglePenaltyTerm(model), 1.0e-4));
@@ -1124,8 +1123,92 @@ int usage()
   cout << "    AFFINE XX.mpde             Test affine transform computation." << endl;
   cout << "    ATOMMATH                   Test local medial geometry." << endl;
   cout << "    SAMPLE XX.img              Test image sampler code (SmoothedImageSampler)" << endl;
+  cout << "    SPARSE                     Test sparse matrix code" << endl;
   cout << endl;
   return -1;
+}
+
+int TestSparseCode()
+{
+  // Set up a matrix
+  ImmutableSparseArray<double>::STLSourceType Q(10);
+  Q[8].push_back(make_pair(0, 0.4858));
+  Q[9].push_back(make_pair(0, 0.7604));
+  Q[1].push_back(make_pair(1, 0.6629));
+  Q[6].push_back(make_pair(1, 0.7832));
+  Q[7].push_back(make_pair(1, 0.5995));
+  Q[8].push_back(make_pair(1, 0.4624));
+  Q[0].push_back(make_pair(2, 0.9785));
+  Q[1].push_back(make_pair(2, 0.9100));
+  Q[6].push_back(make_pair(2, 0.6159));
+  Q[0].push_back(make_pair(3, 0.3348));
+  Q[6].push_back(make_pair(3, 0.8479));
+  Q[7].push_back(make_pair(3, 0.2358));
+  Q[9].push_back(make_pair(3, 0.1761));
+  Q[2].push_back(make_pair(4, 0.4236));
+  Q[4].push_back(make_pair(4, 0.0986));
+  Q[5].push_back(make_pair(4, 0.1813));
+  Q[7].push_back(make_pair(5, 0.7233));
+  Q[4].push_back(make_pair(6, 0.9446));
+  Q[6].push_back(make_pair(6, 0.5122));
+  Q[7].push_back(make_pair(6, 0.6492));
+  Q[9].push_back(make_pair(6, 0.9610));
+  Q[4].push_back(make_pair(7, 0.4881));
+  Q[5].push_back(make_pair(7, 0.5912));
+  Q[7].push_back(make_pair(7, 0.2389));
+  Q[1].push_back(make_pair(8, 0.9701));
+  Q[5].push_back(make_pair(8, 0.3935));
+  Q[6].push_back(make_pair(8, 0.0125));
+  Q[9].push_back(make_pair(8, 0.8327));
+  Q[0].push_back(make_pair(9, 0.6908));
+  Q[1].push_back(make_pair(9, 0.1363));
+  Q[2].push_back(make_pair(9, 0.7603));
+  Q[3].push_back(make_pair(9, 0.1021));
+  Q[4].push_back(make_pair(9, 0.3607));
+
+  ImmutableSparseMatrix<double> M;
+  M.SetFromSTL(Q, 10);
+
+  // Set up the right hand side
+  vnl_vector<double> b(10), x(10), gt(10);
+  b[0] = 0.7599;
+  b[1] = 0.3087;
+  b[2] = 0.7153;
+  b[3] = 0.0809;
+  b[4] = 0.8459;
+  b[5] = 0.7184;
+  b[6] = 0.8704;
+  b[7] = 0.8722;
+  b[8] = 0.7616;
+  b[9] = 0.6695;
+
+  // Set up the solution
+  gt[0] = 1.0554;
+  gt[1] = 0.5382;
+  gt[2] = 0.0233;
+  gt[3] = 0.5658;
+  gt[4] = 0.2653;
+  gt[5] = 0.2358;
+  gt[6] =-0.0838;
+  gt[7] = 1.2554;
+  gt[8] =-0.1828;
+  gt[9] = 0.7929;
+
+  // Create solver
+  SparseSolver *solver = SparseSolver::MakeSolver(false);
+  solver->SymbolicFactorization(M);
+  solver->NumericFactorization(M.GetSparseData());
+  solver->Solve(b.data_block(), x.data_block());
+
+  // Compute (Ax - b)
+  vnl_vector<double> Ax = M.MultiplyByVector(x);
+  double diff = (Ax - b).inf_norm();
+
+  // Get the max difference
+  cout << "Ax = " << Ax << endl;
+  cout << "b  = " << b << endl;
+  printf("Maximum sparse solver error: %e\n", diff);
+  return diff > 1.0e-6;
 }
 
 int main(int argc, char *argv[])
@@ -1180,6 +1263,8 @@ int main(int argc, char *argv[])
     return TestAffineTransform(argv[2]);
   else if(0 == strcmp(argv[1], "ATOMMATH"))
     return TestAtomMath();
+  else if(0 == strcmp(argv[1], "SPARSE"))
+    return TestSparseCode();
   else if(0 == strcmp(argv[1], "SAMPLE"))
     {
     if(argc < 3)

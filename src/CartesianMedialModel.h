@@ -10,7 +10,7 @@
 #include "GenericMedialModel.h"
 #include "CartesianGridMedialIterationContext.h"
 #include "BasisFunctions2D.h"
-#include "PardisoInterface.h"
+#include "SparseSolver.h"
 
 using namespace std;
 
@@ -211,7 +211,7 @@ private:
   std::vector<MedialAtom::DerivativeTerms> xTempDerivativeTerms;
 
   // Sparse linear matrix solver
-  UnsymmetricRealPARDISO xPardiso;
+  SparseSolver *solver;
 
   // Common initialization
   void Initialize(const Vec &uGrid, const Vec &vGrid);

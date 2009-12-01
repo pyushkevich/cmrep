@@ -4,6 +4,7 @@
 class AffineTransformDescriptor
 {
 public:
+  virtual ~AffineTransformDescriptor() {}
   // Vector and matrix definition
   typedef vnl_vector<double> Vec;
   typedef vnl_matrix<double> Mat;
@@ -42,6 +43,7 @@ public:
 class FourierAffineTransformDescriptor : public AffineTransformDescriptor
 {
 public:
+  virtual ~FourierAffineTransformDescriptor() {}
   typedef vnl_vector<double> Vec;
   typedef vnl_matrix<double> Mat;
 
@@ -123,6 +125,7 @@ public:
 class PointArrayAffineTransformDescriptor : public AffineTransformDescriptor
 {
 public:
+  virtual ~PointArrayAffineTransformDescriptor() {}
   typedef vnl_vector<double> Vec;
   typedef vnl_matrix<double> Mat;
 

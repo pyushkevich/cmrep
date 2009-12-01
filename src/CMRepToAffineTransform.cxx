@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
   bool bnd = false;
 
   // Parse the options
-  for(size_t iopt = 1; iopt < argc-3; iopt++)
+  for(size_t iopt = 1; (int) iopt < argc-3; iopt++)
     {
     if(!strcmp(argv[iopt], "-f"))
       {

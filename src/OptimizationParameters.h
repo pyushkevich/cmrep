@@ -79,6 +79,7 @@ public:
   virtual void ReadFromRegistry(Registry &folder) = 0;
   virtual void WriteToRegistry(Registry &folder) = 0;
   virtual OptimizationParameters::CTFSettings GetType() const = 0;
+  virtual ~CoarseToFineSettings() {}
 };
 
 class FourierCoarseToFineSettings : public CoarseToFineSettings {
@@ -103,6 +104,8 @@ public:
 
   OptimizationParameters::CTFSettings GetType() const
     { return OptimizationParameters::COSINE_BASIS_PDE; }
+
+  virtual ~FourierCoarseToFineSettings() {}
 };
 
 

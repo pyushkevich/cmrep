@@ -17,6 +17,7 @@
 class AbstractImmutableSparseArray
 {
 public:
+  virtual ~AbstractImmutableSparseArray() {}
   virtual size_t *GetRowIndex() = 0;
   virtual size_t *GetColIndex() = 0;
   virtual const size_t *GetRowIndex() const = 0;
@@ -45,7 +46,7 @@ public:
   ImmutableSparseArray();
 
   // Destructor
-  ~ImmutableSparseArray();
+  virtual ~ImmutableSparseArray();
 
   // Assignment operator for VNL
   void SetFromVNL(VNLSourceType &src);
@@ -253,7 +254,7 @@ public:
 // Print the matrix to an output stream
 template<class TVal>
 std::ostream& operator << (std::ostream &out, const ImmutableSparseMatrix<TVal> &A)
-  { A.PrintSelf(out); }
+  { A.PrintSelf(out); return out; }
 
 
   

@@ -216,12 +216,15 @@ public:
       this->GetCoefficientArray());
     }
 
+  virtual ~GenericMedialModel() {}
+
 protected:
 
   // Hidden constructor
   GenericMedialModel()
     { xIterationContext = NULL; xAtoms = NULL; }
   
+
   // The context (data structure) used to facilitate iteration over atoms
   // This data structure must be initialized before iterators can be created
   MedialIterationContext *xIterationContext;

@@ -39,6 +39,8 @@ class SubdivisionMedialModel;
 class CoefficientMapping
 {
 public:
+  virtual ~CoefficientMapping() {}
+
   typedef vnl_vector<double> Vec;
 
   /** Apply the coefficient mapping C' = T(C, P) */
@@ -156,6 +158,7 @@ protected:
 class AffineTransformCoefficientMapping : public CoefficientMapping
 {
 public:
+
   typedef vnl_vector<double> Vec;
 
   AffineTransformCoefficientMapping(GenericMedialModel *model)
@@ -165,6 +168,8 @@ public:
     m = model->GetNumberOfCoefficients();
     n = 12;
     }
+
+  virtual ~AffineTransformCoefficientMapping () {}
 
   /** Apply the coefficient mapping C' = T(C, P) */
   Vec Apply(const Vec &C, const Vec &p)
@@ -244,8 +249,10 @@ public:
     {
     this->mask = mask;
     this->m = mask.size();
-    this->n = m - std::count(mask.data_block(), mask.data_block() + m, 0);
+    this->n = m - std::count(mask.data_block(), mask.data_block() + m, (size_t) 0);
     }
+
+  virtual ~SubsetCoefficientMapping () {}
 
   Vec Apply(const Vec &C, const Vec &P) 
     {
@@ -290,6 +297,8 @@ public:
   IdentityCoefficientMapping(GenericMedialModel *model)
     { this->n = this->m = model->GetNumberOfCoefficients(); }
   
+  virtual ~IdentityCoefficientMapping () {}
+
   Vec Apply(const Vec &C, const Vec &P)
     { return C + P; }
 
@@ -318,6 +327,8 @@ public:
   typedef vnl_vector<double> Vec;
   
   PCACoefficientMapping(PrincipalComponents *pca, size_t nModes);
+  virtual ~PCACoefficientMapping () {}
+
   Vec Apply(const Vec &C, const Vec &P);
   Vec ApplyJacobianInParameters(const Vec &C, const Vec &P, const Vec &varP);
   Vec ApplyJacobianInCoefficients(const Vec &C, const Vec &P, const Vec &varC);
@@ -358,6 +369,8 @@ public:
    * of reflection is defined as n.x - b = 0 */
   ReflectionCoefficientMapping(SubdivisionMedialModel *model, SMLVec3d &n, double b);
 
+  virtual ~ReflectionCoefficientMapping () {}
+
   /** Apply the coefficient mapping C' = T(C, P) */
   Vec Apply(const Vec &C, const Vec &p);
 
@@ -397,6 +410,8 @@ public:
   /** Create the basis coefficient mapping */
   MeshBasisCoefficientMapping(
     const TriangleMesh *mesh, size_t basisSize, size_t nComponents);
+
+  virtual ~MeshBasisCoefficientMapping () {}
 
   /** Apply the coefficient mapping C' = T(C, P) */
   Vec Apply(const Vec &C, const Vec &p);

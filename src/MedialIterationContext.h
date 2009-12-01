@@ -66,11 +66,14 @@ public:
    */
   virtual TriangleMesh *GetBoundaryMesh() = 0;
 
+  virtual ~MedialIterationContext() {}
+
 protected:
 
   // Can't create an instance of this class
   MedialIterationContext()
     { nAtoms = nTriangles = 0; xBndMap = NULL; xTriMap = NULL; }
+
 
   // This is an array of form 0 2 4 5 6 8 ... 
   // difference of 2 between x[i+1] and x[i] indicates i is internal.

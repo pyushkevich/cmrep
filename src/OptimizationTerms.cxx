@@ -217,7 +217,6 @@ void PartialDerivativeSolutionData
 ::ComputeIntegrationWeights()
 {
   // A constant to hold 1/3
-  const static double THIRD = 1.0f / 3.0f;
   const static double SIXTH = 1.0f / 6.0f;
   const static double EIGHTEENTH = 1.0f / 18.0f;
 
@@ -638,7 +637,6 @@ ComputePartialDerivative(
         {
         size_t j1 = (i+1) % 3;
         size_t j2 = (i+2) % 3;
-        MedialAtom &A0 = S->xAtoms[mit.GetAtomIndex(i)];
         MedialAtom &A1 = S->xAtoms[mit.GetAtomIndex(j1)];
         MedialAtom &A2 = S->xAtoms[mit.GetAtomIndex(j2)];
 
@@ -895,7 +893,6 @@ ComputePartialDerivative(
     SMLVec3d dU = da.xBnd[bip.GetBoundarySide()].X - da.X;
 
     // Accumulators for mean and standard deviation
-    double xCovAcc = 0.0, xSumSq = 0.0, xSum = 0.0;
     double dCovAcc = 0.0, dSumSqHalf = 0.0, dSum = 0.0;
 
     // Compute the volume element and image value for the intermediate points
@@ -1243,7 +1240,6 @@ double VolumeIntegralEnergyTerm
       size_t ibnd = bip.GetIndex();
 
       SMLVec3d &dvvec = dS->xInteriorVolumeElement[ibnd];
-      MedialAtom &a = S->xAtoms[iatom];
       ProfileData &p = xProfile[ibnd];
 
       // Get the vector from medial to the boundary
@@ -2146,7 +2142,6 @@ MedialCurvaturePenalty
     double df = dk2;
 
     // Compute the penalty. The penalty should be such that the 
-    double p = pow(f / xScale, xPower);
     double dp = xPower * pow(f / xScale, xPower-1) * df / xScale;
     dTotalPenalty += dp;
     }

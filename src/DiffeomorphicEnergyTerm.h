@@ -26,7 +26,7 @@ class DiffeomorphicEnergyTerm : public EnergyTerm
 public:
   
   DiffeomorphicEnergyTerm(GenericMedialModel *model);
-  ~DiffeomorphicEnergyTerm();
+  virtual ~DiffeomorphicEnergyTerm();
 
   // Compute the energy term 
   double ComputeEnergy(SolutionData *data)

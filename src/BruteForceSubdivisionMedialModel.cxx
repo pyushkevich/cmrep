@@ -276,9 +276,6 @@ BruteForceSubdivisionMedialModel
   // Iterator for selecting the atoms affected by the current variation
   NonvaryingTermsMatrix::RowIterator it;
 
-  // Get a pointer to the Loop scheme weights
-  const LoopTangentScheme::WeightMatrix &W = xLoopScheme.GetWeightMatrix();
-
   // Clear the derivative information in all atoms
   for(size_t i = 0; i < mlAtom.nVertices; i++)
     {

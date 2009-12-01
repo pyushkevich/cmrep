@@ -433,7 +433,7 @@ SubdivisionMedialModelIO
   writer->Update();
 
   // Delete all of the arrays
-  for(size_t i = 0; i < poly->GetPointData()->GetNumberOfArrays(); i++)
+  for(size_t i = 0; i < (size_t) poly->GetPointData()->GetNumberOfArrays(); i++)
     poly->GetPointData()->GetArray(i)->Delete();
 
   // Clean up

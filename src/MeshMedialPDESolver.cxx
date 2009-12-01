@@ -59,9 +59,8 @@ double levenberg_marquardt(
     xPardisoColIndex[i] = 1 + A.GetColIndex()[i];
 
   // Initialize the PARDISO interface
-  SymmetricPositiveDefiniteRealPARDISO pardiso;
-  pardiso.SymbolicFactorization(
-    n, xPardisoRowIndex.data_block(), xPardisoColIndex.data_block(), A.GetSparseData());
+  SparseSolver *xSolver = SparseSolver::MakeSolver(true);
+  xSolver->SymbolicFactorization(A);
 
   // Compute the vector g
   Vec minus_g = -J.MultiplyTransposeByVector(fx);
@@ -81,15 +80,16 @@ double levenberg_marquardt(
   double mu = tau * maxA;
 
   // Iterate
-  while(!found && k++ < n_iter)
+  while(!found && k++ < (size_t) n_iter)
     {
     // Let A = J' * J + mu I
-    for(i = 0; i < n; i++)
+    for(i = 0; i < (size_t) n; i++)
       A.GetSparseData()[A.GetRowIndex()[i]] += mu;
    
     // Solve the linear system (J' * J + mu I) x = -g
-    pardiso.NumericFactorization(A.GetSparseData());
-    pardiso.Solve(minus_g.data_block(), h.data_block());
+    xSolver->NumericFactorization(A.GetSparseData());
+    xSolver->Solve(minus_g.data_block(), h.data_block());
+    delete xSolver;
 
     // Compute the norm of x and h
     double norm_h = h.magnitude();
@@ -175,7 +175,7 @@ template <class T>
 void reset_ptr(T* &x)
 {
   if(x != NULL)
-    { delete x; x = NULL; }
+    { delete[] x; x = NULL; }
 }
 
 /* 
@@ -379,12 +379,14 @@ MeshMedialPDESolver
   xAtoms = NULL;
   WX = NULL;
   Wfu = NULL;
+  xSolver = SparseSolver::MakeSolver(false);
 }
 
 MeshMedialPDESolver
 ::~MeshMedialPDESolver()
 {
   Reset();
+  delete xSolver;
 }
 
 void
@@ -798,10 +800,10 @@ MeshMedialPDESolver
       throw MedialModelException("PDE sparse matrix infinite or nan");
 
   // Use pardiso to solve the problem
-  xPardiso.SetVerbose(false);
-  xPardiso.SymbolicFactorization(M);
-  xPardiso.NumericFactorization(M);
-  xPardiso.Solve(xRHS.data_block(), xSolution.data_block());
+  xSolver->SetVerbose(false);
+  xSolver->SymbolicFactorization(M);
+  xSolver->NumericFactorization(M);
+  xSolver->Solve(xRHS.data_block(), xSolution.data_block());
 
   // The solution must be positive, otherwise this is an ill-posed problem
   if(!flagAllowErrors)
@@ -844,9 +846,6 @@ MeshMedialPDESolver
   // to specify the values. This is done one vertex at a time.
   for(size_t i = 0; i < n; i++)
     {
-    // Get a reference to the atom, which contains the current solution
-    MedialAtom &a = xAtoms[i];
-
     // Split over vertex type
     if(topology->IsVertexInternal(i))
       {
@@ -871,8 +870,6 @@ MeshMedialPDESolver
       for(EdgeWalkAroundVertex it(topology, i) ; !it.IsAtEnd(); ++it)
         {
         // The weight vector for the moving vertex
-        size_t j = it.MovingVertexId();
-
         size_t idxMesh = it.GetPositionInMeshSparseArray();
         size_t idxAPhi = xIndexAPhi.xNbrIndex[idxMesh];
         size_t idxAOmega = xIndexAOmega.xNbrIndex[idxMesh];
@@ -886,8 +883,6 @@ MeshMedialPDESolver
         size_t vb = it.MovingVertexIndexInTriangleBehind();
         size_t qa = it.OppositeVertexIndexInTriangleAhead();
         size_t qb = it.OppositeVertexIndexInTriangleBehind();
-        size_t pa = it.FixedVertexIndexInTriangleAhead();
-        size_t pb = it.FixedVertexIndexInTriangleBehind();
 
         // Get the phi's at the surrounding vertices
         double phiAhead = xSolution[it.VertexIdAhead()];
@@ -1024,7 +1019,7 @@ MeshMedialPDESolver
     }
 
   // Solve the partial differential equation (dPhi/dVar)
-  xPardiso.Solve(rhs.data_block(), soln.data_block());
+  xSolver->Solve(rhs.data_block(), soln.data_block());
 
   
 

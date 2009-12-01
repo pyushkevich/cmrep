@@ -216,7 +216,7 @@ CartesianMedialModel
       {
       int ku = xMasks[iSite]->GetOffsetU(k) + xMasks[iSite]->GetLocationU();
       int kv = xMasks[iSite]->GetOffsetV(k) + xMasks[iSite]->GetLocationV();
-      if(ku < 0 || ku >= m || kv < 0 || kv >= n) 
+      if(ku < 0 || ku >= (int) m || kv < 0 || kv >= (int) n) 
         cout << "Site " << i << ", " << j << " is out of bounds!" << endl;
       }
 
@@ -277,6 +277,9 @@ CartesianMedialModel
 
   // Set the surface to NULL
   xSurface = NULL;
+
+  // Create a solver 
+  solver = SparseSolver::MakeSolver(false);
 }
 
 CartesianMedialModel
@@ -302,6 +305,9 @@ CartesianMedialModel
 
   // Delete the surface
   if(xSurface != NULL) delete xSurface;
+
+  // Delete solver
+  delete solver;
 }
 
 void
@@ -354,7 +360,6 @@ void CartesianMedialModel::InitializeSiteGeometry()
     // Set the atoms' domain coordinates
     xAtom.u = uGrid[i]; xAtom.v = vGrid[j];
     xAtom.uIndex = i; xAtom.vIndex = j;
-    double u = uGrid[i], v = vGrid[j];
     
     // Compute the surface jet and the laplacian    
     xSurface->EvaluateAtGridIndex(i, j, 0, 0, 0, 3, xAtom.X.data_block());
@@ -402,7 +407,7 @@ CartesianMedialModel
     if( ySolution[i][j] >= 0 )
       {
       // Compute the derivatives of R using finite differences
-      double xTest = xSites[iLocal]->ComputeEquation(ySolution);
+      xSites[iLocal]->ComputeEquation(ySolution);
       xAtom.F = 
         xMasks[iLocal]->ComputeOneJet(ySolution.data_block(), xAtom.Fu, xAtom.Fv);
 
@@ -506,11 +511,11 @@ void CartesianMedialModel::SolveOnce(const double *xHint, double delta)
     // Perform the symbolic factorization only for the first iteration
     tSolver.Start();
     if(iIter == 0)
-      xPardiso.SymbolicFactorization(nSites, xRowIndex, xColIndex, xSparseValues);
+      solver->SymbolicFactorization(nSites, xRowIndex, xColIndex, xSparseValues);
 
     // Compute the Jacobian inverse
-    xPardiso.NumericFactorization(xSparseValues);
-    xPardiso.Solve(b.data_block(), eps.data_block());
+    solver->NumericFactorization(xSparseValues);
+    solver->Solve(b.data_block(), eps.data_block());
     tSolver.Stop();
 
     // A plus means solver step
@@ -600,7 +605,6 @@ CartesianMedialModel
       {
       // Get the index of the site
       size_t iGrid = GetGridAtomIndex(i, j);
-      size_t iSite = xSiteIndex[i][j];
 
       // Access the medial atom underneath
       VariationalBasisAtomData &vbad = xVariationalBasis[var][iGrid];
@@ -651,7 +655,7 @@ CartesianMedialModel
   // variational derivative can be solved instantly
   clock_t t0 = clock();
   tSolver.Start();
-  xPardiso.NumericFactorization(xSparseValues);
+  solver->NumericFactorization(xSparseValues);
   tSolver.Stop();
   cout << " [FCT: " << (clock() - t0) / CLOCKS_PER_SEC << " s] " << flush;
 }
@@ -695,7 +699,7 @@ CartesianMedialModel
     }
 
   // Solve for the derivative of phi 
-  xPardiso.Solve(rhs.data_block(), soln.data_block());
+  solver->Solve(rhs.data_block(), soln.data_block());
 
   // Access the phi matrix
   vnl_matrix_ref<double> phi(m, n, soln.data_block());

@@ -185,9 +185,6 @@ void ExportBoundaryMeshToVTK(
   /* ITKImageWrapper<float> *xImage, */
   const char *file)
 {
-  // Get the medial atom array
-  MedialAtom *xAtoms = model->GetAtomArray();
-  
   // Add the points to the poly data
   vtkPoints *lPoints = vtkPoints::New();
   lPoints->Allocate(model->GetNumberOfBoundaryPoints());

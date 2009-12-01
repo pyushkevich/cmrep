@@ -73,7 +73,7 @@ struct Vertex
   // Constructors
   Vertex(size_t it0, short iv0, size_t it1, short iv1, size_t in, bool ibnd)
     : t0(it0), v0(iv0), t1(it1), v1(iv1), n(in), bnd(ibnd) {}
-  Vertex() : t0(NOID), t1(NOID), v0(-1), v1(-1), n(0), bnd(false) {}
+  Vertex() : t0(NOID), v0(-1), t1(NOID), v1(-1), n(0), bnd(false) {}
 };
 
 // Information describing vertex neighborhood relationship
@@ -88,7 +88,7 @@ struct NeighborInfo
   // Constructor and destructor
   NeighborInfo() : tFront(NOID), tBack(NOID), vFront(-1), vBack(-1) {}
   NeighborInfo(size_t tf, short vf, size_t tb, short vb)
-    : tFront(tf), vFront(vf), tBack(tb), vBack(vb) {}
+    : tFront(tf), tBack(tb), vFront(vf), vBack(vb) {}
 };
 
 class TriangleMesh
