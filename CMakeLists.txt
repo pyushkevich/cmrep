@@ -83,7 +83,7 @@ IF(USE_TAUCS)
 ENDIF(USE_TAUCS)
 
 # Set the include directories
-INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src)
+INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
 # Find BOOST
 IF(USE_CGAL)
@@ -170,6 +170,14 @@ SET(COMMON_SRCS
 # Create the CM-REP library
 ADD_LIBRARY(cmrep ${COMMON_SRCS})
 
+# Source code for the Dijkstra library
+SET(DIJKSTRA_SRCS
+  src/dijkstra/ShortestPath.cxx
+  src/dijkstra/VTKMeshShortestDistance.cxx)
+
+# Create library of shortest path routines
+ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
+
 # Define the ITK libraries
 SET(ITK_LIBRARIES
   ITKNumerics ITKIO ITKCommon ITKBasicFilters)
@@ -177,7 +185,6 @@ SET(ITK_LIBRARIES
 # Define the VTK libraries
 SET(VTK_LIBRARIES
   vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
-
 
 
 # Set the list of required libraries
@@ -199,9 +206,13 @@ ADD_EXECUTABLE(cmrep_warpimage src/CMRepWarpImage.cxx)
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
 ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
 
+ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
+TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
+
 # Add installation targets
 INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
-  cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp cmrep_warpimage)
+  cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp
+  cmrep_vskel cmrep_warpimage)
 
 INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
   "share/cmrep/")
