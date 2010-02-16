@@ -580,12 +580,15 @@ int main(int argc, char *argv[])
     {
     double r = finalRad->GetTuple1(i);
     vtkCell *c = final->GetCell(i);
-    vnl_vector_fixed<vtkFloatingPointType, 3> p1(final->GetPoint(c->GetPointId(0)));
-    vnl_vector_fixed<vtkFloatingPointType, 3> p2(final->GetPoint(c->GetPointId(1)));
-    vnl_vector_fixed<vtkFloatingPointType, 3> p3(final->GetPoint(c->GetPointId(2)));
-    double a = fabs(TriangleArea(p1, p2, p3));
-    int_area += a;
-    int_thick += r * a;
+    if(c->GetNumberOfPoints() == 3)
+      {
+      vnl_vector_fixed<vtkFloatingPointType, 3> p1(final->GetPoint(c->GetPointId(0)));
+      vnl_vector_fixed<vtkFloatingPointType, 3> p2(final->GetPoint(c->GetPointId(1)));
+      vnl_vector_fixed<vtkFloatingPointType, 3> p3(final->GetPoint(c->GetPointId(2)));
+      double a = fabs(TriangleArea(p1, p2, p3));
+      int_area += a;
+      int_thick += r * a;
+      }
     }
   cout << "Surface area: " << int_area << endl;
   cout << "Mean thickness: " << int_thick / int_area << endl;
