@@ -173,7 +173,8 @@ public:
   /** This is a helper method: find vertex whose Euclidean distance to a
     given point is minimal */
   vtkIdType FindClosestVertexInSpace(Vec vec)
-    { return fltLocator->FindClosestPoint(vec[0], vec[1], vec[2]); }
+    // { return fltLocator->FindClosestPoint(vec[0], vec[1], vec[2]); }
+    { return fltLocator->FindClosestPoint(vec.data_block()); }
 
   /** Find the cell closest to the specified point */
   vtkIdType FindClosestCellInSpace(Vec vec)
