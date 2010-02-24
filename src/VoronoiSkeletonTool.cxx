@@ -5,6 +5,7 @@
 #include <set>
 #include <cstdio>
 #include <cstdlib>
+#include <SparseMatrix.h>
 #include <vtkDijkstraGraphGeodesicPath.h>
 #include <vtkSelectEnclosedPoints.h>
 #include <vtkThresholdPoints.h>
@@ -260,6 +261,8 @@ int usage()
   cout << "                         debugging the pruning code." << endl;
   cout << "    -t                   Tolerance for the inside/outside search algorithm (default 1e-6)" << endl;
   cout << "                         Use lower values if holes appear in the skeleton" << endl;
+  cout << "    -R N xyz.mat d.mat   Generate N random samples from the skeleton and save their coordiantes" << endl;
+  cout << "                         to xyz.mat and geodesic distances to d.mat" << endl;
   return -1;
 }
   
@@ -270,13 +273,14 @@ int main(int argc, char *argv[])
   // Command line arguments
   string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi";
   double xPrune = 2.0, xSearchTol = 1e-6;
-  int nComp = 0, nDegrees = 0;
+  int nComp = 0, nDegrees = 0, nRandSamp = 0;
   bool flagGeodFull = false;
 
   // Check that there are at least three command line arguments
   if(argc < 3) return usage();
   fnMesh = argv[argc-2];
   fnOutput = argv[argc-1];
+  string fnXYZ, fnDist;
   
   // Parse the command line for options
   for(int iArg = 1; iArg < argc - 3; ++iArg)
@@ -309,6 +313,12 @@ int main(int argc, char *argv[])
     else if(arg == "-g")
       {
       flagGeodFull = true;
+      }
+    else if(arg == "-R")
+      {
+      nRandSamp = atoi(argv[++iArg]);
+      fnXYZ = argv[++iArg];
+      fnDist = argv[++iArg];
       }
     else
       {
@@ -594,5 +604,127 @@ int main(int argc, char *argv[])
   cout << "Mean thickness: " << int_thick / int_area << endl;
     
   WriteVTKData(c2p->GetPolyDataOutput(), fnOutput);
+
+  // Generate random samples
+  if(nRandSamp > 0)
+    {
+    // Convert the mesh to triangles
+    vtkTriangleFilter *fltTri = vtkTriangleFilter::New();
+    fltTri->SetInput(c2p->GetPolyDataOutput());
+
+    // Clean the mesh
+    vtkCleanPolyData *fltClean = vtkCleanPolyData::New();
+    fltClean->SetInput(fltTri->GetOutput());
+    fltClean->Update();
+    vtkPolyData *xMesh = fltClean->GetOutput();
+    xMesh->BuildCells();
+    xMesh->BuildLinks();
+
+    // Compute all the edges
+    typedef ImmutableSparseArray<double> ImmutableArr;
+    typedef ImmutableArr::VNLSourceType MutableArr;
+
+    // Initialize the adjacency matrix
+    size_t np = xMesh->GetNumberOfPoints();
+    MutableArr M0(np, np);
+
+    // Traverse all the cells in the VTK mesh, recording all the available
+    // edges in the mesh. 
+    for(unsigned int iCell = 0; iCell < xMesh->GetNumberOfCells(); iCell++)
+      {
+      // Get the points for this cell
+      vtkIdType nPoints, *xPoints;
+      xMesh->GetCellPoints(iCell, nPoints, xPoints);
+
+      // Walk around the list of points
+      for(unsigned int j = 0; j < nPoints; j++)
+        {
+        // Get the head and the tail of the current half-edge
+        unsigned int iTail = xPoints[j], iHead = xPoints[(j+1) % nPoints];
+
+        // Compute the distance
+        vnl_vector<double> x1(xMesh->GetPoint(iTail), 3);
+        vnl_vector<double> x2(xMesh->GetPoint(iHead), 3);
+        double dist = (x1 - x2).magnitude();
+
+        // Add the edge to the list
+        M0(iTail,iHead) = dist;
+        M0(iHead,iTail) = dist;
+        }
+      }
+
+    // Build a sparse matrix from the edge data
+    ImmutableArr M;
+    M.SetFromVNL(M0); 
+
+    // Generate a random subset of landmarks in the image
+    size_t n = atoi(argv[4]);
+    size_t *xLandmarks = new size_t[nRandSamp];
+    for(int i = 0; i < nRandSamp; i++) xLandmarks[i] = i;
+    random_shuffle(xLandmarks, xLandmarks+nRandSamp);
+
+    // Compute distances between landmarks
+    typedef DijkstraShortestPath<double> Dijkstra;
+    unsigned int *row_index = new unsigned int[M.GetNumberOfRows()];
+    for(size_t q = 0; q < M.GetNumberOfRows(); q++)
+      row_index[q] = M.GetRowIndex()[q];
+    unsigned int *col_index = new unsigned int[M.GetNumberOfColumns()];
+    for(size_t q = 0; q < M.GetNumberOfColumns(); q++)
+      col_index[q] = M.GetColIndex()[q];
+
+    Dijkstra dijk(nRandSamp, row_index, col_index, M.GetSparseData());
+
+    // Initialize the distance matrix
+    vnl_matrix<double> mDist(n, n, 0.0);
+
+    // Using the brute force approach
+    for(int i = 0; i < (int) n; i++)
+      {
+      // Compute all pairs shortest paths
+      dijk.ComputePathsFromSource(xLandmarks[i]);
+      const double *xDist = dijk.GetDistanceArray();
+
+      // Get the landmark-to-landmark distances
+      for(int j = 0; j < (int) n; j++)
+        {
+        double d = xDist[xLandmarks[j]];
+        mDist[i][j] = d * d;
+        }
+
+      cout << ".";
+      if( ((i+1) % 64) == 0 || i + 1 == (int) n )
+        cout << " n = " << i+1 << endl;
+      else
+        cout << flush;
+      }
+
+    // Save the distance matrix
+    ofstream of1(fnDist.c_str());
+    of1 << mDist << endl;
+    of1.close();
+    // vnl_matlab_filewrite exporter(argv[3]);
+    // exporter.write(mDist, "dist");
+
+    // Save the coordinates of the landmarks
+    vnl_matrix<double> mCoord(n, 3, 0.0);
+    for(int i = 0; i < (int) n; i++)
+      {
+      double *xPoint = xMesh->GetPoint(xLandmarks[i]);
+      mCoord[i][0] = xPoint[0];
+      mCoord[i][1] = xPoint[1];
+      mCoord[i][2] = xPoint[2];
+      }
+
+    // Save the distance matrix
+    ofstream of2(fnXYZ.c_str());
+    of2 << mCoord << endl;
+    of2.close();
+    // vnl_matlab_filewrite exporter2(argv[2]);
+    // exporter2.write(mCoord, "xyz");
+
+    delete xLandmarks;
+    delete row_index;
+    delete col_index;
+    }
 }
 
