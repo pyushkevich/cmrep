@@ -532,7 +532,7 @@ int main(int argc, char *argv[])
 
   cout << "." << endl;
   cout << "Edge contraint pruned " << npruned_edge << " faces." << endl;
-  cout << "Geodesic to Euclidean distance ratio contraint pruned " << npruned_geo << " faces." << endl;
+  cout << "Geodesic to Euclidean distance ratio contraint (" << xPrune << ") pruned " << npruned_geo << " faces." << endl;
 
   // Create the vtk poly data
   vtkPolyData *skel = vtkPolyData::New();
@@ -658,41 +658,40 @@ int main(int argc, char *argv[])
     M.SetFromVNL(M0); 
 
     // Generate a random subset of landmarks in the image
-    size_t n = atoi(argv[4]);
-    size_t *xLandmarks = new size_t[nRandSamp];
-    for(int i = 0; i < nRandSamp; i++) xLandmarks[i] = i;
-    random_shuffle(xLandmarks, xLandmarks+nRandSamp);
+    size_t *xLandmarks = new size_t[np];
+    for(int i = 0; i < np; i++) xLandmarks[i] = i;
+    random_shuffle(xLandmarks, xLandmarks+np);
 
     // Compute distances between landmarks
     typedef DijkstraShortestPath<double> Dijkstra;
     unsigned int *row_index = new unsigned int[M.GetNumberOfRows()];
     for(size_t q = 0; q < M.GetNumberOfRows(); q++)
       row_index[q] = M.GetRowIndex()[q];
-    unsigned int *col_index = new unsigned int[M.GetNumberOfColumns()];
-    for(size_t q = 0; q < M.GetNumberOfColumns(); q++)
+    unsigned int *col_index = new unsigned int[M.GetNumberOfSparseValues()];
+    for(size_t q = 0; q < M.GetNumberOfSparseValues(); q++)
       col_index[q] = M.GetColIndex()[q];
 
-    Dijkstra dijk(nRandSamp, row_index, col_index, M.GetSparseData());
+    Dijkstra dijk(np, row_index, col_index, M.GetSparseData());
 
     // Initialize the distance matrix
-    vnl_matrix<double> mDist(n, n, 0.0);
+    vnl_matrix<double> mDist(nRandSamp, nRandSamp, 0.0);
 
     // Using the brute force approach
-    for(int i = 0; i < (int) n; i++)
+    for(int i = 0; i < (int) nRandSamp; i++)
       {
       // Compute all pairs shortest paths
       dijk.ComputePathsFromSource(xLandmarks[i]);
       const double *xDist = dijk.GetDistanceArray();
 
       // Get the landmark-to-landmark distances
-      for(int j = 0; j < (int) n; j++)
+      for(int j = 0; j < (int) nRandSamp; j++)
         {
         double d = xDist[xLandmarks[j]];
         mDist[i][j] = d * d;
         }
 
       cout << ".";
-      if( ((i+1) % 64) == 0 || i + 1 == (int) n )
+      if( ((i+1) % 64) == 0 || i + 1 == (int) nRandSamp )
         cout << " n = " << i+1 << endl;
       else
         cout << flush;
@@ -706,8 +705,8 @@ int main(int argc, char *argv[])
     // exporter.write(mDist, "dist");
 
     // Save the coordinates of the landmarks
-    vnl_matrix<double> mCoord(n, 3, 0.0);
-    for(int i = 0; i < (int) n; i++)
+    vnl_matrix<double> mCoord(nRandSamp, 3, 0.0);
+    for(int i = 0; i < (int) nRandSamp; i++)
       {
       double *xPoint = xMesh->GetPoint(xLandmarks[i]);
       mCoord[i][0] = xPoint[0];
