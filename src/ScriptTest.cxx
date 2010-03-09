@@ -822,6 +822,8 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
     }
   // Push the other terms
   vt.push_back(TermInfo(
+      "", new BoundaryElasticityPrior(), 0.1));
+  vt.push_back(TermInfo(
       "", new MedialTriangleAnglePenaltyTerm(model), 1.0e-4));
   vt.push_back(TermInfo(
       "", new RadiusPenaltyTerm(0.01, 4, 100, 10), 0.1));

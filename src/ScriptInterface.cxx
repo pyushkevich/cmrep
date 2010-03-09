@@ -728,6 +728,8 @@ void MedialPDE::ConfigureEnergyTerms(
         xTermPenalty = new CrossCorrelationImageMatchTerm(xMedialModel, imgGray); break;
       case OptimizationParameters::LOCAL_DISTANCE:
         xTermPenalty = new LocalDistanceDifferenceEnergyTerm(xMedialModel); break;
+      case OptimizationParameters::BND_ELASTICITY:
+        xTermPenalty = new BoundaryElasticityPrior(); break;
       default:
         throw MedialModelException("Unknown Penalty Term");
       }

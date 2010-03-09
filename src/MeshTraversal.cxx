@@ -234,8 +234,6 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
   size_t v[3] = {v0, v1, v2};
   size_t i = xTargetMesh->triangles.size();
 
-  cout << "Adding triangle " << v0 << ", " << v1 << ", " << v2 << endl;
-
   // Associate each half-edge with a triangle
   Triangle tri;
   for(size_t j = 0; j < 3; j++)

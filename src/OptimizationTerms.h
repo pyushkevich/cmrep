@@ -861,6 +861,36 @@ private:
   vnl_vector<double> x[3], b[3];
 };
 
+/**
+ * Penalty on total surface area of the boundary. Similar to the 
+ * terms used in snakes. The EL of this term gives mean curvature
+ * flow. Should simplify shapes, hopefully
+ */
+class BoundaryElasticityPrior : public EnergyTerm
+{
+public:
+  virtual ~BoundaryElasticityPrior() {};
+  double ComputeEnergy(SolutionData *data)
+    { 
+    data->ComputeIntegrationWeights();
+    return xBndArea = data->xBoundaryArea; 
+    }
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS)
+    { 
+    dS->ComputeIntegrationWeights();
+    return dS->xBoundaryArea; 
+    }
+  void PrintReport(ostream &sout)
+    {
+    sout << "  Boundary Elasticity Prior" << endl;
+    sout << "    Surface Area : " << xBndArea << endl;
+    }
+  string GetShortName() { return string("BNDELA"); }
+private:
+  double xBndArea;
+};
+
 
 /**
  * Term that penalizes excessive curvature of the medial axis. This
