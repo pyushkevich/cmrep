@@ -48,14 +48,14 @@ public:
 
     // Traverse all the cells in the VTK mesh. The assumption here is that each cell
     // is traversed in the consistant, counter-clockwise order.
-    for(unsigned int iCell = 0; iCell < xMesh->GetNumberOfCells(); iCell++)
+    for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
       vtkIdType nPoints, *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points
-      for(unsigned int j = 0; j < nPoints; j++)
+      for(unsigned int j = 0; j < (unsigned int) nPoints; j++)
         {
         // Get the head and the tail of the current half-edge
         unsigned int iTail = xPoints[j], iHead = xPoints[(j+1) % nPoints];
@@ -75,7 +75,7 @@ public:
         }
 
       // Increment all the edge counters
-      for(unsigned int k = 0; k < nPoints; k++)
+      for(unsigned int k = 0;  k < (unsigned int) nPoints; k++)
         xTemp[xPoints[k]]++;
       }
 

@@ -5,6 +5,7 @@
 #include <set>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <SparseMatrix.h>
 #include <vtkDijkstraGraphGeodesicPath.h>
 #include <vtkSelectEnclosedPoints.h>
@@ -672,14 +673,14 @@ int main(int argc, char *argv[])
 
     // Traverse all the cells in the VTK mesh, recording all the available
     // edges in the mesh. 
-    for(unsigned int iCell = 0; iCell < xMesh->GetNumberOfCells(); iCell++)
+    for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
       vtkIdType nPoints, *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points
-      for(unsigned int j = 0; j < nPoints; j++)
+      for(unsigned int j = 0; j < (unsigned int) nPoints; j++)
         {
         // Get the head and the tail of the current half-edge
         unsigned int iTail = xPoints[j], iHead = xPoints[(j+1) % nPoints];
@@ -701,7 +702,7 @@ int main(int argc, char *argv[])
 
     // Generate a random subset of landmarks in the image
     size_t *xLandmarks = new size_t[np];
-    for(int i = 0; i < np; i++) xLandmarks[i] = i;
+    for(int i = 0; i < (int) np; i++) xLandmarks[i] = i;
     random_shuffle(xLandmarks, xLandmarks+np);
 
     // Compute distances between landmarks

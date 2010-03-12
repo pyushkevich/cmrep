@@ -4,6 +4,7 @@
 #include <vnl/vnl_rotation_matrix.h>
 #include <vnl/vnl_math.h>
 #include <iostream>
+#include <cstdlib>
 
 using namespace std;
 
