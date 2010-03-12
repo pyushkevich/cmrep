@@ -263,6 +263,8 @@ int usage()
   cout << "                         Use lower values if holes appear in the skeleton" << endl;
   cout << "    -R N xyz.mat d.mat   Generate N random samples from the skeleton and save their coordiantes" << endl;
   cout << "                         to xyz.mat and geodesic distances to d.mat" << endl;
+  cout << "    -T name.vtk          Generate thickness map on the boundary. The thickness is the distance" << endl;
+  cout << "                         from each boundary point to the closest pruned skeleton point" << endl;
   return -1;
 }
   
@@ -271,7 +273,7 @@ int main(int argc, char *argv[])
 {
 
   // Command line arguments
-  string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi";
+  string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi", fnOutThickness;
   double xPrune = 2.0, xSearchTol = 1e-6;
   int nComp = 0, nDegrees = 0, nRandSamp = 0;
   bool flagGeodFull = false;
@@ -301,6 +303,10 @@ int main(int argc, char *argv[])
     else if(arg == "-Q")
       {
       fnQVoronoi = argv[++iArg];
+      }
+    else if(arg == "-T")
+      {
+      fnOutThickness = argv[++iArg];
       }
     else if(arg == "-e")
       {
@@ -603,14 +609,50 @@ int main(int argc, char *argv[])
   cout << "Surface area: " << int_area << endl;
   cout << "Mean thickness: " << int_thick / int_area << endl;
     
-  WriteVTKData(c2p->GetPolyDataOutput(), fnOutput);
+  vtkPolyData *skelfinal = c2p->GetPolyDataOutput();
+  WriteVTKData(skelfinal, fnOutput);
+
+  // Generate thickness map
+  if(fnOutThickness.length())
+    {
+    // Initialize thickness array
+    vtkDoubleArray *daRad = vtkDoubleArray::New();
+    daRad->SetNumberOfComponents(1);
+    daRad->SetName("Thickness");
+
+    // Create locator for finding closest points
+    vtkCellLocator *loc = vtkCellLocator::New();
+    loc->SetDataSet(skelfinal);
+    loc->CacheCellBoundsOn();
+    loc->BuildLocator();
+
+    // Compute thickness values
+    for(size_t i = 0; i < bnd->GetNumberOfPoints(); i++)
+      {
+      double xs[3], d2, d;
+      int subid;
+      vtkIdType cellid;
+
+      loc->FindClosestPoint(
+        bnd->GetPoint(i), xs, cellid, subid, d2);
+
+      d = sqrt(d2);
+      daRad->InsertNextTuple(&d);
+      }
+
+    // Add array to boundary data
+    bnd->GetPointData()->AddArray(daRad);
+
+    // Write thickness map
+    WriteVTKData(bnd, fnOutThickness);
+    } 
 
   // Generate random samples
   if(nRandSamp > 0)
     {
     // Convert the mesh to triangles
     vtkTriangleFilter *fltTri = vtkTriangleFilter::New();
-    fltTri->SetInput(c2p->GetPolyDataOutput());
+    fltTri->SetInput(skelfinal);
 
     // Clean the mesh
     vtkCleanPolyData *fltClean = vtkCleanPolyData::New();
