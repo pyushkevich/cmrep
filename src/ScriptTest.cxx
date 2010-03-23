@@ -822,6 +822,8 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
     }
   // Push the other terms
   vt.push_back(TermInfo(
+      "", new BoundaryGradRPenaltyTerm(), 0.1));
+  vt.push_back(TermInfo(
       "", new BoundaryElasticityPrior(), 0.1));
   vt.push_back(TermInfo(
       "", new MedialTriangleAnglePenaltyTerm(model), 1.0e-4));
@@ -849,8 +851,6 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
       "", new MedialAnglesPenaltyTerm(model), 1.0e-4));
   vt.push_back(TermInfo(
       "", new MedialRegularityTerm(model), 0.1));
-  vt.push_back(TermInfo(
-      "", new BoundaryGradRPenaltyTerm(), 0.1));
   vt.push_back(TermInfo(
       "", new DiffeomorphicEnergyTerm(model), 0.1));
 

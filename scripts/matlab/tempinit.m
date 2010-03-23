@@ -13,10 +13,10 @@ R=rad(qsamp);
 scatter3(X(:,1), X(:,2), X(:,3), [], R); axis vis3d;
 
 %%  Generate a flat representation of the data
-X=load('-ascii', 'skel_xyz.mat');
+% X=load('-ascii', 'skel_xyz.mat'); 
 
 % Call MVU on the scattered points
-uv = mvuIncXL(X', 6, 400, 2, struct('factor',0.99))';
+uv = mvuIncXL(X', 6, 400, 2, struct('factor',0.96))';
 
 % Normalize u,v to range 0,1
 uv=(uv-ones(length(uv),1)*min(uv))./(ones(length(uv),1)*(max(uv)-min(uv)));
@@ -57,7 +57,7 @@ Ipad(npad+1:npad+np, npad+1:npad+np) = I;
 imagesc(Ipad'); axis image; colormap gray;
 
 %% Apply morphological closing and smoothing
-Iclose = imclose(Ipad, strel('disk',16));
+Iclose = imclose(Ipad, strel('disk',8));
 Ismooth = imfilter(Iclose, fspecial('gaussian', 24, 4.0));
 imagesc(Ipad'); axis image; colormap gray; hold on;
 contour(Ismooth', [0.5 0.5], 'r'); hold off;
@@ -67,8 +67,8 @@ C = contourc(Ismooth', [0.5, 0.5]);
 ncp = C(2,1);
 cuv = C(:,2:ncp+1);
 
-nsam = 60;
-isam = round(linspace(1, ncp, 60));
+nsam = 150;
+isam = round(linspace(1, ncp, 150));
 csam = cuv(:,isam);
 
 imagesc(Ipad'); axis image; colormap gray;
@@ -79,10 +79,10 @@ line(csam(1,:), csam(2,:))
 
 % Drop last sample because it matches the first
 nsam = nsam-1;
-csam = csam(:,1:nsam)
+csam = csam(:,1:nsam);
 
 % Generate poly file
-f = fopen('contour.poly', 'wt');
+f = fopen('contour.poly', 'w+');
 fprintf(f,'%i 2 0 0\n', nsam);
 fprintf(f,'%i %f %f\n', [1:nsam; csam]);
 fprintf(f,'%i 0\n', nsam);

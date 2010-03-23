@@ -1344,10 +1344,10 @@ BoundaryGradRPenaltyTerm
       // penalty to have the form alpha * (1 - |gradR|^2)^2
       // double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
       // double penalty = (xScale * devn * devn);
-      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xGradRMagSqr);
+      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xGradRMagSqrOrig);
 
       // Register the gradR
-      saGradR.Update(S->xAtoms[i].xGradRMagSqr);
+      saGradR.Update(S->xAtoms[i].xGradRMagSqrOrig);
       saPenalty.Update(penalty); 
       }
     else
@@ -1386,7 +1386,7 @@ ComputePartialDerivative(
         // double d_penalty = 2 * xScale * devn * ddevn; 
         // dTotalPenalty += d_penalty;
         double d_penalty = 0.0001 * 
-          (-dS->xAtoms[i].xGradRMagSqr / (S->xAtoms[i].xGradRMagSqr * S->xAtoms[i].xGradRMagSqr));
+          (-dS->xAtoms[i].xGradRMagSqrOrig / (S->xAtoms[i].xGradRMagSqrOrig * S->xAtoms[i].xGradRMagSqrOrig));
         dTotalPenalty += d_penalty;
         }
       else

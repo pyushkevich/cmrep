@@ -94,6 +94,7 @@ void ExportMedialMeshToVTK(
   vtkFloatArray *lStretch = AddMedialScalarField(pMedial, xModel, "Stretch");
   vtkFloatArray *lCurvPen = AddMedialScalarField(pMedial, xModel, "Curvature Penalty Feature");
   vtkFloatArray *lAreaElement = AddMedialScalarField(pMedial, xModel, "Area Element");
+  vtkFloatArray *lGradRMagOrig = AddMedialScalarField(pMedial, xModel, "Grad R Magnitude (original)");
 
   vtkFloatArray *lSpoke1 = AddMedialVectorField(pMedial, xModel, "Spoke1");
   vtkFloatArray *lSpoke2 = AddMedialVectorField(pMedial, xModel, "Spoke2");
@@ -163,6 +164,7 @@ void ExportMedialMeshToVTK(
     
     lNormal->SetTuple3(i, a.N(0), a.N(1), a.N(2));
     lGradR->SetTuple3(i, a.xGradR[0], a.xGradR[1], a.xGradR[2]);
+    lGradRMagOrig->SetTuple1(i, a.xGradRMagSqrOrig);
 
     // Compute the stretch ???
     lStretch->SetTuple1(i, a.G.xChristoffelSecond[0][0][0]);
@@ -227,6 +229,7 @@ void ExportMedialMeshToVTK(
   fltWriter->Update();
   fltWriter->Delete();
 
+  lGradRMagOrig->Delete();
   lCoordU->Delete();
   lCoordV->Delete();
   lRho->Delete();

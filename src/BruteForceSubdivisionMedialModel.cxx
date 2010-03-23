@@ -83,7 +83,7 @@ BruteForceSubdivisionMedialModel
     // Compute the atom's differential geometry, normal and boundary
     a.G.SetOneJet(a.X.data_block(), a.Xu.data_block(), a.Xv.data_block());
     a.ComputeNormalVector();
-
+    a.ComputeBoundaryAtomsUsingR(!mlAtom.IsVertexInternal(i));
 
     // For atoms that are on the edge, we correct Ru, so that |gradR|=1 and
     // Rv stays constant. This involves solving the system
@@ -96,15 +96,22 @@ BruteForceSubdivisionMedialModel
       if(!flagAllowErrors && z < 0)
         throw MedialModelException("Excessive Rv in BruteForceModel");
 
+      // Store the unfixed gradR magnitude in the atom
+      a.xGradRMagSqrOrig = a.xGradRMagSqr;
+      a.xNormalFactorOrig = a.xNormalFactor;
+
       // we store the square root of z for further derivative compn
       dt_local[i].sqrt_gz = sqrt(a.G.g * z);
 
+      // Back up original Ru b/c we need it for derivative computation
+      dt_local[i].Ru_orig = a.Ru;
+
       // here is the corrected Ru
-      a.Ru = (g12 * a.Rv - dt_local[i].sqrt_gz) / g22;
+      dt_local[i].Ru_fixed = a.Ru = (g12 * a.Rv - dt_local[i].sqrt_gz) / g22;
+      
+      // Compute atom using corrected Ru
+      a.ComputeBoundaryAtomsUsingR(!mlAtom.IsVertexInternal(i));
       }
-
-
-    a.ComputeBoundaryAtomsUsingR(!mlAtom.IsVertexInternal(i));
 
     if(!flagAllowErrors && !a.flagValid)
       throw MedialModelException("Invalid Atom in BruteForceModel");
@@ -317,16 +324,36 @@ BruteForceSubdivisionMedialModel
     if(a.flagCrest)
       {
       LocalDerivativeTerms &ld = dt_local[j];
+
+      // Use the original value of Ru for the first computation
+      a.Ru = ld.Ru_orig;
+
+      // Compute the derivatives of the boundary nodes using unfixed Ru
+      a.ComputeBoundaryAtomDerivativesUsingR(da, dt[j]);
+
+      // Record the values of |gradR| before applying the fix
+      da.xGradRMagSqrOrig = da.xGradRMagSqr;
+      da.xNormalFactorOrig = da.xNormalFactor;
+
+      // Set Ru back to the fixed value
+      a.Ru = ld.Ru_fixed;
+
       da.Ru = 
         ld.w_g   * da.G.g +
         ld.w_g12 * da.G.xCovariantTensor[0][1] +
         ld.w_g22 * da.G.xCovariantTensor[1][1] +
         ld.w_Rv  * da.Rv;
-      }
 
-    // Compute the derivatives of the boundary nodes
-    a.ComputeBoundaryAtomDerivativesUsingR(da, dt[j]);
+      // Recompute the derivatives of the boundary nodes
+      a.ComputeBoundaryAtomDerivativesUsingR(da, dt[j]);
+      }
+    else
+      {
+      // Compute the derivatives of the boundary nodes
+      a.ComputeBoundaryAtomDerivativesUsingR(da, dt[j]);
+      }
     }
+
 }
 
 void

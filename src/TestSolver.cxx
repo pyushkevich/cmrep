@@ -360,6 +360,14 @@ int TestGradientComputation(
         a3.xGradRMagSqr, 
         a4.xGradRMagSqr, eps);
 
+      // Also look at the differences in grad R mag sqr.
+      dtq.Update("Sqr. Grad. Mag. of R (Original)", 
+        a0.xGradRMagSqrOrig, 
+        a1.xGradRMagSqrOrig, 
+        a2.xGradRMagSqrOrig,
+        a3.xGradRMagSqrOrig, 
+        a4.xGradRMagSqrOrig, eps);
+
       // Look at the gradR difference
       dtq.Update("Grad R", a0.xGradR, a1.xGradR, a2.xGradR, a3.xGradR, a4.xGradR, eps);
 

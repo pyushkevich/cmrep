@@ -120,7 +120,7 @@ private:
   // Coefficients used in computing the derivatives of Ru
   struct LocalDerivativeTerms 
     { 
-    double w_Rv, w_g12, w_g22, w_g; 
+    double w_Rv, w_g12, w_g22, w_g, Ru_orig, Ru_fixed; 
     double sqrt_gz;
     };
     

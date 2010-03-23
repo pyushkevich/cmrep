@@ -32,7 +32,7 @@ MedialAtom
   N.fill(0.0);
   xGradR.fill(0.0);
   xLapR = 0.0;
-  xGradRMagSqr = 0.0; xNormalFactor = 0.0;
+  xGradRMagSqr = 0.0; xNormalFactor = 0.0; xGradRMagSqrOrig = 0.0;
 
   xBnd[0].X.fill(0.0); xBnd[0].N.fill(0.0);
   xBnd[1].X.fill(0.0); xBnd[1].N.fill(0.0);
@@ -842,6 +842,7 @@ void AddScaleMedialAtoms(
   C.xGradR = A.xGradR + p * B.xGradR;
   // C.xGradPhi = A.xGradPhi + p * B.xGradPhi;
   C.xGradRMagSqr = A.xGradRMagSqr + p * B.xGradRMagSqr;
+  C.xGradRMagSqrOrig = A.xGradRMagSqrOrig + p * B.xGradRMagSqrOrig;
   C.xNormalFactor = A.xNormalFactor + p * B.xNormalFactor;
 
   // The differential geometry is also added and scaled 
@@ -912,6 +913,7 @@ void MedialAtomCentralDifference(
   C.xGradR = p * (A.xGradR - B.xGradR);
   // C.xGradPhi = p * (A.xGradPhi - B.xGradPhi);
   C.xGradRMagSqr = p * (A.xGradRMagSqr - B.xGradRMagSqr);
+  C.xGradRMagSqrOrig = p * (A.xGradRMagSqrOrig - B.xGradRMagSqrOrig);
   C.xNormalFactor = p * (A.xNormalFactor - B.xNormalFactor);
 
   // The differential geometry is also added and scaled 

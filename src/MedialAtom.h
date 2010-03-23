@@ -71,6 +71,11 @@ struct MedialAtom
   // The magnitude of gradR and the term sqrt(1-xGradRMagSqr)
   double xGradRMagSqr, xNormalFactor;
 
+  // The magnitude of gradR and the term sqrt(1- xGradRMagSqr) before
+  // any fixes have been applied in BruteForceModel
+  // THIS IS A HACK!!!
+  double xGradRMagSqrOrig, xNormalFactorOrig;
+
   // Whether this is a 'crest' atom, and whether it's valid at all
   bool flagCrest, flagValid;
 

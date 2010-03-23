@@ -31,7 +31,7 @@ OptimizationParameters
   xPenaltyTermRegMap.AddPair(MEDIAL_ANGLES, "MedialAnglesPenaltyTerm");
   xPenaltyTermRegMap.AddPair(CROSS_CORRELATION, "CrossCorrelation");
   xPenaltyTermRegMap.AddPair(LOCAL_DISTANCE, "LocalDistancePenaltyTerm");
-  xPenaltyTermRegMap.AddPair(DIFFEOMORPHIC, "DiffeomorphicPenaltyTerm");
+  xPenaltyTermRegMap.AddPair(DIFFEOMORPHIC, "DiffeomorphicEnergyTerm");
   xPenaltyTermRegMap.AddPair(BND_JACOBIAN_DISTORTION, "BoundaryJacobianDistortionPenaltyTerm");
   xPenaltyTermRegMap.AddPair(MED_JACOBIAN_DISTORTION, "MedialJacobianDistortionPenaltyTerm");
   xPenaltyTermRegMap.AddPair(BND_ELASTICITY, "BoundaryElasticityPrior");
