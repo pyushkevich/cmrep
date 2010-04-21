@@ -1703,8 +1703,122 @@ MedialTriangleAnglePenaltyTerm
   sout << "    mean penalty (r.v.)      : " << sPenalty.GetMean() << endl;
 }
 
+/*********************************************************************************
+ * Boundary Triangle Angle penalty term
+*********************************************************************************/
 
+BoundaryTriangleAnglePenaltyTerm
+::BoundaryTriangleAnglePenaltyTerm(GenericMedialModel *model)
+{
 
+}
+
+double 
+BoundaryTriangleAnglePenaltyTerm
+::UnifiedComputeEnergy(SolutionData *S, bool flagGradient)
+{
+  // Reset the penalty terms
+  sCosSquare.Reset(); sPenalty.Reset();
+
+  // Loop over all medial triangles
+  for(MedialBoundaryTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
+    {
+    for(size_t v = 0; v < 3; v++)
+      {
+      // Get the vertices around angle
+      const SMLVec3d &X0 = GetBoundaryPoint(it, S->xAtoms, (v+0) % 3).X; 
+      const SMLVec3d &X1 = GetBoundaryPoint(it, S->xAtoms, (v+1) % 3).X; 
+      const SMLVec3d &X2 = GetBoundaryPoint(it, S->xAtoms, (v+2) % 3).X; 
+
+      // Get the edges
+      SMLVec3d D1 = X1 - X0, D2 = X2 - X0;
+
+      // Get the squared lengths
+      double L1 = dot_product(D1, D1);
+      double L2 = dot_product(D2, D2);
+
+      // Get the dot product
+      double Z = dot_product(D1, D2);
+
+      // Get the squared cosine
+      double csq = (Z / L1) * (Z / L2);
+
+      // Generate penalty
+      double penalty = 0.001 / (1 - csq);
+
+      // Update penalties
+      sCosSquare.Update(csq);
+      sPenalty.Update(penalty);
+      }
+    }
+
+  return sPenalty.GetMean();
+}
+
+double
+BoundaryTriangleAnglePenaltyTerm
+::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  // Reset derivative accumulator
+  sDPenalty.Reset();
+
+  // Loop over all medial triangles
+  for(MedialBoundaryTriangleIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
+    {
+    for(size_t v = 0; v < 3; v++)
+      {
+      // Get the vertices around angle
+      const SMLVec3d &X0 = GetBoundaryPoint(it, S->xAtoms, (v+0) % 3).X; 
+      const SMLVec3d &X1 = GetBoundaryPoint(it, S->xAtoms, (v+1) % 3).X; 
+      const SMLVec3d &X2 = GetBoundaryPoint(it, S->xAtoms, (v+2) % 3).X; 
+
+      const SMLVec3d &dX0 = GetBoundaryPoint(it, dS->xAtoms, (v+0) % 3).X; 
+      const SMLVec3d &dX1 = GetBoundaryPoint(it, dS->xAtoms, (v+1) % 3).X; 
+      const SMLVec3d &dX2 = GetBoundaryPoint(it, dS->xAtoms, (v+2) % 3).X; 
+
+      // Get the edges
+      SMLVec3d D1 = X1 - X0, D2 = X2 - X0;
+      SMLVec3d dD1 = dX1 - dX0, dD2 = dX2 - dX0;
+
+      // Get the squared lengths
+      double L1 = dot_product(D1, D1);
+      double L2 = dot_product(D2, D2);
+      double dL1 = 2.0 * dot_product(D1, dD1);
+      double dL2 = 2.0 * dot_product(D2, dD2);
+
+      // Get the dot product
+      double Z = dot_product(D1, D2);
+      double dZ = dot_product(dD1, D2) + dot_product(D1, dD2);
+
+      // Get the squared cosine
+      double csq = (Z / L1) * (Z / L2);
+      double dcsq = 
+        (Z / L1) * ((dZ * L2 - Z * dL2) / (L2 * L2)) +
+        ((dZ * L1 - Z * dL1) / (L1 * L1)) * (Z / L2);
+
+      // Generate penalty
+      double penalty = 0.001 / (1 - csq);
+      double dpenalty = penalty * (dcsq / (1. - csq));
+
+      // Update penalties
+      sDPenalty.Update(dpenalty);
+      }
+    }
+
+  return sDPenalty.GetMean();
+}
+
+void 
+BoundaryTriangleAnglePenaltyTerm
+::PrintReport(ostream &sout)
+{
+  sout << "  Boundary Triangle Angle Penalty Term : " << endl;
+  sout << "    min angle                : " << acos(sqrt(sCosSquare.GetMin())) << endl;
+  sout << "    max angle                : " << acos(sqrt(sCosSquare.GetMax())) << endl;
+  sout << "    avg cos sq.              : " << sCosSquare.GetMean() << endl;
+  sout << "    max penalty              : " << sPenalty.GetMax() << endl;
+  sout << "    mean penalty (r.v.)      : " << sPenalty.GetMean() << endl;
+}
 
 
 /*********************************************************************************

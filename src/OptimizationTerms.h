@@ -720,7 +720,7 @@ public:
   void PrintReport(ostream &sout);
 
   // Print a short name
-  string GetShortName() { return string("TRIANG"); }
+  string GetShortName() { return string("MEDTRI"); }
   
 private:
   // A structure that holds derivative data
@@ -728,6 +728,41 @@ private:
   StatisticsAccumulator sCosSquare, sPenalty, sDPenalty;
 };
 
+/**
+ * Penalty on small triangle angles
+ */
+class BoundaryTriangleAnglePenaltyTerm : public EnergyTerm
+{
+public:
+  // Initialize the term
+  BoundaryTriangleAnglePenaltyTerm(GenericMedialModel *model);
+  virtual ~BoundaryTriangleAnglePenaltyTerm() {} 
+
+  // Compute the energy
+  double ComputeEnergy(SolutionData *data)
+    { return this->UnifiedComputeEnergy(data, false); }
+
+  // Compute the energy and begin gradient
+  double BeginGradientComputation(SolutionData *data)
+    { return this->UnifiedComputeEnergy(data, true); }
+
+  // Compute the partial derivative term
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS);
+
+  // Print a verbose report
+  void PrintReport(ostream &sout);
+
+  // Print a short name
+  string GetShortName() { return string("BNDTRI"); }
+  
+private:
+  // A structure that holds derivative data
+  double UnifiedComputeEnergy(SolutionData *, bool); 
+  StatisticsAccumulator sCosSquare, sPenalty, sDPenalty;
+};
+
+/* LEGACY CODE _ DO NOT USE */
 class MedialAnglesPenaltyTerm : public MedialIntegrationEnergyTerm
 {
 public:
