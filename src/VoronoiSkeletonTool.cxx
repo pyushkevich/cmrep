@@ -40,6 +40,12 @@
 #include <vnl/vnl_vector.h>
 #include <vnl/vnl_cross.h>
 
+#include <itkOrientedRASImage.h>
+#include <itkImageFileReader.h>
+#include <itkImageFileWriter.h>
+#include <itkImageRegionIterator.h>
+#include <itkImageRegionConstIteratorWithIndex.h>
+
 #ifndef vtkFloatingPointType
 #define vtkFloatingPointType vtkFloatingPointType
 typedef float vtkFloatingPointType;
@@ -266,6 +272,9 @@ int usage()
   cout << "                         to xyz.mat and geodesic distances to d.mat" << endl;
   cout << "    -T name.vtk          Generate thickness map on the boundary. The thickness is the distance" << endl;
   cout << "                         from each boundary point to the closest pruned skeleton point" << endl;
+  cout << "    -I in.nii thickness.nii depth.nii " << endl; 
+  cout << "                         Generate thickness map in an image. Input is a binary image. " << endl;
+  cout << "                         Output 1 is a thickness image; Output 2 is a depth map" << endl;
   return -1;
 }
   
@@ -275,6 +284,7 @@ int main(int argc, char *argv[])
 
   // Command line arguments
   string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi", fnOutThickness;
+  string fnImgRef, fnImgThick, fnImgDepth;
   double xPrune = 2.0, xSearchTol = 1e-6;
   int nComp = 0, nDegrees = 0, nRandSamp = 0;
   bool flagGeodFull = false;
@@ -308,6 +318,12 @@ int main(int argc, char *argv[])
     else if(arg == "-T")
       {
       fnOutThickness = argv[++iArg];
+      }
+    else if(arg == "-I")
+      {
+      fnImgRef = argv[++iArg];
+      fnImgThick = argv[++iArg];
+      fnImgDepth = argv[++iArg];
       }
     else if(arg == "-e")
       {
@@ -628,7 +644,7 @@ int main(int argc, char *argv[])
     loc->BuildLocator();
 
     // Compute thickness values
-    for(size_t i = 0; i < bnd->GetNumberOfPoints(); i++)
+    for(size_t i = 0; i < (size_t) bnd->GetNumberOfPoints(); i++)
       {
       double xs[3], d2, d;
       int subid;
@@ -647,6 +663,95 @@ int main(int argc, char *argv[])
     // Write thickness map
     WriteVTKData(bnd, fnOutThickness);
     } 
+
+  if(fnImgRef.length() && fnImgThick.length())
+    {
+    // Read the reference image
+    typedef itk::OrientedRASImage<short,3> ImageType;
+    typedef itk::ImageFileReader<ImageType> ReaderType;
+    ReaderType::Pointer reader = ReaderType::New();
+    reader->SetFileName(fnImgRef.c_str());
+    try 
+      {
+      reader->Update();
+      } 
+    catch (itk::ExceptionObject &exc)
+      {
+      cerr << "Unable to read reference image: " << exc << endl;
+      return -1;
+      }
+    ImageType::Pointer ref = reader->GetOutput();
+
+    // Create the depth and thickness maps
+    typedef itk::Image<float, 3> FloatImageType;
+    FloatImageType::Pointer iout[2];
+    for(size_t i = 0; i < 2; i++)
+      {
+      iout[i] = FloatImageType::New();
+      iout[i]->SetRegions(ref->GetBufferedRegion());
+      iout[i]->CopyInformation(ref);
+      iout[i]->Allocate();
+      iout[i]->FillBuffer(0.0);
+      }
+    
+    // Create locator for finding closest points
+    vtkCellLocator *loc = vtkCellLocator::New();
+    loc->SetDataSet(skelfinal);
+    loc->CacheCellBoundsOn();
+    loc->BuildLocator();
+
+    // Compute distance at each 1 voxel in the reference image
+    typedef itk::ImageRegionConstIteratorWithIndex<ImageType> RefIterator;
+    typedef itk::ImageRegionIterator<FloatImageType> OutIterator;
+    RefIterator rit(ref, ref->GetBufferedRegion());
+    OutIterator itthick(iout[0], ref->GetBufferedRegion());
+    OutIterator itdepth(iout[1], ref->GetBufferedRegion());
+    for(; !rit.IsAtEnd(); ++rit, ++itthick, ++itdepth)
+      {
+      if(rit.Get())
+        {
+        // Get the RAS coordinate of the voxel
+        ImageType::PointType p;
+        ref->TransformIndexToRASPhysicalPoint(rit.GetIndex(), p);
+        double pt[3]; pt[0] = p[0]; pt[1] = p[1]; pt[2] = p[2];
+
+        // Find closest point on the skeleton
+        double xs[3], d2, d, t;
+        int subid;
+        vtkIdType cellid;
+        
+        loc->FindClosestPoint(pt, xs, cellid, subid, d2);
+        d = sqrt(d2);
+
+        // Get thickness at that cell
+        t = finalRad->GetTuple1(cellid);
+
+        // Set thickness, depth
+        itthick.Set(t);
+        itdepth.Set(d / t);
+        /*
+          {
+          cout << "Index: " << rit.GetIndex() << endl;
+          cout << "Point: " << p << endl;
+          cout << "Distance: " << d << endl;
+          cout << "Thickness: " << t << endl;
+          cout << "Matching cell: " << cellid << endl;
+          cout << "Corr.Point: " << xs[0] << " " << xs[1] << " " << xs[2] << endl;
+          }
+        */
+        }
+      }
+
+    // Write output images
+    typedef itk::ImageFileWriter<FloatImageType> WriterType;
+    for(size_t i = 0; i < 2; i++)
+      {
+      WriterType::Pointer writer = WriterType::New();
+      writer->SetInput(iout[i]);
+      writer->SetFileName(i==0 ? fnImgThick : fnImgDepth);
+      writer->Update();
+      }
+    }
 
   // Generate random samples
   if(nRandSamp > 0)

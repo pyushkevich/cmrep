@@ -551,6 +551,7 @@ private:
 
   // Cumulative values
   double xImageIntegral, xVolumeIntegral, xObjectIntegral, xRatio;
+  double dVolumeIntegral, dObjectIntegral;
 
   // Profile array sizes
   size_t nCuts, nSamplesPerAtom, iCenterSample, iLastSample, nAtoms;
@@ -574,6 +575,7 @@ private:
   std::vector<ProfileData> xProfile;
 
   friend class VolumeOverlapEnergyTerm;
+  friend class ProbabilityIntegralEnergyTerm;
 };
 
 /**
@@ -629,6 +631,67 @@ private:
 
   // Cumulative values
   double xImageIntegral, xRatio;
+
+  // The class that does the actual work
+  VolumeIntegralEnergyTerm *worker;
+};
+
+/**
+ * This term takes as input a floating point image in the range 0 to 1, with
+ * 1 indicating 100% cetrainty that a voxel belongs to the object, and 0 indicating 
+ * 100% certainty that it belongs to background. Let p(x) denote this image. The
+ * term computes the quantity
+ *
+ * 1 - (\int_{model} p(x) dV + \int_{image\model} 1-p(x) dV) / Vol(image)
+ *
+ * Where 'image' denotes the whole image region. This term is used to fit a model
+ * to such probability images. It return values between 0 and 1
+ */
+class ProbabilityIntegralEnergyTerm : public EnergyTerm
+{
+public:
+
+  /** Initialize with an image and a number of sample points on each
+   * medial sail vector */
+  ProbabilityIntegralEnergyTerm(
+    GenericMedialModel *model, FloatImage *image, size_t nCuts);
+
+  virtual ~ProbabilityIntegralEnergyTerm()
+    { delete worker; delete function; }
+  
+  /** Compute the volume overlap fraction between image and m-rep */
+  double ComputeEnergy(SolutionData *data);
+
+  // Initialize gradient computation and return the value of the solution
+  // at the current state
+  double BeginGradientComputation(SolutionData *data);
+  
+  // Compute the partial derivative (must be called in the middle of Begin and
+  // End of GradientComputation.
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS);
+
+  // Finish gradient computation, remove all temporary data
+  void EndGradientComputation() {};
+
+  // Print a verbose report
+  void PrintReport(ostream &sout);
+
+  // Print a short name
+  string GetShortName() { return string("PRBINT"); }
+
+  double GetModelVolume()
+    { return worker->GetModelVolume(); }
+  
+private:
+  // Image object to sample
+  FloatImage *xImage;
+  
+  // Image encoded as a function
+  EuclideanFunction *function;
+
+  // Cumulative values
+  double xIntPOverImage, xInt1OverImage, xIntP, xResult;
 
   // The class that does the actual work
   VolumeIntegralEnergyTerm *worker;

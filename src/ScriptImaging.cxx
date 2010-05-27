@@ -265,6 +265,17 @@ double FloatImage::IntegratePositiveVoxels()
   return xPositiveSum * xVoxelVolume;
 }
 
+double FloatImage::ComputeImageVolume()
+{
+  // Scale the positive sum by the volume of the voxel
+  typedef itk::OrientedRASImage<float, 3> FloatImageType;
+  FloatImageType::Pointer img = xImage->GetInternalImage();
+  double xVoxelVolume = 
+    img->GetSpacing()[0] * img->GetSpacing()[1] * img->GetSpacing()[2];
+
+  return xVoxelVolume * img->GetBufferedRegion().GetNumberOfPixels();
+}
+
 double FloatImage::ComputeObjectVolume()
 {
   // Create an iterator

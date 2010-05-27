@@ -1225,8 +1225,8 @@ double VolumeIntegralEnergyTerm
 ::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
 {
   // Clear the intersection volume accumulator
-  double dObjectIntegral = 0;
-  double dVolumeIntegral = 0;
+  dObjectIntegral = 0;
+  dVolumeIntegral = 0;
 
   // Iterate over the medial atoms in the model
   for(MedialBoundaryPointIterator bip(S->xAtomGrid); !bip.IsAtEnd(); ++bip)
@@ -1319,6 +1319,66 @@ void VolumeOverlapEnergyTerm::PrintReport(ostream &sout)
   sout << "    image integral : " << xImageIntegral << endl;
   sout << "    ratio          : " << worker->xObjectIntegral / xImageIntegral << endl;
   sout << "    final value    : " << xRatio << endl;
+}
+
+/*********************************************************************************
+ * ProbabilityIntegralEnergyTerm
+ ********************************************************************************/
+ProbabilityIntegralEnergyTerm
+::ProbabilityIntegralEnergyTerm(
+  GenericMedialModel *model, FloatImage *xImage, size_t nCuts)
+{
+  // Initialize the worker
+  function = new FloatImageEuclideanFunctionAdapter(xImage);
+  worker = new VolumeIntegralEnergyTerm(model, function, nCuts);
+
+  // Compute the image volume (it remains a constant throughout)
+  xIntPOverImage = xImage->IntegratePositiveVoxels();
+  xInt1OverImage = xImage->ComputeImageVolume();
+}
+
+double ProbabilityIntegralEnergyTerm
+::ComputeEnergy(SolutionData *S)
+{
+  worker->ComputeEnergy(S);
+  double xIntPOverModel = worker->xObjectIntegral;
+  double xInt1OverModel = worker->xVolumeIntegral;
+  xIntP = 2*xIntPOverModel + xInt1OverImage - (xIntPOverImage + xInt1OverModel);
+  xResult = 1.0 - xIntP / xInt1OverImage;
+  return xResult;
+}
+
+double ProbabilityIntegralEnergyTerm
+::BeginGradientComputation(SolutionData *S)
+{
+  worker->BeginGradientComputation(S);
+  double xIntPOverModel = worker->xObjectIntegral;
+  double xInt1OverModel = worker->xVolumeIntegral;
+  xIntP = 2*xIntPOverModel + xInt1OverImage - (xIntPOverImage + xInt1OverModel);
+  xResult = 1.0 - xIntP / xInt1OverImage;
+  return xResult;
+}
+
+double ProbabilityIntegralEnergyTerm
+::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  worker->ComputePartialDerivative(S, dS);
+  double dIntPOverModel = worker->dObjectIntegral;
+  double dInt1OverModel = worker->dVolumeIntegral;
+  double dIntP = 2*dIntPOverModel  - dInt1OverModel;
+  double dResult = -dIntP / xInt1OverImage;
+  return dResult;
+}
+
+void ProbabilityIntegralEnergyTerm::PrintReport(ostream &sout)
+{
+  sout << "  Probability Integral Energy Term: " << endl;
+  sout << "    integral of p(x) over model: " << worker->xObjectIntegral << endl;
+  sout << "    integral of 1    over model: " << worker->xVolumeIntegral << endl;
+  sout << "    integral of p(x) over image: " << xIntPOverImage << endl;
+  sout << "    integral of 1    over image: " << xInt1OverImage << endl;
+  sout << "    function to be maximized   : " << xIntP << endl;
+  sout << "    final (normalized) value   : " << xResult << endl;
 }
 
 /*********************************************************************************

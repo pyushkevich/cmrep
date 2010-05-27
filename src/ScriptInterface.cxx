@@ -668,6 +668,12 @@ void MedialPDE::ConfigureEnergyTerms(
       xTermImage = new VolumeOverlapEnergyTerm(xMedialModel, image, 8);
       break;
 
+    // TODO: We need to specifu a floating point image for this term that 
+    // is not the same as the one for the Volume Overlap. 
+    case OptimizationParameters::PROBABILITY_INTEGRAL:
+      xTermImage = new ProbabilityIntegralEnergyTerm(xMedialModel, imgGray, 8);
+      break;
+
     case OptimizationParameters::BOUNDARY:
       xTermImage = new BoundaryImageMatchTerm(xMedialModel, image);
       break;

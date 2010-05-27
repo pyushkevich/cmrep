@@ -74,6 +74,9 @@ public:
   // of this function
   virtual double IntegratePositiveVoxels();
 
+  // Return volume of the image region (nvox * voxel_size)
+  virtual double ComputeImageVolume();
+
   // Get the voxel corresponding to a point. Return values set to -1 if point is outside
   virtual void GetVoxelIndex(const SMLVec3d &x, int &vx, int &vy, int &vz);
 

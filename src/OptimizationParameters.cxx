@@ -18,6 +18,7 @@ OptimizationParameters
   xMappingRegMap.AddPair(LAPLACE_BASIS, "LaplaceBasis");
 
   xImageMatchRegMap.AddPair(VOLUME, "VolumeOverlap");
+  xImageMatchRegMap.AddPair(PROBABILITY_INTEGRAL, "ProbabilityIntegral");
   xImageMatchRegMap.AddPair(BOUNDARY, "BoundaryIntegral");
   xImageMatchRegMap.AddPair(RADIUS_VALUES, "CurrentRadius");
 
