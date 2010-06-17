@@ -553,6 +553,9 @@ private:
   double xImageIntegral, xVolumeIntegral, xObjectIntegral, xRatio;
   double dVolumeIntegral, dObjectIntegral;
 
+  // Debugging
+  StatisticsAccumulator saImage;
+
   // Profile array sizes
   size_t nCuts, nSamplesPerAtom, iCenterSample, iLastSample, nAtoms;
 

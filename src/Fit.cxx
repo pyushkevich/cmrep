@@ -337,10 +337,19 @@ int main(int argc, char *argv[])
       // Blur the image at appropriate blur level
       if(i == 0 || flag_one_stage || stages[i].blur != stages[i-1].blur)
         {
-        cout << "Gaussian smoothing with sigma = " << stages[i].blur << endl;
-        imgfloat.SetToBlurredBinary(&img, stages[i].blur);
-        imgfloat.SetOutsideValue(-1.0);
-        cout << "Done blurring" << endl;
+        if(stages[i].blur == 0.0)
+          {
+          cout << "Treating input image as smooth speed image (bkg -1, fore: +1)" << endl;
+          imgfloat.LoadFromFile(fn_image.c_str());
+          }
+        else
+          {
+          cout << "Treating input image as binary (background 0, foreground 1)" << endl;
+          cout << "Gaussian smoothing with sigma = " << stages[i].blur << endl;
+          imgfloat.SetToBlurredBinary(&img, stages[i].blur);
+          imgfloat.SetOutsideValue(-1.0);
+          cout << "Done blurring" << endl;
+          }
         }
 
       // Subdivide the model if necessary
@@ -380,6 +389,8 @@ int main(int argc, char *argv[])
       // Write mesh file(s)
       string fn_mesh_med = dir_out + "/mesh/" + stages[i].name + ".med.vtk";
       string fn_mesh_bnd = dir_out + "/mesh/" + stages[i].name + ".bnd.vtk";
+      
+      // This is so that the float image is sampled
       mrep.SaveVTKMesh(fn_mesh_med.c_str(), fn_mesh_bnd.c_str());
 
       // Write the target image

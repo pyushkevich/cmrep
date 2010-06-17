@@ -95,7 +95,9 @@ ITKImageWrapperImpl<TPixel>
   xImage = ImageType::New();
   fnInterpolator = InterpolatorType::New();
   fnInterpolatorNN = NNInterpolator::New();
-  fnInterpolator->SetSplineOrder(3);
+
+  // CHANGED BY PAUL 6/17/2010 - Why do we need cubic interpolation?
+  fnInterpolator->SetSplineOrder(1);
 }
 
 template<typename TPixel>

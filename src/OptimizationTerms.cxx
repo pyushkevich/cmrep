@@ -1184,6 +1184,8 @@ double VolumeIntegralEnergyTerm
   xObjectIntegral = 0;
   xVolumeIntegral = 0;
 
+  saImage.Reset();
+
   // Iterate over the medial atoms in the model
   for(MedialBoundaryPointIterator bip(S->xAtomGrid); !bip.IsAtEnd(); ++bip)
     {
@@ -1206,6 +1208,7 @@ double VolumeIntegralEnergyTerm
 
       // Sample the image intentisy
       p.xImageVal[j] = function->Evaluate(Xj);
+      saImage.Update(p.xImageVal[j]);
 
       // Compute the image gradient for these sites
       if(gradient_mode)
@@ -1273,6 +1276,9 @@ void VolumeIntegralEnergyTerm::PrintReport(ostream &sout)
   sout << "    object integral: " << xObjectIntegral << endl;
   sout << "    object volume  : " << xVolumeIntegral << endl;
   sout << "    integral/vol   : " << xObjectIntegral/xVolumeIntegral << endl;
+  sout << "    sample pointsx : " << saImage.GetCount() << endl;
+  sout << "    sample min/max : " << saImage.GetMin() << "; " << saImage.GetMax() << endl;
+  sout << "    sample mean/sd : " << saImage.GetMean() << " +- " << saImage.GetStdDev() << endl;
 }
 
 /*********************************************************************************
@@ -1319,6 +1325,7 @@ void VolumeOverlapEnergyTerm::PrintReport(ostream &sout)
   sout << "    image integral : " << xImageIntegral << endl;
   sout << "    ratio          : " << worker->xObjectIntegral / xImageIntegral << endl;
   sout << "    final value    : " << xRatio << endl;
+  worker->PrintReport(sout);
 }
 
 /*********************************************************************************
