@@ -1,0 +1,57 @@
+DefaultParameters.Mapping = LaplaceBasis
+DefaultParameters.LaplaceBasis.Size = 40
+DefaultParameters.ImageMatch = VolumeOverlap
+DefaultParameters.MedialRegularityTerm.Weight = 0
+DefaultParameters.BoundaryCurvaturePenaltyTerm.Weight = 0.0
+DefaultParameters.BoundaryGradRPenaltyTerm.Weight = 0.0
+DefaultParameters.BoundaryJacobianEnergyTerm.Weight = 0.01
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyA = 10
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyB = 10
+DefaultParameters.RadiusPenaltyTerm.Weight = 0.00001
+DefaultParameters.AtomBadnessTerm.Weight = 0.0
+DefaultParameters.MedialCurvaturePenaltyTerm.Weight = 0
+DefaultParameters.MedialAnglesPenaltyTerm.Weight = 0.01
+DefaultParameters.DiffeomorphicPenaltyTerm.Weight = 0.0
+DefaultParameters.LocalDistancePenaltyTerm.Weight = 0.25
+DefaultParameters.LocalDistancePenaltyTerm.ReferenceModel.ArraySize=1
+DefaultParameters.LocalDistancePenaltyTerm.ReferenceModel.Element[0]=t002_hipp-prob_template.cmrep
+
+# Define optimization stages
+Stage.ArraySize = 5
+
+# Alignment 
+Stage.Element[0].Name = align
+Stage.Element[0].Mode = AlignMoments
+Stage.Element[0].Blur = 0.0
+
+# Affine
+Stage.Element[1].Name = affine
+Stage.Element[1].Mode = FitToBinary
+Stage.Element[1].Blur = 0.0
+Stage.Element[1].MaxIterations = 200
+Stage.Element[1].Parameters.Mapping = Affine
+
+# First deformable stage
+Stage.Element[2].Name = def1
+Stage.Element[2].Mode = FitToBinary
+Stage.Element[2].Blur = 0.0
+Stage.Element[2].MaxIterations = 800
+Stage.Element[2].Parameters.Mapping = LaplaceBasis
+Stage.Element[2].Parameters.LaplaceBasis.Size = 10
+
+# Second deformable stage
+Stage.Element[3].Name = def2
+Stage.Element[3].Mode = FitToBinary
+Stage.Element[3].Blur = 0.0
+Stage.Element[3].MaxIterations = 200
+Stage.Element[3].Mapping = LaplaceBasis
+Stage.Element[3].Parameters.LaplaceBasis.Size = 40
+
+# Third deformable stage
+Stage.Element[4].Name = def3
+Stage.Element[4].Mode = FitToBinary
+Stage.Element[4].Blur = 0.0
+Stage.Element[4].MaxIterations = 60
+Stage.Element[4].Mapping = LaplaceBasis
+Stage.Element[4].Parameters.LaplaceBasis.Size = 120
+
