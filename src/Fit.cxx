@@ -6,6 +6,7 @@
 #include "CoefficientMapping.h"
 #include "MedialAtomGrid.h"
 #include "PrincipalComponents.h"
+#include "System.h"
 #include "TestSolver.h"
 #include "ITKImageWrapper.h"
 #include <itksys/SystemTools.hxx>
@@ -156,6 +157,9 @@ struct StageInfo
 
 int main(int argc, char *argv[])
 {
+  // Report errors
+  SetupSignalHandlers();
+
   // Check the number of input parameters
   if(argc < 5)
     return usage();
