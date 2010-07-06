@@ -350,8 +350,16 @@ int main(int argc, char *argv[])
           {
           cout << "Treating input image as binary (background 0, foreground 1)" << endl;
           cout << "Gaussian smoothing with sigma = " << stages[i].blur << endl;
-          imgfloat.SetToBlurredBinary(&img, stages[i].blur);
-          imgfloat.SetOutsideValue(-1.0);
+          try 
+            {
+            imgfloat.SetToBlurredBinary(&img, stages[i].blur);
+            imgfloat.SetOutsideValue(-1.0);
+            }
+          catch(exception &exc)
+            {
+            cerr << exc.what() << endl;
+            return -1;
+            }
           cout << "Done blurring" << endl;
           }
         }

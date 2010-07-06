@@ -22,8 +22,11 @@ FIND_PACKAGE(ITK 3.14 REQUIRED)
 INCLUDE(${ITK_USE_FILE})
 
 # Get VTK
-FIND_PACKAGE(VTK)
+FIND_PACKAGE(VTK 5.2 REQUIRED)
 INCLUDE(${VTK_USE_FILE})
+
+# Where to get additional modules
+SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
 
 # Optionally, support PARDISO
 OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
@@ -37,15 +40,16 @@ IF(USE_PARDISO)
     FIND_LIBRARY(PARDISO_LIB pardiso DOC "The location of the PARDISO shared library")
     IF(PARDISO_LIB)
       ADD_DEFINITIONS(-DHAVE_PARDISO)
-      LINK_LIBRARIES(${PARDISO_LIB})
       SET(SOLVER_SRC src/PardisoInterface.cxx)
     ENDIF(PARDISO_LIB)  
 
     # On Linux, Lapack is also required
     INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
-    IF(LAPACK_FOUND)
-      LINK_LIBRARIES(${LAPACK_LIBS})
-    ENDIF(LAPACK_FOUND)
+
+    # Set the PDE libraries variable
+    IF(PARDISO_LIB AND LAPACK_FOUND)
+      SET(PDE_LIBS ${PARDISO_LIB} ${LAPACK_LIBS})
+    ENDIF(PARDISO_LIB AND LAPACK_FOUND)
 
   ENDIF(WIN32)
 ELSE(USE_PARDISO)
@@ -64,23 +68,36 @@ IF(USE_TAUCS)
     FIND_LIBRARY(TAUCS_LIB taucs PATHS ${TAUCS_ROOT_DIR}/lib/${TAUCS_SYS} DOC "The location of the TAUCS library")
     IF(TAUCS_LIB)
       ADD_DEFINITIONS(-DHAVE_TAUCS)
-      LINK_LIBRARIES(${TAUCS_LIB})
       SET(SOLVER_SRC src/TaucsInterface.cxx)
     ENDIF(TAUCS_LIB)  
 
     # On Linux, Lapack is also required
     INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
-    IF(LAPACK_FOUND)
-      LINK_LIBRARIES(${LAPACK_LIBS})
-    ENDIF(LAPACK_FOUND)
-
     FIND_LIBRARY(METIS_LIB metis)
-    IF(METIS_LIB)
-      LINK_LIBRARIES(${METIS_LIB})
-    ENDIF(METIS_LIB)
+
+    # Set the PDE libraries variable
+    IF(TAUCS_LIB AND LAPACK_FOUND AND METIS_LIB)
+      SET(PDE_LIBS ${TAUCS_LIB} ${LAPACK_LIBS} ${METIS_LIB})
+    ENDIF(TAUCS_LIB AND LAPACK_FOUND AND METIS_LIB)
 
   ENDIF(TAUCS_BUILD_DIR)
 ENDIF(USE_TAUCS)
+
+# Optionally, use MKL
+OPTION(USE_MKL "Use the Intel MKL library" OFF)
+IF(USE_MKL)
+  FIND_PACKAGE(MKL REQUIRED)
+  IF(MKL_LIBRARIES)
+
+    ADD_DEFINITIONS(-DHAVE_MKL)
+    INCLUDE_DIRECTORIES(${MKL_INCLUDES})
+
+    SET(SOLVER_SRC src/MKLSolverInterface.cxx)
+    SET(PDE_LIBS ${MKL_LIBRARIES})
+
+  ENDIF(MKL_LIBRARIES)
+ENDIF(USE_MKL)
+
 
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
@@ -162,6 +179,7 @@ SET(COMMON_SRCS
   src/SparseSolver.cxx
   src/SubdivisionMedialModel.cxx
   src/SubdivisionSurface.cxx
+  src/System.cxx
   src/TestSolver.cxx
   src/VTKMedialMesh.cxx
   src/VTKSubdivision.cxx
@@ -196,15 +214,30 @@ LINK_LIBRARIES(
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
+TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS})
+
 ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
+TARGET_LINK_LIBRARIES(cmrep_fit ${PDE_LIBS})
+
 ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
+TARGET_LINK_LIBRARIES(cmrep_getmesh ${PDE_LIBS})
+
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
+TARGET_LINK_LIBRARIES(cmrep_subdivide ${PDE_LIBS})
+
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
+TARGET_LINK_LIBRARIES(cmrep_remesh ${PDE_LIBS})
+
+ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
+TARGET_LINK_LIBRARIES(cmrep_meanmodel ${PDE_LIBS})
+
+ADD_EXECUTABLE(cmrep_pca_generate src/ComputePCA.cxx)
+TARGET_LINK_LIBRARIES(cmrep_pca_generate ${PDE_LIBS})
+
 ADD_EXECUTABLE(cmrep_fillmesh src/CMRepMeshToImage.cxx)
 ADD_EXECUTABLE(cmrep_genwarp src/CMRepToWarp.cxx)
 ADD_EXECUTABLE(cmrep_warpimage src/CMRepWarpImage.cxx)
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
-ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
 
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
 TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)

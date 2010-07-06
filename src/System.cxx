@@ -4,6 +4,9 @@
 
 #include <signal.h>
 #include <execinfo.h>
+#include <iostream>
+
+using namespace std;
 
 void SegmentationFaultHandler(int sig)
 {

@@ -150,7 +150,7 @@ public:
   /** Compute shortest distances from a vertex on a mesh to other vertices */
   void ComputeDistances(
     vtkIdType iStartNode, 
-    double xMaxDistance = DijkstraAlgorithm::INFINITE_WEIGHT);
+    double xMaxDistance = DijkstraShortestPath<float>::INFINITE_WEIGHT);
 
   /** Compute the shortest distance from a list of start nodes */
   void ComputeDistances(const list<vtkIdType> &iStartNodes);
