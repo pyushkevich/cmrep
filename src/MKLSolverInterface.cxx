@@ -90,7 +90,8 @@ MKLSolverInterface
     const_cast<double *>(mat.GetSparseData()), idxRows, idxCols,
     NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
-  printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
+  if(PERROR)
+    printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
 
   // Set the flag so we know that pardiso was launched before
   flagPardisoCalled = true;
@@ -109,7 +110,9 @@ MKLSolverInterface
     const_cast<double *>(xMatrix), idxRows, idxCols,
     NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
 
-  printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
+  if(PERROR)
+    printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
+  
   // Record the parameter for next phase
   this->xMatrix = xMatrix;
 }
@@ -126,8 +129,9 @@ MKLSolverInterface
   pardiso(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
     NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
-  printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
 
+  if(PERROR)
+    printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
 }
 
 void                              
@@ -142,7 +146,9 @@ MKLSolverInterface
   pardiso(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
     NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
-  printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
+
+  if(PERROR)
+    printf("PARDISO phase %d, error %d\n", PHASE, PERROR);
 }
 
 MKLSolverInterface::
