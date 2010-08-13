@@ -1,0 +1,7 @@
+Grid.Type = LoopSubdivision
+Grid.Model.SolverType = PDE
+Grid.Model.Atom.SubdivisionLevel = 0
+Grid.Model.Coefficient.FileName = medialtemplateA.vtk
+Grid.Model.Coefficient.FileType = VTK
+Grid.Model.Coefficient.ConstantRho = -0.01
+Grid.Model.Coefficient.ConstantRadius = 0.4

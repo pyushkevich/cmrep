@@ -1,0 +1,33 @@
+DefaultParameters.Mapping = LaplaceBasis
+DefaultParameters.LaplaceBasis.Size = 38
+DefaultParameters.ImageMatch = VolumeOverlap
+DefaultParameters.MedialRegularityTerm.Weight = 0.0
+DefaultParameters.BoundaryCurvaturePenaltyTerm.Weight = 0.0
+DefaultParameters.BoundaryJacobianEnergyTerm.Weight = 0.01
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyA = 20
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyB = 10
+DefaultParameters.RadiusPenaltyTerm.Weight = 0.0001
+DefaultParameters.AtomBadnessTerm.Weight = 0.0
+DefaultParameters.MedialCurvaturePenaltyTerm.Weight = 0
+DefaultParameters.MedialAnglesPenaltyTerm.Weight = 40
+DefaultParameters.BoundaryAnglesPenaltyTerm.Weight = 40
+DefaultParameters.DiffeomorphicEnergyTerm.Weight = 0.1
+DefaultParameters.LoopTangentSchemeValidityPenaltyTerm.Weight = 0.01
+DefaultParameters.BoundaryGradRPenaltyTerm.Weight = 0.1
+
+# Define optimization stages
+Stage.ArraySize = 2
+
+# First deformable stage
+Stage.Element[0].Name = def1_A
+Stage.Element[0].Mode = FitToBinary
+Stage.Element[0].Blur = 0.0
+Stage.Element[0].MaxIterations = 500
+
+Stage.Element[1].Name = def1_B
+Stage.Element[1].Mode = FitToBinary
+Stage.Element[1].Blur = 0.0
+Stage.Element[1].MaxIterations = 500
+#Stage.Element[1].Parameters.Mapping = Identity
+Stage.Element[1].Parameters.Mapping = LaplaceBasis
+Stage.Element[1].Parameters.LaplaceBasis.Size = 120

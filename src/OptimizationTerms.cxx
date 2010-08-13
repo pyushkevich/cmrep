@@ -1399,6 +1399,7 @@ BoundaryGradRPenaltyTerm
 {
   // Reset the stats arrays
   saGradR.Reset();
+  saGradRInt.Reset();
   saPenalty.Reset();
   
   // Iterate over all crest atoms
@@ -1422,8 +1423,19 @@ BoundaryGradRPenaltyTerm
       // For atoms that aren't at the medial edge, we want to keep gradR
       // from being anywhere near 1, since that will make the derivatives
       // of the boundary nodes go to infinity, killing the optimizer. So 
-      // we let the penalty be of the form alpha / sqrt(1-(gradR^2))
-      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xNormalFactor - 1);
+      // we let the penalty be of the form alpha / (1-gradR^2)^2
+      //
+      // Why this particular shape of the penalty? Because the penalty for
+      // |gradR|^2 = 0.95 is 60 times greater than for |gradR|^2 = 0.5 and
+      // |gradR|^2 = 0.99 is 1400 times greater than for |gradR|^2 = 0.5
+      // which I feel is an acceptably steep polynomial penalty
+      saGradRInt.Update(S->xAtoms[i].xGradRMagSqrOrig);
+
+      // p_ref is the reference penalty for |gradR|^2 = 0.5
+      const double p_ref = 0.5625;
+      double t = (1.0 - S->xAtoms[i].xGradRMagSqrOrig);
+      double t2 = t * t;
+      double penalty = 0.0001 * (p_ref / t2);
       saPenalty.Update(penalty);
       }
     }
@@ -1458,9 +1470,14 @@ ComputePartialDerivative(
         }
       else
         {
-        double d_penalty = 
-          - 0.0001 * dS->xAtoms[i].xNormalFactor / 
-          (S->xAtoms[i].xNormalFactor * S->xAtoms[i].xNormalFactor);
+        // p_ref is the reference penalty for |gradR|^2 = 0.5
+        const double p_ref = 0.5625;
+        double t = (1.0 - S->xAtoms[i].xGradRMagSqrOrig);
+        double dt = - dS->xAtoms[i].xGradRMagSqrOrig;
+        double t2 = t * t;
+        double dt2 = 2.0 * t * dt;
+        double penalty = 0.0001 * (p_ref / t2);
+        double d_penalty = penalty * (- dt2 / t2); 
         dTotalPenalty += d_penalty;
         }
       }
@@ -1473,11 +1490,17 @@ ComputePartialDerivative(
 void BoundaryGradRPenaltyTerm::PrintReport(ostream &sout)
 {
   sout << "  Boundary |gradR|^2 Penalty: " << endl;
-  sout << "    number of atoms          : " << saGradR.GetCount() << endl; 
-  sout << "    range of |gradR|^2       : " <<
+  sout << "    number of boundary atoms          : " << saGradR.GetCount() << endl; 
+  sout << "    range of boundary |gradR|^2       : " <<
     saGradR.GetMin() << " to " << saGradR.GetMax() << endl;
-  sout << "    mean (std) of |gradR|^2  : " <<
+  sout << "    mean (std) of boundary |gradR|^2  : " <<
     saGradR.GetMean() << " (" << saGradR.GetStdDev() << ")" << endl;
+  sout << "    number of internal atoms          : " << saGradRInt.GetCount() << endl; 
+  sout << "    range of internal |gradR|^2       : " <<
+    saGradRInt.GetMin() << " to " << saGradRInt.GetMax() << endl;
+  sout << "    mean (std) of internal |gradR|^2  : " <<
+    saGradRInt.GetMean() << " (" << saGradRInt.GetStdDev() << ")" << endl;
+
   sout << "    total penalty            : " << saPenalty.GetMean() << endl;
 }
 
@@ -1886,6 +1909,104 @@ BoundaryTriangleAnglePenaltyTerm
   sout << "    max penalty              : " << sPenalty.GetMax() << endl;
   sout << "    mean penalty (r.v.)      : " << sPenalty.GetMean() << endl;
 }
+
+
+/*********************************************************************************
+ * LoopTangentSchemeValidityPenaltyTerm
+ ********************************************************************************/
+
+LoopTangentSchemeValidityPenaltyTerm
+::LoopTangentSchemeValidityPenaltyTerm(GenericMedialModel *model)
+: MedialIntegrationEnergyTerm(model)
+{
+}
+
+/** 
+ * The penalty is of the form c / sin(alpha)^2
+ * where c = sin(20)^2, and alpha is the angle between the Xu and Xv vectors
+ * This way, the penalty for angle of 20 degrees is 1, for 1 degree is 384,
+ * for 0.1 degree is 34800. The idea is that everything in the ballpark of
+ * 20 degrees is acceptable, but we don't want smaller angles.
+ *
+ * sin(alpha)^2 = 1 - G12^2 / (G11 * G22)
+ *
+ * We need this penalty because the LoopTangentScheme, which is based on the
+ * 1994 Hoppe paper "Piecewise Smooth Surface Reconstruction" can create some
+ * degenerate (parallel) tangent vectors for boundary vertices with valence > 4
+ */
+
+double LoopTangentSchemeValidityPenaltyTerm::ComputeEnergy(SolutionData *S)
+{
+  // Reset the statistics accumulator
+  saPenalty.Reset();
+
+  // We use 20 degrees as the baseline (at which the per-vertex penalty is 2.0)
+  static const double c = pow(sin(vnl_math::pi / 9.0), 2);
+
+  // We will simply look at the ratio |Xu x Xv| to |Xu| |Xv| and
+  // take its inverse as the penalty, with a very small weight
+  for(MedialAtomIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
+    {
+    MedialAtom &a = S->xAtoms[it.GetIndex()];
+    double g11 = a.G.xCovariantTensor[0][0];
+    double g22 = a.G.xCovariantTensor[1][1];
+    double g12 = a.G.xCovariantTensor[0][1];
+
+    double g11_times_g12 = g11 * g22;
+    double sin_alpha_sqr = (g11_times_g12 - g12 * g12) / g11_times_g12;
+    double xpen = c / sin_alpha_sqr;
+
+    saPenalty.Update(xpen);
+    }
+
+  // return 0.25 * xTotalPenalty / S->xAtomGrid->GetNumberOfAtoms();
+  return saPenalty.GetMean();
+}
+
+double LoopTangentSchemeValidityPenaltyTerm::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  double dTotalPenalty = 0.0;
+
+  // We use 20 degrees as the baseline (at which the per-vertex penalty is 2.0)
+  static const double c = pow(sin(vnl_math::pi / 9.0), 2);
+
+  // Compute the square of the cosine of the angle between Xu and Xv
+  for(MedialAtomIterator it(S->xAtomGrid); !it.IsAtEnd(); ++it)
+    {
+    MedialAtom &da = dS->xAtoms[it.GetIndex()];
+    if(da.order <= 2)
+      {
+      MedialAtom &a = S->xAtoms[it.GetIndex()];
+      double g11 = a.G.xCovariantTensor[0][0];
+      double g22 = a.G.xCovariantTensor[1][1];
+      double g12 = a.G.xCovariantTensor[0][1];
+      double dg11 = da.G.xCovariantTensor[0][0];
+      double dg22 = da.G.xCovariantTensor[1][1];
+      double dg12 = da.G.xCovariantTensor[0][1];
+    
+      double g11_times_g12 = g11 * g22;
+      double d_g11_times_g12 = g11 * dg22 + dg11 * g22;
+
+      double sin_alpha_sqr = (g11_times_g12 - g12 * g12) / g11_times_g12;
+      double d_sin_alpha_sqr = 
+        ((d_g11_times_g12 - 2 * g12 * dg12) - sin_alpha_sqr * d_g11_times_g12) / g11_times_g12;
+
+      double dpen = - c * d_sin_alpha_sqr / (sin_alpha_sqr * sin_alpha_sqr);
+
+      dTotalPenalty += dpen;
+      }
+    }
+
+  return dTotalPenalty / saPenalty.GetCount();
+}
+
+void LoopTangentSchemeValidityPenaltyTerm::PrintReport(ostream &sout)
+{
+  sout << "  LoopTangentSchemeValidity Penalty Term : " << endl;
+  sout << "    max penalty              : " << saPenalty.GetMax() << endl;
+  sout << "    mean penalty             : " << saPenalty.GetMean() << endl;
+}
+
 
 
 /*********************************************************************************

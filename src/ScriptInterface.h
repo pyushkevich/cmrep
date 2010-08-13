@@ -422,7 +422,7 @@ public:
    * coefficient mesh and an atom mesh, which are typically separated by a
    * level of atoms. This method will subdivide either of the meshes.
    */
-  void SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub);
+  void SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub, bool adaptive = false);
 
   /**
    * Remesh coefficient and atom-level meshes

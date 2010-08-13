@@ -411,6 +411,11 @@ int main(int argc, char *argv[])
 
       }
     }
+  catch(MedialModelException &exc)
+    {
+    cerr << "MedialModelException: " << exc.what() << endl;
+    return -1;
+    }
   catch(string &err)
     {
     cerr << "Exception: " << err << endl;

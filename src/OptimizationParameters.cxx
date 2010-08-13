@@ -30,6 +30,7 @@ OptimizationParameters
   xPenaltyTermRegMap.AddPair(ATOM_BADNESS, "AtomBadnessTerm");
   xPenaltyTermRegMap.AddPair(RADIUS, "RadiusPenaltyTerm");
   xPenaltyTermRegMap.AddPair(MEDIAL_ANGLES, "MedialAnglesPenaltyTerm");
+  xPenaltyTermRegMap.AddPair(LOOP_VALIDITY, "LoopTangentSchemeValidityPenaltyTerm");
   xPenaltyTermRegMap.AddPair(BOUNDARY_ANGLES, "BoundaryAnglesPenaltyTerm");
   xPenaltyTermRegMap.AddPair(CROSS_CORRELATION, "CrossCorrelation");
   xPenaltyTermRegMap.AddPair(LOCAL_DISTANCE, "LocalDistancePenaltyTerm");
@@ -51,6 +52,7 @@ OptimizationParameters
   xTermDefaultWeights[ATOM_BADNESS] = 0.0;
   xTermDefaultWeights[RADIUS] = 0.1;
   xTermDefaultWeights[MEDIAL_ANGLES] = 0.0;
+  xTermDefaultWeights[LOOP_VALIDITY] = 0.0;
   xTermDefaultWeights[BOUNDARY_ANGLES] = 0.0;
   xTermDefaultWeights[CROSS_CORRELATION] = 0.0;
   xTermDefaultWeights[LOCAL_DISTANCE] = 0.0;

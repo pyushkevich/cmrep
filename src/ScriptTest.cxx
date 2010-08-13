@@ -822,9 +822,11 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
     }
   // Push the other terms
   vt.push_back(TermInfo(
-      "", new ProbabilityIntegralEnergyTerm(model, img, 4), 0.1));
-  vt.push_back(TermInfo(
       "", new BoundaryGradRPenaltyTerm(), 0.1));
+  vt.push_back(TermInfo(
+      "", new LoopTangentSchemeValidityPenaltyTerm(model), 1.0e-4));
+  vt.push_back(TermInfo(
+      "", new ProbabilityIntegralEnergyTerm(model, img, 4), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryElasticityPrior(), 0.1));
   vt.push_back(TermInfo(

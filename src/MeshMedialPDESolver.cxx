@@ -501,10 +501,21 @@ MeshMedialPDESolver
     // Clear the tangent for this vertex
     a.Xu = xLoopScheme.Xu(i, xAtoms);
     a.Xv = xLoopScheme.Xv(i, xAtoms);
-    
+
     // Set the one get of the geometry descriptor
     a.G.SetOneJet(a.X.data_block(), a.Xu.data_block(), a.Xv.data_block());
 
+    // Print a warning if angle between a.Xu and a.Xv is too small
+    double g11 = a.G.xCovariantTensor[0][0];
+    double g22 = a.G.xCovariantTensor[1][1];
+    double g12 = a.G.xCovariantTensor[0][1];
+    double g11_times_g12 = g11 * g22;
+    double sin_alpha_sqr = (g11_times_g12 - g12 * g12) / g11_times_g12;
+    if(sin_alpha_sqr < 3.0459e-04)
+      {
+      cerr << "WARNING! Xu and Xv almost parallel in atom " << i << endl;
+      }
+    
     // Compute the normal vector
     a.ComputeNormalVector();
     } 
@@ -770,6 +781,19 @@ MeshMedialPDESolver
     a.ComputeBoundaryAtomsUsingR(!topology->IsVertexInternal(i));
 
 #endif 
+
+    // Set the 'orig' values in atoms to equal their computed values
+    // (the 'orig' values are from BruteForceSubdivisionMedialModel)
+    a.xGradRMagSqrOrig = a.xGradRMagSqr;
+    a.xNormalFactorOrig = a.xNormalFactor;
+
+    // Check that gradR is reasonable
+    if(!a.flagCrest && a.xGradRMagSqr > 0.99)
+      {
+      // Issue a warning (because this can lead to failed optimization)
+      cerr << "WARNING: |gradR| > .99 in non-crest atom " << i << endl;
+      }
+
     }
 }
 
@@ -804,6 +828,18 @@ MeshMedialPDESolver
   xSolver->SymbolicFactorization(M);
   xSolver->NumericFactorization(M);
   xSolver->Solve(xRHS.data_block(), xSolution.data_block());
+
+  // Check the accuracy of the solution 
+  if(!flagAllowErrors)
+    {
+    static const double MAX_RESIDUAL = 1e-7;
+    double residual = (M.MultiplyByVector(xSolution) - xRHS).inf_norm();
+    if(residual > MAX_RESIDUAL)
+      {
+      cerr << "Excessive residual from PDE solver: max(|A*x-b|) = " << residual << endl;
+      throw MedialModelException("PDE solver did not solve linear system");
+      }
+    }
 
   // The solution must be positive, otherwise this is an ill-posed problem
   if(!flagAllowErrors)
@@ -1090,6 +1126,9 @@ MeshMedialPDESolver
     xAtoms[i].ComputeBoundaryAtomDerivativesUsingR(dAtoms[i], xTempDerivativeTerms[i]);
 
 #endif
+
+    da.xGradRMagSqrOrig = da.xGradRMagSqr;
+    da.xNormalFactorOrig = da.xNormalFactor;
     }
 
 

@@ -2,6 +2,7 @@
 #define __MeshTraversal_h_
 
 #include <vector>
+#include <set>
 #include "smlmath.h"
 #include "Registry.h"
 #include "SparseMatrix.h"

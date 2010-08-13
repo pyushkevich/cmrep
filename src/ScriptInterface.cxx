@@ -422,6 +422,7 @@ void my_calcf(int &n, double *x, int &nf, double &f, int *dummy1, double *dummy2
   if(!vx.is_finite())
     {
     nf = 0;
+    cout << "[ Infinite X in calcf ]" << endl;
     return;
     }
 
@@ -447,6 +448,15 @@ void my_calcg(int &n, double *x, int &nf, double *g, int *, double *, void *info
 {
   // Get a pointer to the object on which to evaluate
   MedialOptimizationProblem *mop = static_cast<MedialOptimizationProblem *>(info);
+
+  // Check if x is ok
+  vnl_vector<double> vx(x, n);
+  if(!vx.is_finite())
+    {
+    nf = 0;
+    cout << "[ Infinite X in calcg ]" << endl;
+    return;
+    }
 
   // Try to evaluate at this point, and if we fail return 0 in nf (request
   // smaller step from the solver, this is a nice feature of toms611)
@@ -722,6 +732,8 @@ void MedialPDE::ConfigureEnergyTerms(
         xTermPenalty = new MedialRegularityTerm(xMedialModel); break;
       case OptimizationParameters::MEDIAL_ANGLES:
         xTermPenalty = new MedialTriangleAnglePenaltyTerm(xMedialModel); break;
+      case OptimizationParameters::LOOP_VALIDITY:
+        xTermPenalty = new LoopTangentSchemeValidityPenaltyTerm(xMedialModel); break;
       case OptimizationParameters::BOUNDARY_ANGLES:
         xTermPenalty = new BoundaryTriangleAnglePenaltyTerm(xMedialModel); break;
       case OptimizationParameters::MEDIAL_CURVATURE:
@@ -1409,7 +1421,7 @@ void MedialPDE::ReleasePCACoefficientMask(IMedialCoefficientMask *xMask)
  * ----------------
  * This is the code for the subdivision surface based cm-rep
  **************************************************************************/
-void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
+void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub, bool adaptive)
 {
   // Get the subdivision surface medial model that is currently available
   SubdivisionMedialModel *smm = dynamic_cast<SubdivisionMedialModel *>(xMedialModel);
@@ -1430,7 +1442,10 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
   if(iCoeffSub > 0)
     {
     // Subdivide the coefficient-level mesh as requested
-    SubdivisionSurface::RecursiveSubdivide(mlCoeffOld, &mlCoeffNew, iCoeffSub);
+    if(adaptive)
+      SubdivisionSurface::RecursiveSubdivideBoundary(mlCoeffOld, &mlCoeffNew, iCoeffSub);
+    else
+      SubdivisionSurface::RecursiveSubdivide(mlCoeffOld, &mlCoeffNew, iCoeffSub);
 
     // Compute the coefficients for the new cm-rep
     size_t nc = smm->GetNumberOfComponents();
@@ -1484,7 +1499,10 @@ void SubdivisionMPDE::SubdivideMeshes(size_t iCoeffSub, size_t iAtomSub)
 
     // Subdivide to get the new mesh level
     SubdivisionSurface::MeshLevel mNewAtomLevel;
-    SubdivisionSurface::RecursiveSubdivide(&mCurrentAtomLevel, &mNewAtomLevel, iAtomSub);
+    if(adaptive)
+      SubdivisionSurface::RecursiveSubdivideBoundary(&mCurrentAtomLevel, &mNewAtomLevel, iAtomSub);
+    else
+      SubdivisionSurface::RecursiveSubdivide(&mCurrentAtomLevel, &mNewAtomLevel, iAtomSub);
 
     // Get the array of phi values for the source
     vnl_vector<double> phiCurrent = smm->GetPhi();

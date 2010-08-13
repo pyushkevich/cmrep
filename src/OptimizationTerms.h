@@ -828,6 +828,38 @@ private:
   StatisticsAccumulator sCosSquare, sPenalty, sDPenalty;
 };
 
+
+/** 
+ * This energy term penalizes vertices where the Xu and Xv vectors
+ * returned by the Loop tangent scheme are very close to parallel.
+ * This causes the determinant of the covariant tensor to become
+ * very small, and gradients of various objective functions become
+ * very large
+ */
+class LoopTangentSchemeValidityPenaltyTerm : public MedialIntegrationEnergyTerm
+{
+public:
+  // Initialize the term
+  LoopTangentSchemeValidityPenaltyTerm(GenericMedialModel *model);
+  virtual ~LoopTangentSchemeValidityPenaltyTerm() {} 
+
+  // Compute the energy
+  double ComputeEnergy(SolutionData *data);
+
+  // Print a verbose report
+  void PrintReport(ostream &sout);
+
+  // Compute the partial derivative term
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS);
+
+  // Print a short name
+  string GetShortName() { return string("LOOPTN"); }
+  
+private:
+  StatisticsAccumulator saPenalty;
+};
+
 /* LEGACY CODE _ DO NOT USE */
 class MedialAnglesPenaltyTerm : public MedialIntegrationEnergyTerm
 {
@@ -915,7 +947,7 @@ public:
 
 private:
   // Accumulators for display and statistics calculation
-  StatisticsAccumulator saGradR, saPenalty;
+  StatisticsAccumulator saGradR, saGradRInt, saPenalty;
 
   // Scaling factor used to derive the penalty (why?)
   const static double xScale;
