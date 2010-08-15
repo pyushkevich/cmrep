@@ -1,0 +1,33 @@
+# This is the input file template for the SurfaceClusterAnalysis module
+#
+
+# Mesh specification. Cluster search can be applied to one or more meshes
+Mesh.ArraySize = 2
+Mesh.Element[0] = test01.vtk
+Mesh.Element[1] = test02.vtk
+
+# Output mesh specification
+OutputMesh.ArraySize = 2
+OutputMesh.Element[0] = test01.clusters.vtk
+OutputMesh.Element[1] = test02.clusters.vtk
+
+# Cohort specification. Currently only two-label analysis is supported.
+# The values in the cohort array are zeros and ones
+Cohort.ArraySize=30
+Cohort.Element[0] = 0;
+Cohort.Element[1] = 1;
+# ...
+
+# Attribute array specification
+Analysis.TestVariable = "FractionalAnisotropy"
+Analysis.AreaElement = "Area Element"
+
+# Number of permutations
+Analysis.NumberOfPermutations = 1000
+
+# Clustering threshold
+Analysis.ClusteringThreshold = 4.0
+
+# Clustering domain
+Analysis.ClusterDomain = "Point"
+

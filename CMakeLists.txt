@@ -141,6 +141,7 @@ ENDIF(GLUT_FOUND)
 # Include subdirectories
 SUBDIRS(extras/toms611)
 SUBDIRS(testing)
+SUBDIRS(src/util)
 
 # Platform-specifics
 IF(WIN32)
