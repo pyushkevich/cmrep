@@ -790,8 +790,10 @@ MeshMedialPDESolver
     // Check that gradR is reasonable
     if(!a.flagCrest && a.xGradRMagSqr > 0.99)
       {
-      // Issue a warning (because this can lead to failed optimization)
-      cerr << "WARNING: |gradR| > .99 in non-crest atom " << i << endl;
+      // Issue a verbal warning (because this can lead to failed optimization)
+      cerr << "WARNING: |gradR| = " << a.xGradRMagSqr << " (too close to 1) in non-crest atom " << i << endl;
+      if(a.xGradRMagSqr > 1.0)
+        throw MedialModelException("Exception: |gradR| > 1 in non-crest atom");
       }
 
     }

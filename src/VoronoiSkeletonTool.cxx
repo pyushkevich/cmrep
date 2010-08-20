@@ -37,6 +37,7 @@
 #include <vtkTriangle.h>
 #include <VTKMeshShortestDistance.h>
 #include <VTKMeshHalfEdgeWrapper.h>
+#include <vtkQuadricClustering.h>
 #include <vnl/vnl_vector.h>
 #include <vnl/vnl_cross.h>
 
@@ -263,11 +264,12 @@ int usage()
   cout << "                         the generating points and the euclidean distance " << endl;
   cout << "                         between these points is less than X.XX" << endl;
   cout << "    -c N                 Take at most N connected components of the skeleton" << endl;
-  cout << "    -s mesh.vtk          Load a skeleton from mesh.vtk and compare to the output skeleton" << endl;
   cout << "    -g                   Compute full geodesic information. This is only useful for" << endl;
   cout << "                         debugging the pruning code." << endl;
   cout << "    -t                   Tolerance for the inside/outside search algorithm (default 1e-6)" << endl;
   cout << "                         Use lower values if holes appear in the skeleton" << endl;
+  cout << "Output Options: " << endl;;
+  cout << "    -s mesh.vtk          Load a skeleton from mesh.vtk and compare to the output skeleton" << endl;
   cout << "    -R N xyz.mat d.mat   Generate N random samples from the skeleton and save their coordiantes" << endl;
   cout << "                         to xyz.mat and geodesic distances to d.mat" << endl;
   cout << "    -T name.vtk          Generate thickness map on the boundary. The thickness is the distance" << endl;
@@ -275,6 +277,10 @@ int usage()
   cout << "    -I in.nii thickness.nii depth.nii " << endl; 
   cout << "                         Generate thickness map in an image. Input is a binary image. " << endl;
   cout << "                         Output 1 is a thickness image; Output 2 is a depth map" << endl;
+  cout << "    -q n_bins            Postprocess skeleton with VTK's quadric clustering filter" << endl;
+  cout << "                         The effect is to reduce the number of vertices in the skeleton" << endl;
+  cout << "                         Parameter n_bins is the number of bins in each dimension" << endl;
+  cout << "                         A good value for n_bins is 20-50" << endl;
   return -1;
 }
   
@@ -286,7 +292,7 @@ int main(int argc, char *argv[])
   string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi", fnOutThickness;
   string fnImgRef, fnImgThick, fnImgDepth;
   double xPrune = 2.0, xSearchTol = 1e-6;
-  int nComp = 0, nDegrees = 0, nRandSamp = 0;
+  int nComp = 0, nDegrees = 0, nRandSamp = 0, nBins = 0;
   bool flagGeodFull = false;
 
   // Check that there are at least three command line arguments
@@ -318,6 +324,10 @@ int main(int argc, char *argv[])
     else if(arg == "-T")
       {
       fnOutThickness = argv[++iArg];
+      }
+    else if(arg == "-q")
+      {
+      nBins = atoi(argv[++iArg]);
       }
     else if(arg == "-I")
       {
@@ -627,6 +637,45 @@ int main(int argc, char *argv[])
   cout << "Mean thickness: " << int_thick / int_area << endl;
     
   vtkPolyData *skelfinal = c2p->GetPolyDataOutput();
+
+  // Quadric clustering
+  if(nBins > 0)
+    {
+    // Calculate appropriate bin size
+    double *bbBnd = skelfinal->GetPoints()->GetBounds();
+    vtkBoundingBox fbb;
+    fbb.SetBounds(bbBnd);
+    double binsize = fbb.GetMaxLength() / nBins;
+
+    vtkQuadricClustering *fCluster = vtkQuadricClustering::New();
+    fCluster->SetNumberOfDivisions(
+      ceil(fbb.GetLength(0) / binsize), 
+      ceil(fbb.GetLength(1) / binsize),
+      ceil(fbb.GetLength(2) / binsize));
+    fCluster->SetInput(c2p->GetPolyDataOutput());
+    fCluster->SetCopyCellData(1);
+    fCluster->Update();
+
+    printf("QuadClustering (%d x %d x %d blocks) :\n", 
+      fCluster->GetNumberOfXDivisions(),
+      fCluster->GetNumberOfYDivisions(),
+      fCluster->GetNumberOfZDivisions());
+    printf("  Input mesh: %ld points, %ld cells\n", 
+      skelfinal->GetNumberOfPoints(),  
+      skelfinal->GetNumberOfCells());
+    printf("  Output mesh: %ld points, %ld cells\n", 
+      fCluster->GetOutput()->GetNumberOfPoints(),  
+      fCluster->GetOutput()->GetNumberOfCells());
+
+    // Convert cell data to point data again
+    vtkCellDataToPointData *c2p = vtkCellDataToPointData::New();
+    c2p->SetInput(fCluster->GetOutput());
+    c2p->PassCellDataOn();
+    c2p->Update();
+    skelfinal = c2p->GetPolyDataOutput();
+    }
+
+  // Write the skeleton out
   WriteVTKData(skelfinal, fnOutput);
 
   // Generate thickness map

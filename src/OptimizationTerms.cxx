@@ -3307,7 +3307,7 @@ MedialOptimizationProblem
     
     if(!flagQuiet)
       printf("%7.3le%s ",
-        xLastGradEvalTermValues[iTerm],
+        xWeights[iTerm] * xLastGradEvalTermValues[iTerm],
         (xLastGradEvalTermValues[iTerm] < lval) ? "*" : " ");
     }
 
