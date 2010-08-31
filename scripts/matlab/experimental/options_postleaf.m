@@ -34,20 +34,18 @@ opt.contour.n_samples = 40;
 
 % Curvature sensitivity during sampling. Smaller values make sampling
 % more proportional to the curvature (0.02 is a good value)
-opt.contour.curv_sensitivity = 0.04;
+opt.contour.curv_sensitivity = 1.2;
 
 %% Set options for the cm-rep type
 
 % Whether an inner ring of vertices is created (for biharmonic only)
 opt.biharm.inner = 1;
 
-% How far the inner vertices are from parent vertices, fraction of edge
-% length (default is 2, i.e. half the edge length)
-opt.biharm.disp_factor = 2;
+% Initial radius along the cm-rep boundary
+opt.biharm.radius = 1;
 
-% How the angle is divided when inserting new vertices (default is to
-% divide the angle into 3 sectors)
-opt.biharm.angle_factor = 3;
+% Initial value of rho on cm-rep interior
+opt.biharm.rho = -0.01;
 
 %% Set options for triangulation of contour
 
@@ -59,3 +57,8 @@ opt.triangle.max_area = 60;
 
 % Extra options to triangle
 opt.triangle.extra_opts = '';
+
+%% Set the options for AFRONT triangulation of 3D surface
+
+% Smaller values result in more triangles. Default = 0.5
+opt.afront.rho = 0.3;

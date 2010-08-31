@@ -1,6 +1,6 @@
 %% READ OPTIONS FIRST
 % open file options_XXXX
-skel_file = '/Users/pauly/tempinit/ifo_skel_qc_clean.vtk';
+skel_file = '/Users/pauly/tempinit/posterior_skel_qc_clean.vtk';
 
 %% Load the skeleton from VTK mesh
 m=vtk_polydata_read(skel_file);
@@ -307,7 +307,7 @@ fprintf(f,'Grid.Model.Coefficient.FileType = VTK\n');
 if(opt.biharm.inner == 1)
     fprintf(f,'Grid.Model.Coefficient.ConstantRho = %f\n',...
         opt.biharm.rho);
-    fprintf(f,'Grid.Model.Coefficient.ConstantRadius.Boundary = %f\n'...
+    fprintf(f,'Grid.Model.Coefficient.ConstantRadius.Boundary = %f\n',...
         opt.biharm.radius);
     fprintf(f,'Grid.Model.SolverType = PDE\n');
 else
