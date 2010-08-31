@@ -1,0 +1,23 @@
+README for tempinit
+
+To run this program you need a bunch of stuff.
+
+1. FastMVU from Kilian Weinberger
+
+http://www.cse.wustl.edu/~kilian/code/files/fastmvu.zip
+
+2. CSDP solver (for FastMVU)
+
+https://projects.coin-or.org/Csdp/
+
+3. Triangle binary for your platform from Johnathan Shewchuk
+
+http://www.cs.cmu.edu/~quake/triangle.html
+
+4. AFRONT binary from UTAH
+
+http://afront.sourceforge.net/
+
+
+
+ENJOY - and have lots of patience :)
