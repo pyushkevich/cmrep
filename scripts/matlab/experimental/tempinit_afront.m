@@ -51,6 +51,7 @@ beta_R = tempinit_polyfit(order,[u v], R);
 Xfit = tempinit_polyinterp(order,  beta, [u v]);
 
 % Plot the original data vs. fitted data
+clf;
 scatter3(X(:,1),X(:,2),X(:,3),'bo'); hold on;
 scatter3(Xfit(:,1),Xfit(:,2),Xfit(:,3),'r.'); hold off; axis image;
 

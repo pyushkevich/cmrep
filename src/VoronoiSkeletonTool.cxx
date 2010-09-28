@@ -267,7 +267,8 @@ int usage()
   cout << "    -g                   Compute full geodesic information. This is only useful for" << endl;
   cout << "                         debugging the pruning code." << endl;
   cout << "    -t                   Tolerance for the inside/outside search algorithm (default 1e-6)" << endl;
-  cout << "                         Use lower values if holes appear in the skeleton" << endl;
+  cout << "                         Use lower values if holes appear in the skeleton. Set to zero to" << endl;
+  cout << "                         disable pruning of outside vertices" << endl;
   cout << "Output Options: " << endl;;
   cout << "    -s mesh.vtk          Load a skeleton from mesh.vtk and compare to the output skeleton" << endl;
   cout << "    -R N xyz.mat d.mat   Generate N random samples from the skeleton and save their coordiantes" << endl;
@@ -439,7 +440,10 @@ int main(int argc, char *argv[])
     pts->SetPoint(i,x,y,z);
 
     // Is this point outside of the bounding box
-    ptin[i] = fBoundBox.ContainsPoint(x,y,z) && sel->IsInsideSurface(x,y,z);
+    if(xSearchTol > 0)
+      ptin[i] = fBoundBox.ContainsPoint(x,y,z) && sel->IsInsideSurface(x,y,z);
+    else
+      ptin[i] = fBoundBox.ContainsPoint(x,y,z);
     
     if(i >= next_prog_mark)
       {

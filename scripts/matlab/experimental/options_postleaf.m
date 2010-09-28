@@ -1,18 +1,18 @@
 %% Set MVU options
 
 % Regularization parameter for MVU (most crucial for good output)
-opt.mvu.eta = 1e-03;
+opt.mvu.eta = 5e-01;
 
 % Number of laplacian eigenvectors for MVU (don't mess with it)
 opt.mvu.leigsdim = 10;
 
 % Max MVU iterations (don't mess with it)
-opt.mvu.maxiter = 4000;
+opt.mvu.maxiter = 2000;
 
 %% Set polynomial fitting options
 
 % Order of polynomial fitting (3 to 5 is reasonable)
-opt.fit.order = 9;
+opt.fit.order = 5;
 
 %% Set options used to compute 2D contour 
 
@@ -20,21 +20,21 @@ opt.fit.order = 9;
 opt.image.size = 200;
 
 % Size of the closing operator (used to convert scattered points to region)
-opt.image.r_closing = 16;
+opt.image.r_closing = 8;
 
 % Size of the dilation operator applied after closing (to avoid sharp
 % corners)
-opt.image.r_post_dilation = 0;
+opt.image.r_post_dilation = 4;
 
 % Number of iterations of laplacian smoothing applied to the contour
-opt.image.smooth_iter = 200;
+opt.image.smooth_iter = 400;
 
 % Number of boundary samples
-opt.contour.n_samples = 40;
+opt.contour.n_samples = 80;
 
 % Curvature sensitivity during sampling. Smaller values make sampling
 % more proportional to the curvature (0.02 is a good value)
-opt.contour.curv_sensitivity = 1.2;
+opt.contour.curv_sensitivity = 10;
 
 %% Set options for the cm-rep type
 
@@ -61,4 +61,4 @@ opt.triangle.extra_opts = '';
 %% Set the options for AFRONT triangulation of 3D surface
 
 % Smaller values result in more triangles. Default = 0.5
-opt.afront.rho = 0.3;
+opt.afront.rho = 0.5;
