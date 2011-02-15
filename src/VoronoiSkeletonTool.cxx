@@ -571,6 +571,14 @@ int main(int argc, char *argv[])
   cout << "Edge contraint pruned " << npruned_edge << " faces." << endl;
   cout << "Geodesic to Euclidean distance ratio contraint (" << xPrune << ") pruned " << npruned_geo << " faces." << endl;
 
+  // Clean up files
+  if (fin.is_open()) 
+    {
+    fin.close();
+    remove(fnVoronoiOutput.c_str());
+    } 
+  remove(fnPoints);
+
   // Create the vtk poly data
   vtkPolyData *skel = vtkPolyData::New();
   skel->SetPoints(pts);
