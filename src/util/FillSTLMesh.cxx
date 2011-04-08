@@ -16,6 +16,7 @@
 
 #include <itkImageFileWriter.h>
 #include <itkImage.h>
+#include <itkImageFileReader.h>
 
 #include "DrawTriangles.h"
 
@@ -26,6 +27,8 @@ typedef float vtkFloatingPointType;
 
 using namespace std;
 using namespace itk;
+
+typedef Image<float, 3> RefImageType;
 
 int usage()
 {
@@ -51,7 +54,12 @@ int usage()
   cout << "   -a NN NN NN XX              Automatic bounding box computation. First three " << endl;
   cout << "                               parameters are the voxel size, the last is the margin in mm" << endl;
   cout << "   -v                          Visualize (render) the STL mesh on the screen" << endl;
-  return -1;
+  // updated by jwsuh 04/06/2011
+  // to use a reference image
+  // and, to use different segmentation mask value.
+  cout << "   -ref file                   reference file for the origin, size, resolution, etc." << endl;
+  cout << "   -c number                   set segmentation mask value (default: 1) " << endl;
+ return -1;
 }
 
 void drawPolyData(vtkPolyData *poly)
@@ -91,11 +99,18 @@ int main(int argc, char **argv)
   double xAutoSpacing[3] = {0,0,0};
   double xAutoMargin = 0;
   int res[3] = {128,128,128};
-  bool doRender = false, doFloodFill = false, flagInputGiven = false, flagAutoSize = false;
+  bool doRender = false, doFloodFill = false, flagAutoSize = false;
+
+  bool useRef = false;
+  int segColor = 1;  // default value for segmentation mask
 
   // Input specifications
   enum MeshType {NONE, BYU, STL, VTK} iMeshType = NONE;
   string fnOutput, fnInput;
+
+  // for Reference image by wook
+  string fnRef;
+  RefImageType::Pointer ref;
 
   // Check the parameters
   if(argc < 2) return usage();
@@ -106,7 +121,7 @@ int main(int argc, char **argv)
   // Parse the optional parameters
   try 
     {
-    for(unsigned int i=1;i<argc-2;i++)
+    for(int i=1;i<argc-2;i++)
       {
       string arg = argv[i];
       if(arg == "-vtk")
@@ -123,6 +138,12 @@ int main(int argc, char **argv)
         {
         fnInput = argv[++i];
         iMeshType = BYU;
+        }
+      else if(arg == "-ref")
+        {
+        fnRef = argv[++i];
+        useRef = true;
+	flagAutoSize = true;
         }
       else if(arg == "-o")
         {
@@ -158,6 +179,10 @@ int main(int argc, char **argv)
         {
         doFloodFill = true;
         }
+      else if(arg == "-c")
+        {
+	  segColor = atoi(argv[++i]);
+        }
       else
         {
         cout << "Unknown argument " << arg << endl;
@@ -178,6 +203,20 @@ int main(int argc, char **argv)
     return usage();
     }    	
 
+  //cout << endl << "useRef ="  << useRef << endl;
+  if(useRef)
+    {
+      cout << "Reference file: "<< fnRef << endl;
+        // Read the reference image
+      typedef itk::ImageFileReader<RefImageType> RefReaderType;
+      RefReaderType::Pointer Refreader = RefReaderType::New();
+      Refreader->SetFileName(fnRef.c_str());
+      cout << "Reading the Reference file ..." << endl;
+      Refreader->Update();
+      ref = Refreader->GetOutput();
+
+    }
+
   // Print the parameters
   cout << endl << "Parameters:" << endl;
   if(!flagAutoSize)
@@ -187,6 +226,40 @@ int main(int argc, char **argv)
       << endl;
     cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" 
       << endl << endl;
+    }
+  else if( (flagAutoSize) && (useRef)) 
+    {
+      //      cout << " else if (flagAutoSize && useRef) " << endl;
+      bb[0][0] = ref->GetOrigin()[0];
+      bb[0][1] = ref->GetOrigin()[1];
+      bb[0][2] = ref->GetOrigin()[2];
+      cout << "Origin: ("<<bb[0][0]<<", "<<bb[0][1]<<", "<<bb[0][2]<<")"<<endl;
+   
+      bb[1][0] = ref->GetRequestedRegion().GetSize()[0];
+      bb[1][1] = ref->GetRequestedRegion().GetSize()[1];
+      bb[1][2] = ref->GetRequestedRegion().GetSize()[2];
+      cout << "Size: ("<<bb[1][0]<<", "<<bb[1][1]<<", "<<bb[1][2]<<")"<<endl;
+
+      xAutoSpacing[0] = ref->GetSpacing()[0];
+      xAutoSpacing[1] = ref->GetSpacing()[1];
+      xAutoSpacing[2] = ref->GetSpacing()[2];
+
+      cout << "Spacing X="<< xAutoSpacing[0]
+	   << "  Spacing Y="<< xAutoSpacing[1]
+	   << "  Spacing Z="<< xAutoSpacing[2] << endl << endl;
+
+      // Compute the resolution
+      // Actually res[] is not used as resolution, but used as image size
+      // by wook 4/6/2011
+      res[0] = (int) bb[1][0];
+      res[1] = (int) bb[1][1];
+      res[2] = (int) bb[1][2];
+
+      cout << "res X="<< res[0]
+	   << "  res Y="<< res[1]
+	   << "  res Z="<< res[2] << endl << endl;
+
+      cout << "segColor = "<<segColor << endl;
     }
   else
     {
@@ -249,7 +322,7 @@ int main(int argc, char **argv)
   cout << "   Y : " << pd->GetBounds()[2] << " to " << pd->GetBounds()[3] << endl;
   cout << "   Z : " << pd->GetBounds()[4] << " to " << pd->GetBounds()[5] << endl;
 
-  if(flagAutoSize)
+  if((flagAutoSize) && (!useRef))
     {
     // Compute the bounding box and resolution automatically
     bb[1][0] = 2.0 * xAutoMargin + pd->GetBounds()[1] - pd->GetBounds()[0];
@@ -308,6 +381,7 @@ int main(int argc, char **argv)
       }      
     }
 
+
   // Clean up
   fltGenericReader->Delete();
 
@@ -315,36 +389,55 @@ int main(int argc, char **argv)
   typedef Image<unsigned char,3> ImageType;
   ImageType::Pointer img = ImageType::New();
   ImageType::RegionType region;
-  region.SetSize(0,res[0]); region.SetSize(1,res[1]); region.SetSize(2,res[2]);
-  img->SetRegions(region);
-  img->Allocate();
-  img->FillBuffer(0);
+
+
+  if(useRef)
+    {
+        img->SetRegions(ref->GetBufferedRegion());
+	img->SetOrigin(ref->GetOrigin());
+	img->SetSpacing(ref->GetSpacing());
+	img->SetDirection(ref->GetDirection());
+	img->Allocate();
+	img->FillBuffer(0);
+    }
+  else
+    {
+      region.SetSize(0,res[0]); region.SetSize(1,res[1]); region.SetSize(2,res[2]);
+      img->SetRegions(region);
+      img->Allocate();
+      img->FillBuffer(0);
+    }
 
   // Convert the polydata to an image
   if(doFloodFill)
     {
     cout << "Scan converting triangles and filling the interior ..." << endl;
-    drawBinaryTrianglesFilled(img->GetBufferPointer(), res, vtx, nt);
+    drawBinaryTrianglesFilled(img->GetBufferPointer(), res, vtx, nt, segColor);
     }
   else
     {
     cout << "Scan converting triangles ..." << endl;
-    drawBinaryTrianglesSheetFilled(img->GetBufferPointer(), res, vtx, nt);
+    drawBinaryTrianglesSheetFilled(img->GetBufferPointer(), res, vtx, nt, segColor);
     }  
 
-  // Set the origin and spacing of the image
-  ImageType::SpacingType xSpacing;
-  ImageType::PointType xOrigin;
-  for(unsigned int d = 0; d < 3; d++)
-    {
-    xOrigin[d] = bb[0][d];
-    if(flagAutoSize)
-      xSpacing[d] = xAutoSpacing[d];
-    else
-      xSpacing[d] = bb[1][d] / res[d];
-    }
-  img->SetOrigin(xOrigin);
-  img->SetSpacing(xSpacing);
+  cout << "zzz" << endl;
+  if(!useRef){
+
+    cout << "here?" <<endl;
+    // Set the origin and spacing of the image
+    ImageType::SpacingType xSpacing;
+    ImageType::PointType xOrigin;
+    for(unsigned int d = 0; d < 3; d++)
+      {
+	xOrigin[d] = bb[0][d];
+	if(flagAutoSize)
+	  xSpacing[d] = xAutoSpacing[d];
+	else
+	  xSpacing[d] = bb[1][d] / res[d];
+      }
+    img->SetOrigin(xOrigin);
+    img->SetSpacing(xSpacing);
+  }
 
   cout << "ORIGIN: " << img->GetOrigin() << endl;
 

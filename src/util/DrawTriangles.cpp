@@ -124,13 +124,13 @@ drawBinaryPolygonsFilled(unsigned char *image, int *dim,
       pointCnt++;
     }
   }
-  drawBinaryTrianglesFilled(image, dim, vertex_table,numTriangles);
+  drawBinaryTrianglesFilled(image, dim, vertex_table,numTriangles, 1);
 }
 
 void 
 drawBinaryTrianglesFilled(unsigned char *image, int *dim, 
 			  double ** vertex_table,
-			  int num_triangles)
+			  int num_triangles, int segColor)
   // draws an object fully defined by triangles with its interior filled into image,
   // the coordinates of vertex_table are in units of voxels with 
   // image(0,0,0) as an origin
@@ -241,7 +241,7 @@ drawBinaryTrianglesFilled(unsigned char *image, int *dim,
 	  }
 	}
  	if (inout == 1) {
- 	  (VAL3D(image, dim, p_p, i, j))[0] = 255; 
+ 	  (VAL3D(image, dim, p_p, i, j))[0] = segColor; 
 	}
       }
     }
@@ -332,13 +332,13 @@ drawBinaryPolygonsSheetFilled(unsigned char *image, int *dim,
       pointCnt++;
     }
   }
-  drawBinaryTrianglesSheetFilled(image, dim, vertex_table,numTriangles);
+  drawBinaryTrianglesSheetFilled(image, dim, vertex_table,numTriangles, 1);
 }
 
 void 
 drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim, 
 			       double ** vertex_table,
-			       int num_triangles)
+			       int num_triangles, int segColor)
   //Scan converts a manifold object described by a set of triangles
   // the coordinates of vertex_table are in units of voxels with 
   // image(0,0,0) as an origin
@@ -347,7 +347,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
   int i,k,p_p;
   int maxz, minz, maxy,miny, maxx, minx;
   Point3 p0, p1, p2; 
-  int color = 255;
+  //  int color = 255;
   
   maxz = 0;
   minz = dim[2];
@@ -386,7 +386,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[2])*(p2[0]-p1[0])/(p2[2]-p1[2])+p1[0];
 	  y2 = (p_p-p1[2])*(p2[1]-p1[1])/(p2[2]-p1[2])+p1[1];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'Z',p_p);
+		  image,dim,segColor,'Z',p_p);
 	}
 	if((SGN(p1[2]-(float)p_p)!=SGN(p2[2]-(float)p_p)) &&
 	   (SGN(p0[2]-(float)p_p)!=SGN(p2[2]-(float)p_p))) {
@@ -395,7 +395,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[2])*(p2[0]-p1[0])/(p2[2]-p1[2])+p1[0];
 	  y2 = (p_p-p1[2])*(p2[1]-p1[1])/(p2[2]-p1[2])+p1[1];
 	  digline((int)x1, (int)y1, (int)x2,(int)y2,
-		  image,dim,color,'Z',p_p);
+		  image,dim,segColor,'Z',p_p);
 	}
 	if((SGN(p0[2]-(float)p_p)!=SGN(p1[2]-(float)p_p)) &&
 	   (SGN(p0[2]-(float)p_p)!=SGN(p2[2]-(float)p_p))) {
@@ -404,7 +404,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p0[2])*(p2[0]-p0[0])/(p2[2]-p0[2])+p0[0];
 	  y2 = (p_p-p0[2])*(p2[1]-p0[1])/(p2[2]-p0[2])+p0[1];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'Z',p_p);
+		  image,dim,segColor,'Z',p_p);
 	}
       } 
     }
@@ -442,7 +442,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[1])*(p2[0]-p1[0])/(p2[1]-p1[1])+p1[0];
 	  y2 = (p_p-p1[1])*(p2[2]-p1[2])/(p2[1]-p1[1])+p1[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'Y',p_p);
+		  image,dim,segColor,'Y',p_p);
 	}
 	if((SGN(p1[1]-(float)p_p)!=SGN(p2[1]-(float)p_p)) &&
 	   (SGN(p0[1]-(float)p_p)!=SGN(p2[1]-(float)p_p))) {
@@ -451,7 +451,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[1])*(p2[0]-p1[0])/(p2[1]-p1[1])+p1[0];
 	  y2 = (p_p-p1[1])*(p2[2]-p1[2])/(p2[1]-p1[1])+p1[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'Y',p_p);
+		  image,dim,segColor,'Y',p_p);
 	}
 	if((SGN(p0[1]-(float)p_p)!=SGN(p1[1]-(float)p_p)) &&
 	   (SGN(p0[1]-(float)p_p)!=SGN(p2[1]-(float)p_p))) {
@@ -460,7 +460,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p0[1])*(p2[0]-p0[0])/(p2[1]-p0[1])+p0[0];
 	  y2 = (p_p-p0[1])*(p2[2]-p0[2])/(p2[1]-p0[1])+p0[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'Y',p_p);
+		  image,dim,segColor,'Y',p_p);
 	}
        }
     }
@@ -498,7 +498,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[0])*(p2[1]-p1[1])/(p2[0]-p1[0])+p1[1];
 	  y2 = (p_p-p1[0])*(p2[2]-p1[2])/(p2[0]-p1[0])+p1[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'X',p_p);
+		  image,dim,segColor,'X',p_p);
 	}
 	if((SGN(p1[0]-(float)p_p)!=SGN(p2[0]-(float)p_p)) &&
 	   (SGN(p0[0]-(float)p_p)!=SGN(p2[0]-(float)p_p))) {
@@ -507,7 +507,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p1[0])*(p2[1]-p1[1])/(p2[0]-p1[0])+p1[1];
 	  y2 = (p_p-p1[0])*(p2[2]-p1[2])/(p2[0]-p1[0])+p1[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'X',p_p);
+		  image,dim,segColor,'X',p_p);
 	}
 	if((SGN(p0[0]-(float)p_p)!=SGN(p1[0]-(float)p_p)) &&
 	   (SGN(p0[0]-(float)p_p)!=SGN(p2[0]-(float)p_p))) {
@@ -516,7 +516,7 @@ drawBinaryTrianglesSheetFilled(unsigned char *image, int *dim,
 	  x2 = (p_p-p0[0])*(p2[1]-p0[1])/(p2[0]-p0[0])+p0[1];
 	  y2 = (p_p-p0[0])*(p2[2]-p0[2])/(p2[0]-p0[0])+p0[2];
 	  digline((int)x1, (int)y1, (int)x2, (int)y2,
-		  image,dim,color,'X',p_p);
+		  image,dim,segColor,'X',p_p);
 	}
       }
     }
