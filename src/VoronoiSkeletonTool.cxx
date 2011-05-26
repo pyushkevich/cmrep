@@ -371,6 +371,7 @@ int main(int argc, char *argv[])
   fTriangle->SetInput(bndraw);
   vtkCleanPolyData *fClean = vtkCleanPolyData::New();
   fClean->SetInput(fTriangle->GetOutput());
+  fClean->SetTolerance(1e-4);
   fClean->Update();
   vtkPolyData *bnd = fClean->GetOutput();
 
@@ -593,6 +594,10 @@ int main(int argc, char *argv[])
   vtkCleanPolyData *fltClean = vtkCleanPolyData::New();
   fltClean->SetInput(skel);
   fltClean->Update();
+  cout << "Clean filter: trimmed " 
+    << skel->GetNumberOfPoints() << " vertices to "
+    << fltClean->GetOutput()->GetNumberOfPoints() << endl;
+
 
   // The output from the next branch
   vtkPolyData *polySave = fltClean->GetOutput();
@@ -615,10 +620,17 @@ int main(int argc, char *argv[])
 
     fltConnect->ScalarConnectivityOff();
     fltConnect->Update();
-    polySave = fltConnect->GetOutput();
+
+    // Don't see why this is necessary, but Connectivity filter does not remove points,
+    // just faces. So we need another clear filter
+    vtkCleanPolyData *fltWhy = vtkCleanPolyData::New();
+    fltWhy->SetInput(fltConnect->GetOutput());
+    fltWhy->Update();
+
     cout << "Connected component constraint pruned " 
-      << skel->GetNumberOfCells() - polySave->GetNumberOfCells() 
-      << " faces." << endl; 
+      << polySave->GetNumberOfCells() - fltWhy->GetOutput()->GetNumberOfCells() << " faces and "
+      << polySave->GetNumberOfPoints() - fltWhy->GetOutput()->GetNumberOfPoints() << " points." << endl; 
+    polySave = fltWhy->GetOutput();
     }
 
   // Convert the cell data to point data
