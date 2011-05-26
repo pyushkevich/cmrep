@@ -1,6 +1,6 @@
 %% READ OPTIONS FIRST
 % open file options_XXXX
-skel_file = '/Users/pauly/tempinit/posterior_skel_qc_clean.vtk';
+% set skel_file = 'py_left_ifo_skel.vtk';
 
 %% Load the skeleton from VTK mesh
 m=vtk_polydata_read(skel_file);
@@ -13,6 +13,10 @@ adj = vtk_adjacency_matrix(m);
 % Get all directed edges
 [ei ej]=ind2sub(size(adj), find(adj));
 
+% Check that there are no zero-length edges
+len = sum((m.points(ei,:) - m.points(ej,:)).^2,2);
+len(len==0)=1e-6;
+
 % Plot the points in 3D
 clf; scatter3(X(:,1), X(:,2), X(:,3), [], R, '.'); 
 axis equal; axis vis3d; colormap jet;
@@ -20,7 +24,7 @@ axis equal; axis vis3d; colormap jet;
 %%  Generate a flat representation of the data
 
 % Compute the squared distance matrix
-DD=sparse(ei, ej, sum((m.points(ei,:) - m.points(ej,:)).^2,2));
+DD=sparse(ei, ej, len);
 
 % Call FAST-MVU on the scattered points
 [ymvu detail]=fastmvu(DD, 2, ...
@@ -51,7 +55,6 @@ beta_R = tempinit_polyfit(order,[u v], R);
 Xfit = tempinit_polyinterp(order,  beta, [u v]);
 
 % Plot the original data vs. fitted data
-clf;
 scatter3(X(:,1),X(:,2),X(:,3),'bo'); hold on;
 scatter3(Xfit(:,1),Xfit(:,2),Xfit(:,3),'r.'); hold off; axis image;
 
@@ -123,6 +126,10 @@ clf;
 imagesc(Ipad'); axis image; colormap jet; hold on;
 trisurf(T,N(:,1),N(:,2),Rn,'EdgeColor','white','FaceColor','interp');
 
+clf;
+trisurf(T, Xn(:,1), Xn(:,2), Xn(:,3), 'EdgeColor','black','FaceColor','interp');
+axis equal; axis vis3d;
+
 %% Run AFRONT
 
 % Export to an .off format mesh (what seems to work)
@@ -159,131 +166,140 @@ axis equal; axis vis3d;
 
 %% Split triangles at the edge for biharmonic models
 
-tr = TriRep(Taf, Xaf);
+if opt.biharm.inner == 1
 
-% Sparse matrix representing what edges have been split
-eall = edges(tr);
-esplit = sparse(eall(:,1), eall(:,2), -1);
+    tr = TriRep(Taf, Xaf);
 
-% Get the list of all triangles on the boundary
-ebnd = freeBoundary(tr);
-fbnd = edgeAttachments(tr,ebnd);
+    % Sparse matrix representing what edges have been split
+    eall = edges(tr);
+    esplit = sparse(eall(:,1), eall(:,2), -1);
 
-% Counter for inserted vertices
-vlast = size(Xaf,1);
+    % Get the list of all triangles on the boundary
+    ebnd = freeBoundary(tr);
+    fbnd = edgeAttachments(tr,ebnd);
 
-% Storage for new vertices
-Xsp = nan(vlast+size(ebnd,1)*3,3);
-Xsp(1:vlast,:) = Xaf;
+    % Counter for inserted vertices
+    vlast = size(Xaf,1);
 
-% Storage for new triangles
-Tsp = [];
-tlast = 0;
+    % Storage for new vertices
+    Xsp = nan(vlast+size(ebnd,1)*3,3);
+    Xsp(1:vlast,:) = Xaf;
 
-% Current triangles marked for deletion
-tdel = zeros(size(Taf,1),1);
+    % Storage for new triangles
+    Tsp = [];
+    tlast = 0;
 
-% Loop over boundary edges
-for i = 1:size(ebnd,1)
-   
-    eisrt = ebnd(i,:);
-    ti = cell2mat(edgeAttachments(tr,eisrt));
-    
-    vopp = setdiff(Taf(ti,:), eisrt);
-    iopp = find(Taf(ti,:)==vopp);
-    ei = [Taf(ti,mod(iopp,3)+1) Taf(ti,mod(iopp+1,3)+1)]; 
-    
-    % Position of edge, opposite vertex in triangle
-    idx=[find(Taf(ti,:)==ei(1)), find(Taf(ti,:)==ei(2)), find(Taf(ti,:)==vopp)]; 
-    
-    % Lengths of opposing edges in triangle
-    l = sqrt(sum((Xaf(circshift(Taf(ti,:),[0 1]),:) - ...
-        Xaf(circshift(Taf(ti,:),[0 -1]),:)).^2,2));
-    
-    % Split existing edges 
-    vcut = [0 0];
-    for j = 1:2
-        vcut(j) = esplit(min(vopp,ei(j)), max(vopp,ei(j)));
-        if vcut(j) < 0
-            vcut(j) = vlast + 1;
-            vlast = vcut(j);
-            esplit(min(vopp,ei(j)), max(vopp,ei(j))) = vcut(j);
-            
-            xbary=[0,0,0];
-            xbary(idx(3))=l(idx(3));
-            xbary(idx(j))=l(idx(j));
-            Xsp(vcut(j),:) = baryToCart(tr,ti,xbary./sum(xbary));
+    % Current triangles marked for deletion
+    tdel = zeros(size(Taf,1),1);
+
+    % Loop over boundary edges
+    for i = 1:size(ebnd,1)
+
+        eisrt = ebnd(i,:);
+        ti = cell2mat(edgeAttachments(tr,eisrt));
+
+        vopp = setdiff(Taf(ti,:), eisrt);
+        iopp = find(Taf(ti,:)==vopp);
+        ei = [Taf(ti,mod(iopp,3)+1) Taf(ti,mod(iopp+1,3)+1)]; 
+
+        % Position of edge, opposite vertex in triangle
+        idx=[find(Taf(ti,:)==ei(1)), find(Taf(ti,:)==ei(2)), find(Taf(ti,:)==vopp)]; 
+
+        % Lengths of opposing edges in triangle
+        l = sqrt(sum((Xaf(circshift(Taf(ti,:),[0 1]),:) - ...
+            Xaf(circshift(Taf(ti,:),[0 -1]),:)).^2,2));
+
+        % Split existing edges 
+        vcut = [0 0];
+        for j = 1:2
+            vcut(j) = esplit(min(vopp,ei(j)), max(vopp,ei(j)));
+            if vcut(j) < 0
+                vcut(j) = vlast + 1;
+                vlast = vcut(j);
+                esplit(min(vopp,ei(j)), max(vopp,ei(j))) = vcut(j);
+
+                xbary=[0,0,0];
+                xbary(idx(3))=l(idx(3));
+                xbary(idx(j))=l(idx(j));
+                Xsp(vcut(j),:) = baryToCart(tr,ti,xbary./sum(xbary));
+            end
         end
-    end
-    
-    % Add center vertex
-    vlast = vlast + 1;
-    Xsp(vlast,:) = baryToCart(tr,ti,l'./sum(l));
-    
-    % Add new triangles
-    Tsp(tlast+1,:) = [vlast vcut(2) vcut(1)];
-    Tsp(tlast+2,:) = [vlast ei(2) vcut(2)];
-    Tsp(tlast+3,:) = [vlast ei(1) ei(2)];
-    Tsp(tlast+4,:) = [vlast vcut(1) ei(1)];
-    Tsp(tlast+5,:) = [vopp vcut(1) vcut(2)];
-    tlast = tlast + 5;
-    
-    % Mark old triangle for deletion
-    tdel(ti) = 1;
-end 
 
-% Loop over all other triangles
-for i = 1:size(Taf,1)
-    % Ignore processed triangles
-    if tdel(i), continue; end
-    
-    % Check if any of the edges were cut
-    tri = Taf(i,:);
-    vcut = [...
-        esplit(min(tri(2),tri(3)), max(tri(2),tri(3))),...
-        esplit(min(tri(1),tri(3)), max(tri(1),tri(3))),...
-        esplit(min(tri(2),tri(1)), max(tri(2),tri(1)))];
-    
-    % Compute angles
-    dx1 = Xaf(circshift(tri,[0 -1]),:) - Xaf(tri,:);
-    dx2 = Xaf(circshift(tri,[0  1]),:) - Xaf(tri,:);
-    cosj = dot(dx1',dx2') ./ sqrt(dot(dx1',dx1') .* dot(dx2',dx2'));
-    
-    % Add new triangles
-    ncut = sum(vcut > 0);
-    if ncut == 0
-        continue;
-    elseif ncut == 1
-        q = find(vcut > 0);
-        q1 = mod(q,3)+1; q2 = mod(q+1,3)+1; 
-        Tsp(tlast + 1,:) = [tri(q), tri(q1), vcut(q)];
-        Tsp(tlast + 2,:) = [vcut(q), tri(q2), tri(q)];
-        tlast = tlast + 2;
-    elseif ncut == 2
-        q = find(vcut < 0);
-        q1 = mod(q,3)+1; q2 = mod(q+1,3)+1; 
-        Tsp(tlast + 1,:) = [tri(q), vcut(q2), vcut(q1)];
-        if cosj(q1) < cosj(q2)
-            Tsp(tlast + 2,:) = [tri(q1) vcut(q1) vcut(q2)];
-            Tsp(tlast + 3,:) = [tri(q1) tri(q2) vcut(q1)];
+        % Add center vertex
+        vlast = vlast + 1;
+        Xsp(vlast,:) = baryToCart(tr,ti,l'./sum(l));
+
+        % Add new triangles
+        Tsp(tlast+1,:) = [vlast vcut(2) vcut(1)];
+        Tsp(tlast+2,:) = [vlast ei(2) vcut(2)];
+        Tsp(tlast+3,:) = [vlast ei(1) ei(2)];
+        Tsp(tlast+4,:) = [vlast vcut(1) ei(1)];
+        Tsp(tlast+5,:) = [vopp vcut(1) vcut(2)];
+        tlast = tlast + 5;
+
+        % Mark old triangle for deletion
+        tdel(ti) = 1;
+    end 
+
+    % Loop over all other triangles
+    for i = 1:size(Taf,1)
+        % Ignore processed triangles
+        if tdel(i), continue; end
+
+        % Check if any of the edges were cut
+        tri = Taf(i,:);
+        vcut = [...
+            esplit(min(tri(2),tri(3)), max(tri(2),tri(3))),...
+            esplit(min(tri(1),tri(3)), max(tri(1),tri(3))),...
+            esplit(min(tri(2),tri(1)), max(tri(2),tri(1)))];
+
+        % Compute angles
+        dx1 = Xaf(circshift(tri,[0 -1]),:) - Xaf(tri,:);
+        dx2 = Xaf(circshift(tri,[0  1]),:) - Xaf(tri,:);
+        cosj = dot(dx1',dx2') ./ sqrt(dot(dx1',dx1') .* dot(dx2',dx2'));
+
+        % Add new triangles
+        ncut = sum(vcut > 0);
+        if ncut == 0
+            continue;
+        elseif ncut == 1
+            q = find(vcut > 0);
+            q1 = mod(q,3)+1; q2 = mod(q+1,3)+1; 
+            Tsp(tlast + 1,:) = [tri(q), tri(q1), vcut(q)];
+            Tsp(tlast + 2,:) = [vcut(q), tri(q2), tri(q)];
+            tlast = tlast + 2;
+        elseif ncut == 2
+            q = find(vcut < 0);
+            q1 = mod(q,3)+1; q2 = mod(q+1,3)+1; 
+            Tsp(tlast + 1,:) = [tri(q), vcut(q2), vcut(q1)];
+            if cosj(q1) < cosj(q2)
+                Tsp(tlast + 2,:) = [tri(q1) vcut(q1) vcut(q2)];
+                Tsp(tlast + 3,:) = [tri(q1) tri(q2) vcut(q1)];
+            else
+                Tsp(tlast + 2,:) = [tri(q2) vcut(q1) vcut(q2)];
+                Tsp(tlast + 3,:) = [tri(q2) vcut(q2) tri(q1)];
+            end
+            tlast = tlast + 3;
         else
-            Tsp(tlast + 2,:) = [tri(q2) vcut(q1) vcut(q2)];
-            Tsp(tlast + 3,:) = [tri(q2) vcut(q2) tri(q1)];
+            Tsp(tlast + 1,:) = [tri(q) vcut(q2) vcut(q1)];
+            Tsp(tlast + 2,:) = [tri(q1) vcut(q) vcut(q2)];
+            Tsp(tlast + 3,:) = [tri(q2) vcut(q1) vcut(q)];
+            Tsp(tlast + 4,:) = [vcut(q) vcut(q1) vcut(q2)];
+            tlast = tlast + 1;
         end
-        tlast = tlast + 3;
-    else
-        Tsp(tlast + 1,:) = [tri(q) vcut(q2) vcut(q1)];
-        Tsp(tlast + 2,:) = [tri(q1) vcut(q) vcut(q2)];
-        Tsp(tlast + 3,:) = [tri(q2) vcut(q1) vcut(q)];
-        Tsp(tlast + 4,:) = [vcut(q) vcut(q1) vcut(q2)];
-        tlast = tlast + 1;
+        tdel(i) = 1;
     end
-    tdel(i) = 1;
+
+    Xsp=Xsp(all(isfinite(Xsp),2),:);
+    Tsp=[Taf(tdel==0,:); Tsp];
+
+else
+    
+    Xsp=Xaf;
+    Tsp=Taf;
+    
 end
-
-Xsp=Xsp(all(isfinite(Xsp),2),:);
-Tsp=[Taf(tdel==0,:); Tsp];
-
+     
 clf;
 trisurf(Tsp, Xsp(:,1), Xsp(:,2), Xsp(:,3), 'EdgeColor','black','FaceColor','interp');
 axis equal; axis vis3d;
@@ -292,15 +308,14 @@ axis equal; axis vis3d;
 mnew.hdr=m.hdr;
 mnew.points=Xsp;
 mnew.cells.polygons=num2cell(Tsp',1);
-if(opt.biharm.inner ~= 1)
-    mnew=vtk_add_point_data(mnew,'Radius',R2 / 2,1);
-end
+%if(opt.biharm.inner ~= 1)
+%    mnew=vtk_add_point_data(mnew,'Radius',R2 / 2,1);
+%end
 vtk_polydata_write('medialtemplate.vtk', mnew);
 
 % Write the cmrep file - you may want to edit this for different models
 f = fopen('medialtemplate.cmrep','wt');
 fprintf(f,'Grid.Type = LoopSubdivision\n');
-fprintf(f,'Grid.Model.SolverType = PDE\n');
 fprintf(f,'Grid.Model.Atom.SubdivisionLevel = 0\n');
 fprintf(f,'Grid.Model.Coefficient.FileName = medialtemplate.vtk\n');
 fprintf(f,'Grid.Model.Coefficient.FileType = VTK\n');
@@ -313,7 +328,10 @@ if(opt.biharm.inner == 1)
     fprintf(f,'Grid.Model.SolverType = PDE\n');
 else
     fprintf(f,'Grid.Model.SolverType = BruteForce\n');
+    fprintf(f,'Grid.Model.Coefficient.ConstantRadius.Inside = %f\n',...
+        opt.biharm.radius);
+    fprintf(f,'Grid.Model.Coefficient.ConstantRadius.Boundary = %f\n',...
+        0.5 * opt.biharm.radius);    
 end
     
 fclose(f);
-
