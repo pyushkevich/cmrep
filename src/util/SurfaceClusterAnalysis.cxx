@@ -32,6 +32,34 @@
 #include <vector>
 #include <algorithm>
 
+
+#include <exception>
+#include <string>
+#include <cstdarg>
+
+class MCException : public std::exception
+{
+public:
+  MCException(const char *fmt, ...)
+    {
+    char buffer[1024];
+    va_list parg;
+    va_start(parg, fmt);
+    vsprintf(buffer, fmt, parg);
+    va_end(parg);
+    message=buffer;
+    }
+
+  virtual ~MCException() throw() {}
+
+  virtual const char *what() const throw()
+    { return message.c_str(); }
+
+private:
+  std::string message;
+};
+
+
 using namespace std;
 
 int usage()
@@ -247,7 +275,7 @@ ClusterArray ComputeClusters(
   else
   {  
      cerr << "*********polydata clustering based on cell attribute arrays not supported yet**********" << endl;
-     throw("polydata with cells not supported");
+     throw MCException("polydata with cells not supported");
      // Initialize mesh
      mesh->GetCellData()->SetActiveScalars(data);
      fThresh = vtkThresholdPoints::New();
@@ -293,9 +321,10 @@ ClusterArray ComputeClusters(
     {
     vtkCell *cell = p->GetCell(k);
     if(cell->GetCellType() != VTK_TRIANGLE)
-{cout << "Warning: cell type " << cell->GetCellType() ;
-      throw("Wrong cell type");
-}
+      {
+      throw MCException("Wrong cell type, should be VTK_TRIANGLE");
+      }
+
     // Compute the area of the triangle
     vtkIdType a0 = cell->GetPointId(0);
     vtkIdType a1 = cell->GetPointId(1);
@@ -958,11 +987,15 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
 
      // Check that the number of images matches
      if(labels.size() != mat.rows())
-       { throw string("Matrix number of rows does not match number of observations"); return -1;}
+       { 
+       cerr << "Matrix number of rows (" << mat.rows() 
+         << ") does not match number of observations (" << labels.size() << ")" << endl;
+       return -1;
+       }
 
      // Check that the columns in matrix match contrast vector
      if(con.columns() != mat.columns())
-       { throw string("Matrix and contrast vector must have same number of columns"); return -1;}
+       throw MCException("Matrix and contrast vector must have same number of columns");
 
      Nlabels = (int)labels.size();
      groupSize = Nlabels;
@@ -985,7 +1018,7 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
   fnMeshes = registry.Folder("Mesh").GetArray(string(""));
   fnOutMeshes = registry.Folder("OutputMesh").GetArray(string(""));
   if(fnMeshes.size() == 0)
-    { cerr << "Missing mesh specification" << endl; return -1; }
+    throw MCException("Missing mesh specification");
 
 
   // If there is a suffix, add it to the output meshes
@@ -1025,19 +1058,21 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
     array->SetNumberOfComponents(1);
     // cell or point based analysis ?
     if (!strcmp(domain.c_str(), "Point"))
-    {
-       array->SetNumberOfTuples(mesh[i]->GetNumberOfPoints());
-       mesh[i]->GetPointData()->AddArray(array);
-       mesh[i]->GetPointData()->SetActiveScalars(VOIttest.c_str());
-    }
+      {
+      array->SetNumberOfTuples(mesh[i]->GetNumberOfPoints());
+      mesh[i]->GetPointData()->AddArray(array);
+      mesh[i]->GetPointData()->SetActiveScalars(VOIttest.c_str());
+      }
     else if (!strcmp(domain.c_str(), "Cell"))
-    {
-       array->SetNumberOfTuples(mesh[i]->GetNumberOfCells());
-       mesh[i]->GetCellData()->AddArray(array);
-       mesh[i]->GetCellData()->SetActiveScalars(VOIttest.c_str());
-    }
+      {
+      array->SetNumberOfTuples(mesh[i]->GetNumberOfCells());
+      mesh[i]->GetCellData()->AddArray(array);
+      mesh[i]->GetCellData()->SetActiveScalars(VOIttest.c_str());
+      }
     else
-    { cerr << "Unknown clustering domain: must be Point or Cell" << endl; return -1; }
+      { 
+      throw MCException("Unknown clustering domain: must be Point or Cell");
+      }
     }
     
   // Run permutation analysis
@@ -1194,22 +1229,30 @@ int main(int argc, char *argv[])
 
   bool isPolyData = true;
   // Is this a polydata?
-  if(reader->IsFileUnstructuredGrid())
+  try
     {
-    reader->Delete();
-    isPolyData = false;
-    return meshcluster<vtkUnstructuredGrid>( argc, argv, registry, isPolyData);
-    }
-  else if(reader->IsFilePolyData())
-    {
-    reader->Delete();
-    return meshcluster<vtkPolyData>( argc, argv, registry, isPolyData);
+    if(reader->IsFileUnstructuredGrid())
+      {
+      reader->Delete();
+      isPolyData = false;
+      return meshcluster<vtkUnstructuredGrid>( argc, argv, registry, isPolyData);
+      }
+    else if(reader->IsFilePolyData())
+      {
+      reader->Delete();
+      return meshcluster<vtkPolyData>( argc, argv, registry, isPolyData);
 
+      }
+    else
+      {
+      reader->Delete();
+      cerr << "Unsupported VTK data type in input file" << endl;
+      return -1;
+      }
     }
-  else
+  catch (MCException &exc)
     {
-    reader->Delete();
-    cerr << "Unsupported VTK data type in input file" << endl;
+    cerr << "Excepetion caught: " << exc.what() << endl; 
     return -1;
     }
 }

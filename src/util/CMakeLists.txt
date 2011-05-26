@@ -19,6 +19,5 @@ TARGET_LINK_LIBRARIES(meshcluster ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
 
 # Add installation targets
-INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster mesh_image_sample
-  vtkcontour)
+INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster mesh_image_sample vtkcontour)
 
