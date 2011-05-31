@@ -113,6 +113,7 @@ int MeshMergeArrays(int argc, char *argv[])
   for(int j = 0; j < argc - i; j++)
     {
     // Read one of the meshes
+    cout << "Reading " << fnin[j] << endl;
     TMeshType *src = ReadMesh<TMeshType>(fnin[j]);
 
     // Get the corresponding array
@@ -131,9 +132,6 @@ int MeshMergeArrays(int argc, char *argv[])
     // Add array to main accumulator
     for(int k = 0; k < arr->GetNumberOfTuples(); k++)
       array->SetComponent(k, j, arr->GetComponent(k, 0));
-
-    // Done with it!
-    src->Delete();
     }
 
   // Stick the array in the output
