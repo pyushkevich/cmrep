@@ -15,6 +15,7 @@ TARGET_LINK_LIBRARIES(mesh_image_sample ${VTK_LIBRARIES})
 
 ADD_EXECUTABLE(meshglm 
   SurfaceClusterGLM.cxx 
+  asa243.c
   ReadWriteVTK.cxx 
   ${CMREP_SOURCE_DIR}/src/Registry.cxx)
 TARGET_LINK_LIBRARIES(meshglm ${ITK_LIBRARIES} ${VTK_LIBRARIES})
