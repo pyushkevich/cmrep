@@ -23,6 +23,7 @@
 #include "vtkMergeCells.h"
 #include "vtkGeometryFilter.h"
 #include "vtkTriangle.h"
+#include "vtkSmartPointer.h"
 #include "vnl/vnl_file_matrix.h"
 #include "vnl/vnl_vector_fixed.h"
 #include "vnl/vnl_rank.h"
@@ -33,6 +34,7 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <set>
 
 #include <vtksys/SystemTools.hxx>
 
@@ -70,28 +72,51 @@ private:
 
 using namespace std;
 
+const char *usage_text = 
+  "meshglm - a statistical tool for VTK meshes usage:\n"
+  "  meshglm [switches]\n\n"
+  "required switches:\n"
+  "  -m / --mesh mesh_in.vtk mesh_out.vtk      \n"
+  "                 Specify input and output meshes. The -m option can be\n"
+  "                 repeated multiple times for different anatomical regions.\n"
+  "                 Input mesh should provide the values of the dependent \n"
+  "                 variable for each subject in a single attribute array.\n"
+  "  -a / --array NAME                         \n"
+  "                 Name of the data array that holds the dependent variable.\n"
+  "                 The attribute array must have as many components as there\n"
+  "                 are subjects in the GLM.\n"
+  "  -g / --glm design.txt contrast.txt        \n"
+  "                 GLM specification. The design matrix is k x m, where k is \n"
+  "                 the number of subjects and m is the number of independent \n"
+  "                 variables. The contrast vector is 1 x m.\n\n"
+  "optional switches:\n"
+  "  -c / --cell    \n"
+  "                 Run GLM on cell data instead of point data\n"
+  "  -p / --perm N  \n"
+  "                 Perform permutation testing with N random permutations. \n"
+  "                 This will generate a point-wise (or cell-wise) corrected\n"
+  "                 p-value. \n"
+  "  -s / --stat C|T|P                        \n"
+  "                 The statistic on which permutation tests are performed:\n"
+  "                 C: contrast; T: t-statistic; P: p-value (default: T).\n"
+  "  -t / --threshold T                       \n"
+  "                 The threshold to define clusters. If omitted, no cluster\n"
+  "                 analysis will be performed. The threshold applies to the\n"
+  "                 statistic specified by the -s flag. It must be positive.\n"
+  "  -d / --diffusion T \n"
+  "                 Amount of diffusion (spatial smoothing) to apply to data\n"
+  "                 before statistical analysis. A simple implementation of \n"
+  "                 the heat equation is used. Very roughly, this corresponds\n"
+  "                 to smoothing the data with a Gaussian with standard \n"
+  "                 deviation sqrt(2T)*L, where L is the average distance \n"
+  "                 between neighboring vertices.\n"
+  "  -e / --edges   \n"
+  "                 Generate separate output files containing cluster edges.\n"
+  "                 The file names are derived from the -m output parameters.\n";
+
 int usage()
 {
-  cout << 
-    "meshglm - a statistical tool for VTK meshes\n"
-    "usage:\n"
-    "  meshglm [options]\n"
-    "options:\n"
-    "  -m / --mesh mesh_in.vtk mesh_out.vtk      Input/output mesh (may be repeated)\n"
-    "  -a / --array NAME                         Name of array\n"
-    "  -p / --perm N                             Number of random permutations\n"
-    "  -g / --glm design.txt contrast.txt        GLM specification (like SPM)\n"
-    "  -c / --cell                               [optional] : run on cell data\n"
-    "  -t / --threshold T                        The threshold to define clusters\n"
-    "  -d / --diffusion T                        Amount of diffusion to apply\n"
-    "                                            before statistical analysis\n"
-    "  -e / --edges                              Generate separate outputs containing edges of\n"
-    "                                            clusters.\n"
-    "mesh specification:\n"
-    "  - The input mesh should contain a k-variate array NAME, where k is the number\n"
-    "    of entries in the GLM\n"
-    "  - The output mesh will contain various statistical maps derived from the GLM\n"
-    "  as well as a cluster membership function (in/out) for each cluster     \n";
+  cout << usage_text; 
   return -1;
 }
 
@@ -113,7 +138,7 @@ struct Cluster
   double tvalue;
  
   // Dummy constructor
-  Cluster() : n(0), area(0.0), power(0.0), tvalue(0.0) {};
+  Cluster() : area(0.0), power(0.0), n(0), tvalue(0.0) {};
 };
 
 typedef std::vector<Cluster> ClusterArray;
@@ -173,6 +198,63 @@ bool operator < (const vnl_vector_fixed<double,3> &a, const vnl_vector_fixed<dou
     (a[0] == b[0] && a[1] == b[1] && a[2] < b[2])); 
 }
 
+vtkFloatArray *
+AddArrayToMesh(
+  vtkDataSet *t, 
+  Domain dom, 
+  const char *name, 
+  unsigned int n_comp, 
+  float defval, 
+  bool make_active = false)
+{
+  vtkFloatArray *array = vtkFloatArray::New();
+  array->SetNumberOfComponents(n_comp);
+  array->SetName(name);
+
+  if(dom == POINT)
+    {
+    array->SetNumberOfTuples(t->GetNumberOfPoints());
+    t->GetPointData()->AddArray(array);
+    if(make_active)
+      t->GetPointData()->SetActiveScalars(name);
+    }
+  else
+    {
+    array->SetNumberOfTuples(t->GetNumberOfCells());
+    t->GetCellData()->AddArray(array);
+    if(make_active)
+      t->GetCellData()->SetActiveScalars(name);
+    }
+
+  for(unsigned int k = 0; k < n_comp; k++)
+    array->FillComponent(k, defval);
+
+  return array;
+}
+
+vtkFloatArray *
+AddArrayToMesh(vtkDataSet *t, Domain dom, const string &name, 
+  unsigned int n_comp, float defval, bool make_active = false)
+{ return AddArrayToMesh(t, dom, name.c_str(), n_comp, defval, make_active); }
+
+vtkDataArray* GetArrayFromMesh(vtkDataSet *t, Domain dom, const char *name)
+{
+  if(dom == POINT)
+    return t->GetPointData()->GetArray(name);
+  else
+    return t->GetCellData()->GetArray(name);
+}
+vtkDataArray* GetArrayFromMesh(vtkDataSet *t, Domain dom, const string &name)
+{ return GetArrayFromMesh(t, dom, name.c_str()); }
+
+vtkDataArray* GetScalarsFromMesh(vtkDataSet *t, Domain dom)
+{
+  if(dom == POINT)
+    return t->GetPointData()->GetScalars();
+  else
+    return t->GetCellData()->GetScalars();
+}
+
 template <class TMeshType>
 void
 MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
@@ -213,7 +295,7 @@ MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
     {
     vtkCell *cell = p2->GetCell(i);
     vtkIdType ids[1024];
-    for(size_t j = 0; j < cell->GetNumberOfPoints(); j++)
+    for(int j = 0; j < cell->GetNumberOfPoints(); j++)
       {
       Vec p(p2->GetPoint(cell->GetPointId(j)));
       ids[j] = hash[p];
@@ -231,10 +313,7 @@ MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
     if(index < 0 || src1->GetNumberOfComponents() != src2->GetNumberOfComponents())
       continue;
 
-    vtkFloatArray *arr = vtkFloatArray::New();
-    arr->SetName(src1->GetName());
-    arr->SetNumberOfComponents(src1->GetNumberOfComponents());
-    arr->SetNumberOfTuples(out->GetNumberOfCells());
+    vtkFloatArray *arr = AddArrayToMesh(out, CELL, src1->GetName(), src1->GetNumberOfComponents(), 0);
   
     for(vtkIdType i = 0; i < p1->GetNumberOfCells(); i++)
       for(int m = 0; m < src1->GetNumberOfComponents(); m++)
@@ -243,8 +322,6 @@ MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
     for(vtkIdType i = 0; i < p2->GetNumberOfCells(); i++)
       for(int m = 0; m < src1->GetNumberOfComponents(); m++)
         arr->SetComponent(i + p1->GetNumberOfCells(), m, src2->GetComponent(i, m));
-
-    out->GetCellData()->AddArray(arr);
     }
 
   // Merge all the point arrays
@@ -257,10 +334,7 @@ MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
     if(index < 0 || src1->GetNumberOfComponents() != src2->GetNumberOfComponents())
       continue;
 
-    vtkFloatArray *arr = vtkFloatArray::New();
-    arr->SetName(src1->GetName());
-    arr->SetNumberOfComponents(src1->GetNumberOfComponents());
-    arr->SetNumberOfTuples(out->GetNumberOfPoints());
+    vtkFloatArray *arr = AddArrayToMesh(out, POINT, src1->GetName(), src1->GetNumberOfComponents(), 0);
 
     for(vtkIdType i = 0; i < p1->GetNumberOfPoints(); i++)
       for(int m = 0; m < src1->GetNumberOfComponents(); m++)
@@ -273,15 +347,103 @@ MergeMeshPieces(vtkDataSet *p1, vtkDataSet *p2, TMeshType *out)
       for(int m = 0; m < src1->GetNumberOfComponents(); m++)
         arr->SetComponent(ip, m, src2->GetComponent(i, m));
       }
+    }
 
-    out->GetPointData()->AddArray(arr);
+  // Make sure the normals are preserved
+  if(p1->GetPointData()->GetNormals() && p2->GetPointData()->GetNormals())
+    out->GetPointData()->SetActiveNormals(p1->GetPointData()->GetNormals()->GetName());
+
+  if(p1->GetCellData()->GetNormals() && p2->GetCellData()->GetNormals())
+    out->GetPointData()->SetActiveNormals(p1->GetCellData()->GetNormals()->GetName());
+}
+
+class Edge : public std::pair<vtkIdType, vtkIdType>
+{
+public:
+  Edge(vtkIdType a, vtkIdType b) : std::pair<vtkIdType,vtkIdType>(min(a,b), max(a,b)) {}
+};
+
+
+void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *array)
+{
+  // Diffusion simulates heat equation, dF/dt = -Laplacian(F), for t = time
+  // We use the most basic approximation of the laplacian L(F) = [Sum_{j\in N(i)} F(j) - F(i)] / |N(i)|
+
+  // Create a set of all edges in the mesh
+  typedef set<Edge> EdgeSet;
+  EdgeSet edges;
+
+  // Get all edges into the edge set
+  for(int i = 0; i < mesh->GetNumberOfCells(); i++)
+    {
+    vtkCell *cell = mesh->GetCell(i);
+    vtkIdType *p = cell->GetPointIds()->GetPointer(0);
+    if(cell->GetCellType() == VTK_TRIANGLE)
+      {
+      edges.insert(Edge(p[0], p[1]));
+      edges.insert(Edge(p[1], p[2]));
+      edges.insert(Edge(p[0], p[2]));
+      }
+    else if(cell->GetCellType() == VTK_TETRA)
+      {
+      edges.insert(Edge(p[0], p[1]));
+      edges.insert(Edge(p[0], p[2]));
+      edges.insert(Edge(p[0], p[3]));
+      edges.insert(Edge(p[1], p[2]));
+      edges.insert(Edge(p[1], p[3]));
+      edges.insert(Edge(p[2], p[3]));
+      }
+    }
+
+  // Count the number of neighbors of each vertex
+  std::vector<int> nbr(mesh->GetNumberOfPoints(), 0);
+  for(EdgeSet::iterator it = edges.begin(); it!=edges.end(); ++it)
+    {
+    nbr[it->first]++; 
+    nbr[it->second]++;
+    }
+
+  // Create an array for the updates
+  vtkDataArray *f = mesh->GetPointData()->GetArray(array);
+  vtkFloatArray *f_upd = vtkFloatArray::New();
+  f_upd->SetNumberOfComponents(f->GetNumberOfComponents());
+  f_upd->SetNumberOfTuples(f->GetNumberOfTuples());
+
+  // Copy f to f_upd
+  for(int i = 0; i < f->GetNumberOfTuples(); i++)
+    for(int j = 0; j < f->GetNumberOfComponents(); j++)
+      f_upd->SetComponent(i, j, f->GetComponent(i, j));
+
+  // Iterate
+  for(double t = 0; t < time; t+=dt)
+    {
+    // Update f_upd
+    for(EdgeSet::iterator it = edges.begin(); it!=edges.end(); ++it)
+      {
+      double wa = dt / nbr[it->first];
+      double wb = dt / nbr[it->second];
+      int ia = it->first;
+      int ib = it->second;
+
+      for(int j = 0; j < f->GetNumberOfComponents(); j++)
+        {
+        f_upd->SetComponent(ia, j, 
+          f_upd->GetComponent(ia, j) + wa * (f->GetComponent(ib,j) - f->GetComponent(ia, j)));
+        f_upd->SetComponent(ib, j, 
+          f_upd->GetComponent(ib, j) + wb * (f->GetComponent(ia,j) - f->GetComponent(ib, j)));
+        }
+      }
+
+    // Copy f_upd to f
+    for(int i = 0; i < f->GetNumberOfTuples(); i++)
+      for(int j = 0; j < f->GetNumberOfComponents(); j++)
+        f->SetComponent(i, j, f_upd->GetComponent(i, j));
     }
 }
 
 template <class TMeshType>
 ClusterArray ComputeClusters(
   TMeshType *mesh,
-  const char *data, 
   Domain dom,
   double thresh, 
   TMeshType **mout = NULL)
@@ -290,73 +452,66 @@ ClusterArray ComputeClusters(
 template <>
 ClusterArray ComputeClusters(
   vtkPolyData *mesh,
-  const char *data, 
   Domain dom,
   double thresh, 
-  vtkPolyData **mout )
+  vtkPolyData **mout)
 {
-  vtkClipPolyData *fContour;
-  vtkThreshold *fThresh;
-  vtkDataSet *f; 
+  // This is the thresholded out / clipped out region
+  vtkSmartPointer<vtkDataSet> fin = NULL, fout = NULL; 
 
   if (dom == POINT)
     {
     // Initialize mesh
-    mesh->GetPointData()->SetActiveScalars(data);
-    fContour = vtkClipPolyData::New();
+    vtkSmartPointer<vtkClipPolyData> fContour = vtkClipPolyData::New();
 
     // Clip the data field at the threshold
     fContour->SetInput(mesh);
     fContour->SetValue(thresh);
+
+    // Generate the background too 
+    if(mout)
+      fContour->GenerateClippedOutputOn();
+
+    // Run the filter
     fContour->Update();
-    fContour->GenerateClippedOutputOn();
-    f = fContour->GetOutput();
+    fin = fContour->GetOutput();
+
+    if(mout)
+      fout = fContour->GetClippedOutput();
     } 
   else
     {  
     // Initialize mesh
-    mesh->GetCellData()->SetActiveScalars(data);
-    fThresh = vtkThreshold::New();
+    vtkSmartPointer<vtkThreshold> fThresh = vtkThreshold::New();
 
     // Threshold the cell data field
     fThresh->SetInput(mesh);
     fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
     fThresh->ThresholdByUpper(thresh);
     fThresh->Update();
-    f = fThresh->GetOutput();
+    fin = fThresh->GetOutput();
     } 
 
-  vtkDataSetAttributes *fdata = (dom == POINT) ? 
-    (vtkDataSetAttributes *) f->GetPointData() : 
-    (vtkDataSetAttributes *) f->GetCellData();
-
   // Get the connected components
-  vtkConnectivityFilter * fConnect = vtkConnectivityFilter::New();
-  fConnect->SetInput(f);
+  vtkSmartPointer<vtkConnectivityFilter> fConnect = vtkConnectivityFilter::New();
+  fConnect->SetInput(fin);
   fConnect->SetExtractionModeToAllRegions();
   fConnect->ColorRegionsOn();
   fConnect->Update();
 
-  vtkGeometryFilter *geo = vtkGeometryFilter::New();
+  // Convert the result to polydata (why?)
+  vtkSmartPointer<vtkGeometryFilter> geo = vtkGeometryFilter::New();
   geo->SetInput(fConnect->GetOutput());
   geo->Update();
-  vtkPolyData *p = geo->GetOutput();
-
-  // Get the attribute data from the connected component filter
-  vtkDataSetAttributes *pdata = (dom == POINT) ? 
-    (vtkDataSetAttributes *) p->GetPointData() : 
-    (vtkDataSetAttributes *) p->GetCellData();
+  
+  vtkSmartPointer<vtkPolyData> p = geo->GetOutput();
 
   // Number of elements to process
   int nelt = (dom == POINT) ? 
     p->GetNumberOfPoints() : p->GetNumberOfCells();
 
   // Create output data arrays for computing area element
-  vtkFloatArray *daArea = vtkFloatArray::New();
-  daArea->SetName("area_element");
-  daArea->SetNumberOfComponents(1);
-  daArea->SetNumberOfTuples(nelt);
-  daArea->FillComponent(0, 0.0);
+  vtkFloatArray *daArea = AddArrayToMesh(p, dom, "area_element", 1, 0.0);
 
   // Compute the area of each triangle in the cluster set
   for(int k = 0; k < p->GetNumberOfCells(); k++)
@@ -366,14 +521,9 @@ ClusterArray ComputeClusters(
       throw MCException("Wrong cell type, should be VTK_TRIANGLE");
 
     // Compute the area of the triangle
-    vtkIdType a0 = cell->GetPointId(0);
-    vtkIdType a1 = cell->GetPointId(1);
-    vtkIdType a2 = cell->GetPointId(2);
     double p0[3], p1[3], p2[3];
-    p->GetPoint(a0, p0);
-    p->GetPoint(a1, p1);
-    p->GetPoint(a2, p2);
-
+    vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
+    p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2); 
     double area = vtkTriangle::TriangleArea(p0, p1, p2);
 
     if(dom == POINT)
@@ -390,16 +540,18 @@ ClusterArray ComputeClusters(
       }
     }
 
-  // The the important arrays in the resulting meshes
-  vtkDataArray *daRegion = pdata->GetScalars();
-  vtkDataArray *daData = fdata->GetArray(data);
+  // The scalars in fin are the input statistic
+  vtkDataArray *daStat = GetScalarsFromMesh(fin, dom);
+
+  // The scalars in p are the region IDs
+  vtkDataArray *daRegion = GetScalarsFromMesh(p, dom);
 
   // Build up the cluster array
   ClusterArray ca(fConnect->GetNumberOfExtractedRegions());
   for(int i = 0; i < nelt; i++)
     {
     size_t region = (size_t) (daRegion->GetTuple1(i));
-    double x = daData->GetTuple1(i);
+    double x = daStat->GetTuple1(i);
     double a = daArea->GetTuple1(i);
     ca[region].n++;
     ca[region].area += a;
@@ -410,25 +562,13 @@ ClusterArray ComputeClusters(
   // Get the output if needed
   if(mout != NULL)
     {
-    pdata->AddArray(daArea);
     if(dom == POINT)
       {
-      // Get the cut away data
-      vtkPolyData *cut = fContour->GetClippedOutput();
-
       // Assign each cell in cut away piece a ClusterId of -1
-      vtkFloatArray* cutrid = vtkFloatArray::New();
-      cutrid->SetNumberOfComponents(1);
-      cutrid->SetNumberOfTuples(cut->GetNumberOfCells());
-      cutrid->SetName("RegionId");
-      cutrid->FillComponent(0, -1);
-      cut->GetCellData()->AddArray(cutrid);
+      AddArrayToMesh(fout, CELL, "RegionId", 1, -1.0);
 
       // Assign a RegionId to each cell in the thresholded part
-      vtkFloatArray* prid = vtkFloatArray::New();
-      prid->SetNumberOfComponents(1);
-      prid->SetNumberOfTuples(p->GetNumberOfCells());
-      prid->SetName("RegionId");
+      vtkFloatArray* prid = AddArrayToMesh(p, CELL, "RegionId", 1, 0.0);
 
       for(int i = 0; i < p->GetNumberOfCells(); i++)
         {
@@ -442,13 +582,10 @@ ClusterArray ComputeClusters(
         prid->SetTuple1(i, c1);
         }
 
-      p->GetCellData()->AddArray(prid);
-
       // Merge the two arrays
-      vtkPolyData *merge = vtkPolyData::New();
-      MergeMeshPieces(p, cut, merge);
-
-      *mout = merge;
+      *mout = vtkPolyData::New();
+      MergeMeshPieces(p, fout, *mout);
+      (*mout)->GetPointData()->SetActiveScalars(daStat->GetName());
       }
     else
       {
@@ -456,36 +593,21 @@ ClusterArray ComputeClusters(
       vtkThreshold *fThreshInv = vtkThreshold::New();
 
       // Threshold the cell data field
-      fThresh->SetInput(mesh);
-      fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-      fThresh->ThresholdByLower(thresh - 1.e-6);
-      fThresh->Update();
-      vtkUnstructuredGrid *cut = fThresh->GetOutput();
+      fThreshInv->SetInput(mesh);
+      fThreshInv->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
+      fThreshInv->ThresholdByLower(thresh - 1.e-6);
+      fThreshInv->Update();
+      vtkUnstructuredGrid *cut = fThreshInv->GetOutput();
+      fThreshInv->Delete();
 
       // Each cell in p already has a region id. Just need to add regionids to the cut
-      vtkFloatArray* cutrid = vtkFloatArray::New();
-      cutrid->SetNumberOfComponents(1);
-      cutrid->SetNumberOfTuples(cut->GetNumberOfCells());
-      cutrid->SetName("RegionId");
-      cutrid->FillComponent(0, -1);
-      cut->GetCellData()->AddArray(cutrid);
+      AddArrayToMesh(cut, CELL, "RegionId", 1, -1);
 
       // Merge the pieces
-      vtkPolyData *merge = vtkPolyData::New();
-      MergeMeshPieces(p, cut, merge);
-
-      *mout = merge;
+      *mout = vtkPolyData::New();
+      MergeMeshPieces(p, cut, *mout);
+      (*mout)->GetCellData()->SetActiveScalars(daStat->GetName());
       }
-    }
-  else
-    {
-    // Delete the intermediates
-    daArea->Delete();
-    fConnect->Delete();
-    if(dom == POINT)
-       fContour->Delete();
-    else
-       fThresh->Delete();
     }
 
   // Return the cluster array
@@ -495,19 +617,17 @@ ClusterArray ComputeClusters(
 template <>
 ClusterArray ComputeClusters(
   vtkUnstructuredGrid *mesh,
-  const char *data,
   Domain dom,
   double thresh, 
   vtkUnstructuredGrid **mout )
 {
-  vtkClipDataSet *fContour;
-  vtkThreshold *fThresh;
+  vtkClipDataSet *fContour = NULL;
+  vtkThreshold *fThresh = NULL;
 
   vtkUnstructuredGrid *f;
   if(dom == POINT)
     {  
     // Initialize mesh
-    mesh->GetPointData()->SetActiveScalars(data);
     fContour = vtkClipDataSet::New();
 
     // Clip the data field at the threshold
@@ -519,7 +639,6 @@ ClusterArray ComputeClusters(
   else
     {  
      // Initialize mesh
-     mesh->GetCellData()->SetActiveScalars(data);
      fThresh = vtkThreshold::New();
 
      // Threshold the cell data field
@@ -595,11 +714,11 @@ ClusterArray ComputeClusters(
     }
 
   vtkDataArray *daRegion = pdata->GetScalars();
-  vtkDataArray *daData = fdata->GetArray(data);
+  vtkDataArray *daData = fdata->GetScalars();
 
   // Build up the cluster array
   ClusterArray ca(fConnect->GetNumberOfExtractedRegions());
-  for(size_t i = 0; i < nelt; i++)
+  for(int i = 0; i < nelt; i++)
     {
     size_t region = (size_t) (daRegion->GetTuple1(i));
     double x = daData->GetTuple1(i);
@@ -631,6 +750,131 @@ ClusterArray ComputeClusters(
   return ca;
 }
 
+class GeneralLinearModel
+{
+public:
+  GeneralLinearModel(
+    vtkDataArray *data, vtkDataArray *contrast, vtkDataArray *tstat, vtkDataArray *pval,
+    const vnl_matrix<double> &design_matrix, 
+    const vnl_matrix<double> &contrast_vector);
+
+  void Compute(const vector<int> &permutation, bool need_t, bool need_p);
+
+  double PtoT(double p);
+
+private:
+  // Pointers to the data arrays
+  vtkDataArray *data, *contrast, *tstat, *pval;
+
+  // Copies of the matrix, other data
+  vnl_matrix<double> X, Y, Xperm, cv;
+  int nelt, rank, df;
+};
+
+GeneralLinearModel::GeneralLinearModel(
+    vtkDataArray *data, vtkDataArray *contrast, vtkDataArray *tstat, vtkDataArray *pval,
+    const vnl_matrix<double> &design_matrix, 
+    const vnl_matrix<double> &contrast_vector)
+{
+  // Copy input
+  this->data = data;
+  this->contrast = contrast;
+  this->tstat = tstat;
+  this->pval = pval;
+  this->X = design_matrix;
+  this->cv = contrast_vector;
+
+  // Initialize other stuff
+  nelt = data->GetNumberOfTuples();
+  Xperm = X;
+
+  // Rank and degrees of freedom
+  rank = vnl_rank(X, vnl_rank_row);
+  df = X.rows() - rank;
+
+  // Y matrix
+  Y.set_size(X.rows(), nelt);
+  for(size_t i = 0; i < X.rows(); i++)
+    for(int j = 0; j < nelt; j++)
+      Y(i,j) = data->GetComponent(j,i); 
+}
+
+void
+GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool need_p)
+{
+  // Shuffle the rows according to current permutation
+  for (size_t i = 0; i < permutation.size(); i++)
+    for (size_t j = 0; j < X.cols(); j++)
+      Xperm[i][j] = X[permutation[i]][j];
+
+  // Standard GLM calculation
+  vnl_matrix<double> A = vnl_matrix_inverse<double>(Xperm.transpose() * Xperm).pinverse(rank);
+  vnl_matrix<double> bhat = (A * Xperm.transpose()) * Y;
+  
+  // Compute the contrast and copy to VTK vector
+  vnl_matrix<double> res = cv * bhat;
+  for (int j = 0; j < nelt; j++)
+    contrast->SetTuple1(j, res(0,j));
+
+  // The rest only if we need the t-stat
+  if(need_t)
+    {
+    vnl_matrix<double> errmat = Y - Xperm * bhat;
+
+    // Residual variance
+    vnl_matrix<double> resvar(1, nelt);
+    resvar.fill(0.0);
+    for(int j = 0; j < nelt; j++)
+       {
+       for(size_t i = 0; i < Xperm.rows(); i++)
+          resvar(0, j) += errmat(i,j) * errmat(i,j);
+       resvar(0, j) = resvar(0, j) / (double) df;
+       }
+
+    // Compute t-stat / p-value
+    vnl_matrix<double> den(1, nelt);
+    den = (cv * (A * cv.transpose())) * resvar;
+    for (int j = 0; j < nelt; j++)
+      {
+      double t = den(0, j) > 0 ? res(0, j) / sqrt(den(0, j)) : 0.0;
+      tstat->SetTuple1(j, t);
+      if(need_p)
+        {
+        int dummy;
+        pval->SetTuple1(j, 1.0 - tnc(t, df, 0.0, &dummy)); 
+        }
+      }
+    }
+}
+
+double
+GeneralLinearModel::PtoT(double p)
+{
+  // We do a binary search for the t
+  int dummy;
+  double t0 = 0, t1 = 1e10; 
+  double p0 = 1.0 - tnc(t0, df, 0.0, &dummy);
+  double p1 = 1.0 - tnc(t1, df, 0.0, &dummy);
+  double t = 0, pt = 0;
+
+  if(p > p0 || p < p1)
+    throw MCException("Can not find t-stat for p threshold %f", p);
+
+  for(int k = 0; k < 64; k++)
+    {
+    t = 0.5 * (t0 + t1);
+    pt = 1.0 - tnc(t, df, 0.0, &dummy);
+    if(p > pt)
+      { t1 = t; p1 = pt; }
+    else
+      { t0 = t; p0 = pt; }
+    if(fabs(p - pt) < 1e-7)
+      break;
+    }
+  return t;
+}
+
+/*
 template <class TMeshType>
 void GeneralLinearModel(
   const vnl_matrix<double> &origmat, 
@@ -708,6 +952,9 @@ void GeneralLinearModel(
   for(size_t j = 0; j < nelt; j++)
     ttest->SetTuple1(j, tmat(0,j)); 
 }
+*/
+
+enum ThresholdType { CONTRAST, TSTAT, PVALUE };
 
 struct Parameters
 {
@@ -735,9 +982,12 @@ struct Parameters
   // Whether tubes are being used
   bool flag_edges;
 
+  // What is the threshold on
+  ThresholdType ttype;
+
   Parameters()
     {
-    np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false;
+    np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT;
     }
 };
 
@@ -747,7 +997,7 @@ class IdHash : public std::vector<vtkIdType>
 public:
   IdHash(vtkIdType *src) : std::vector<vtkIdType>(VDim, 0) 
     {
-    for(int i = 0; i < VDim; i++)
+    for(unsigned int i = 0; i < VDim; i++)
       (*this)[i] = src[i];
     std::sort(this->begin(), this->end());
     }
@@ -784,7 +1034,7 @@ int AppendOpenEdgesFromMesh(
 
       // Get all edges/faces in the cell
       int ne = (VDim == 2) ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
-      for(size_t k = 0; k < ne; k++)
+      for(int k = 0; k < ne; k++)
         {
         vtkCell *edge = (VDim == 2) ? cell->GetEdge(k) : cell->GetFace(k);
         if(edge->GetNumberOfPoints() != VDim)
@@ -807,7 +1057,7 @@ int AppendOpenEdgesFromMesh(
 
       // Get all edges/faces in the cell
       int ne = (VDim == 2) ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
-      for(size_t k = 0; k < ne; k++)
+      for(int k = 0; k < ne; k++)
         {
         vtkCell *edge = (VDim == 2) ? cell->GetEdge(k) : cell->GetFace(k);
         HashEntry he(edge->GetPointIds()->GetPointer(0));
@@ -857,24 +1107,23 @@ int meshcluster(Parameters &p, bool isPolyData)
     throw MCException("Contrast vector must have one row");
 
   // Create the shuffle arrays
-  vector<int> true_indiv_labels, indiv_labels;
-  for(int i = 0; i < mat.rows(); i++)
-    indiv_labels.push_back(i);
-  true_indiv_labels = indiv_labels;
+  vector<int> true_order, permutation;
+  for(size_t i = 0; i < mat.rows(); i++)
+    true_order.push_back(i);
+  permutation = true_order;
 
-  // If the threshold is negative, simply change the direction of the test
-  string posneg("pos");
+  // If the threshold is negative, throw up
   if(p.threshold < 0)
-    { 
-    p.threshold = -p.threshold; 
-    posneg = "neg";
-    }
-  string VOIttest = p.array_name + "_tstat_" + posneg;
+    throw MCException("Negative threshold provided. This is not supported. You should invert the contrast instead");
 
-  // Load each of the meshes and create a cluster analyzer
-  vector<ClusterArray> claTrue;
+  // Names for the statistics arrays
+  string an_contrast = "Contrast", an_tstat = "T-statistic";
+  string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
 
-  // Read the meshes
+  // Create an array of GLM objects
+  vector<GeneralLinearModel *> glm;
+
+  // Read the meshes and initialize statistics arrays
   vector<TMeshType *> mesh;
   for(size_t i = 0; i < p.fn_mesh_input.size(); i++)
     {
@@ -882,37 +1131,62 @@ int meshcluster(Parameters &p, bool isPolyData)
     cout << "Reading mesh " << p.fn_mesh_input[i] << endl;
     mesh.push_back(ReadMesh<TMeshType>(p.fn_mesh_input[i].c_str()));
 
-    // Get the appropriate data type
-    vtkDataSetAttributes *dsa = (p.dom == POINT) ? 
-      (vtkDataSetAttributes *) mesh.back()->GetPointData() : 
-      (vtkDataSetAttributes *) mesh.back()->GetCellData();
+    // Get the data array from the mesh and error check
+    vtkDataArray *data = GetArrayFromMesh(mesh[i], p.dom, p.array_name);
+    if(!data)
+      throw MCException("Array %s is missing in mesh %s", 
+        p.array_name.c_str(), p.fn_mesh_input[i].c_str());
+    if(data->GetNumberOfComponents() != (int) mat.rows())
+      throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
+        data->GetNumberOfComponents(), p.array_name.c_str(), 
+        p.fn_mesh_input[i].c_str(), mat.rows()); 
 
-    // Create a t statistic array
-    vtkFloatArray *array = vtkFloatArray::New();
-    array->SetName(VOIttest.c_str());
-    array->SetNumberOfComponents(1);
-    array->SetNumberOfTuples(dsa->GetNumberOfTuples());
+    // Do diffusion if needed
+    if(p.diffusion > 0)
+      {
+      if(p.dom == CELL)
+        throw MCException("Diffusion is not implemented for cell data");
+      else
+        PointDataDiffusion(mesh[i], p.diffusion, 0.01, p.array_name.c_str());
+      }
 
-    // Add array to the input mesh
-    dsa->AddArray(array);
-    dsa->SetActiveScalars(array->GetName());
+    // Add the statistics array for output. The actual permutation testing always uses
+    // CONTRAST or TSTAT, never the PVALUE (as that would waste time computing tcdf)
+    vtkFloatArray *contrast = AddArrayToMesh(mesh[i], p.dom, an_contrast, 1, 0, p.ttype == CONTRAST);
+    vtkFloatArray *tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, p.ttype != CONTRAST);
+    vtkFloatArray *pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
+
+    // Create new GLM
+    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, mat, con));
     }
     
+  // If the threshold is on the p-value, convert it to a threshold on T-statistic
+  if(p.ttype == PVALUE)
+    {
+    double tthresh = glm.front()->PtoT(p.threshold);
+    printf("P-value threshold %f converted to t-stat threshold %f\n", p.threshold, tthresh);
+    p.ttype = TSTAT;
+    p.threshold = tthresh;
+    }
+
   // Run permutation analysis
-  vector<double> hArea(p.np), hPower(p.np);
+  vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
   for(size_t ip = 0; ip < p.np; ip++)
     {
     // Initialize the histogram at zero
-    hArea[ip] = 0; hPower[ip] = 0;
+    hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
 
     // Apply a random permutation to the labels array
-    random_shuffle(indiv_labels.begin(), indiv_labels.end());
+    random_shuffle(permutation.begin(), permutation.end());
 
     // Build up the histogram of cluster areas (and powers)
     for(size_t i = 0; i < mesh.size(); i++)
       {
-      GeneralLinearModel<TMeshType>(mat, con, indiv_labels, mesh[i], p.array_name.c_str(), VOIttest, p.dom);
-      ClusterArray ca = ComputeClusters<TMeshType>(mesh[i], VOIttest.c_str(), p.dom, p.threshold);
+      // Compute statistical arrays using GLM
+      glm[i]->Compute(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
+
+      // Generate a list of clusters (based on current scalars)
+      ClusterArray ca = ComputeClusters<TMeshType>(mesh[i], p.dom, p.threshold);
 
       // Now find the largest cluster
       for(size_t c = 0; c < ca.size(); c++)
@@ -920,23 +1194,45 @@ int meshcluster(Parameters &p, bool isPolyData)
         if(ca[c].area > hArea[ip]) hArea[ip] = ca[c].area;
         if(ca[c].power > hPower[ip]) hPower[ip] = ca[c].power;
         }
+
+      // Likewise, find the largest scalar
+      vtkDataArray *stat = GetScalarsFromMesh(mesh[i], p.dom);
+      hStat[ip] = stat->GetMaxNorm();
       }
+
+    // Some fancy formatting
     cout << "." << flush;
-    if((ip+1) % 80 == 0 || (ip+1) == p.np) 
+    if((ip+1) % 100 == 0 || (ip+1) == p.np) 
       cout << " " << ip+1 << endl;
     }
 
   // Sort the histograms
   sort(hArea.begin(), hArea.end());
   sort(hPower.begin(), hPower.end());
+  sort(hStat.begin(), hStat.end());
 
   // Going back to the original meshes, assign a cluster p-value to each mesh
   for(size_t i = 0; i < mesh.size(); i++)
     {
     TMeshType *mout;
 
-    GeneralLinearModel<TMeshType>(mat, con, true_indiv_labels, mesh[i], p.array_name.c_str(), VOIttest, p.dom);
-    ClusterArray ca = ComputeClusters<TMeshType>(mesh[i], VOIttest.c_str(), p.dom, p.threshold, &mout);
+    // Compute GLM (get all arrays, this is for keeps)
+    glm[i]->Compute(true_order, true, true);
+
+    // Generate true clusters
+    ClusterArray ca = ComputeClusters<TMeshType>(mesh[i], p.dom, p.threshold, &mout);
+
+    // Compute the corrected p-value for mout
+    vtkDataArray *stat = GetScalarsFromMesh(mout, p.dom);
+    vtkFloatArray *pcorr = AddArrayToMesh(mout, p.dom, an_pcorr, 1, 0);
+    for(size_t j = 0; j < pcorr->GetNumberOfTuples(); j++)
+      {
+      double su = stat->GetTuple1(j);
+      double pc = 1.0 - (lower_bound(hStat.begin(), hStat.end(), su) - hStat.begin()) / ((double) p.np);
+      pcorr->SetTuple1(j, pc);
+      }
+    
+    // printf("hStat: [%f %f %f %f %f]\n", hStat[0], hStat[p.np/4], hStat[p.np/2], hStat[3*p.np/4], hStat[p.np-1]);
 
     printf("MESH %s HAS %d CLUSTERS: \n", p.fn_mesh_input[i].c_str(), (int) ca.size());
 
@@ -956,19 +1252,11 @@ int meshcluster(Parameters &p, bool isPolyData)
       }
 
     // Create output mesh arrays for p-values
-    string snArea = p.array_name + string(" p-cluster-area");
-    vtkFloatArray *aArea = vtkFloatArray::New();
-    aArea->SetName(snArea.c_str());
-    aArea->SetNumberOfComponents(1);
-    aArea->SetNumberOfTuples(mout->GetNumberOfCells());
-    mout->GetCellData()->AddArray(aArea);
+    string snArea = "p-cluster-area";
+    vtkFloatArray *aArea = AddArrayToMesh(mout, CELL, snArea.c_str(), 1, 0);
 
-    string snPower = p.array_name + string(" p-cluster-power");
-    vtkFloatArray *aPower = vtkFloatArray::New();
-    aPower->SetName(snPower.c_str());
-    aPower->SetNumberOfComponents(1);
-    aPower->SetNumberOfTuples(mout->GetNumberOfCells());
-    mout->GetCellData()->AddArray(aPower);
+    string snPower = "p-cluster-power";
+    vtkFloatArray *aPower = AddArrayToMesh(mout, CELL, snPower.c_str(), 1, 0);
 
     // Get the cluster ID array
     vtkDataArray *aClusterId = mout->GetCellData()->GetArray("RegionId");
@@ -999,23 +1287,9 @@ int meshcluster(Parameters &p, bool isPolyData)
       emesh->Allocate();
 
       // Set up arrays in the mesh
-      vtkFloatArray *daArea = vtkFloatArray::New();
-      daArea->SetNumberOfComponents(1);
-      daArea->Allocate(0);
-      daArea->SetName(snArea.c_str());
-      emesh->GetCellData()->AddArray(daArea);
-
-      vtkFloatArray *daPower = vtkFloatArray::New();
-      daPower->SetNumberOfComponents(1);
-      daPower->Allocate(0);
-      daPower->SetName(snPower.c_str());
-      emesh->GetCellData()->AddArray(daPower);
-
-      vtkFloatArray *daClusterId = vtkFloatArray::New();
-      daClusterId->SetNumberOfComponents(1);
-      daClusterId->Allocate(0);
-      daClusterId->SetName("RegionId");
-      emesh->GetCellData()->AddArray(daClusterId);
+      vtkFloatArray *daArea = AddArrayToMesh(emesh, CELL, snArea.c_str(), 1, 0);
+      vtkFloatArray *daPower = AddArrayToMesh(emesh, CELL, snPower.c_str(), 1, 0);
+      vtkFloatArray *daClusterId = AddArrayToMesh(emesh, CELL, "RegionId", 1, 0);
 
       // Repeat for each cluster
       for(size_t c = 0; c < ca.size(); c++)
@@ -1039,21 +1313,9 @@ int meshcluster(Parameters &p, bool isPolyData)
       WriteMesh<TMeshType>(emesh, fnedge.c_str());
       }
 
-    // Threshold out the non-significant clusters
-    /*
-    mout->GetPointData()->SetActiveScalars(snPower.c_str());
-    vtkClipPolyData *fClip = vtkClipPolyData::New();
-    fClip->SetInput(mout);
-    fClip->SetValue(0.05);
-    fClip->InsideOutOn();
-    fClip->Update();
-    */
-
     // Save the output mesh 
     cout << "Saving output mesh.." << endl;
     WriteMesh<TMeshType>(mout, p.fn_mesh_output[i].c_str());
-    // cout << "Saving input mesh.." << endl;
-    // WriteMesh<TMeshType>(mesh[i], fnMeshes[i].c_str());
     }
     return EXIT_SUCCESS;
 
@@ -1108,6 +1370,18 @@ int main(int argc, char *argv[])
         {
         p.flag_edges = true;
         }
+      else if(arg == "-s" || arg == "--stat")
+        {
+        string stat = argv[++i];
+        if(stat == "T")
+          p.ttype = TSTAT;
+        else if(stat == "C")
+          p.ttype = CONTRAST;
+        else if(stat == "P")
+          p.ttype = PVALUE;
+        else
+          throw MCException("Unknown parameter to --stat command (%s)", stat.c_str());
+        }
       else throw MCException("Unknown command line switch %s", arg.c_str());
       }
 
@@ -1139,7 +1413,7 @@ int main(int argc, char *argv[])
     }
   catch (MCException &exc)
     {
-    cerr << "Excepetion caught: " << exc.what() << endl; 
+    cerr << "Exception caught: " << exc.what() << endl; 
     return -1;
     }
 }
