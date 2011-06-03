@@ -10,6 +10,7 @@
 #include "TestSolver.h"
 #include "ITKImageWrapper.h"
 #include <itksys/SystemTools.hxx>
+#include "itk_to_nifti_xform.h"
 
 // ITK includes 
 #include <itkOrientedRASImage.h>
@@ -21,7 +22,7 @@
 #include <vtkMarchingCubes.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkTransformPolyDataFilter.h>
-#include <vtkMatrixToLinearTransform.h>
+#include <vtkTransform.h>
 #include <vtkMatrix4x4.h>
 
 int usage()
@@ -40,6 +41,8 @@ int usage()
   return -1;
 }
 
+
+
 // Generate contour and save to file
 void GenerateContour(FloatImage *image, string file)
 {
@@ -51,7 +54,7 @@ void GenerateContour(FloatImage *image, string file)
   vtkImageImport *m_VTKImporter;
   vtkMarchingCubes *     m_MarchingCubesFilter;
   vtkTransformPolyDataFilter *m_TransformFilter;
-  vtkMatrixToLinearTransform *m_Transform;
+  vtkTransform *m_Transform;
 
   // Initialize the VTK Exporter
   m_VTKExporter = VTKExportType::New();
@@ -97,14 +100,16 @@ void GenerateContour(FloatImage *image, string file)
   m_MarchingCubesFilter->SetValue(0,0.0f);
   m_MarchingCubesFilter->SetInput(m_VTKImporter->GetOutput());
 
-
-
   // Create a transform into RAS coordinates
-  m_Transform = vtkMatrixToLinearTransform::New();
-  TransformMatrixType mat = 
-    image->GetInternalImage()->GetInternalImage()
-    ->GetSpacingOriginPhysicalSpaceToRASPhysicalSpaceMatrix();
-  m_Transform->GetMatrix()->DeepCopy(mat.GetVnlMatrix().data_block());  
+  vnl_matrix_fixed<double, 4, 4> vtk2nii =
+    ConstructVTKtoNiftiTransform(
+      image->GetInternalImage()->GetInternalImage()->GetDirection().GetVnlMatrix(),
+      image->GetInternalImage()->GetInternalImage()->GetOrigin().GetVnlVector(),
+      image->GetInternalImage()->GetInternalImage()->GetSpacing().GetVnlVector());          
+
+  m_Transform = vtkTransform::New();
+  m_Transform->SetMatrix(vtk2nii.data_block());
+
   m_TransformFilter = vtkTransformPolyDataFilter::New();
   m_TransformFilter->SetTransform(m_Transform);
   m_TransformFilter->SetInput(m_MarchingCubesFilter->GetOutput());
