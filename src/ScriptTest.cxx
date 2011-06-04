@@ -118,8 +118,6 @@ int TestVolumeComputation(const char *file)
   MedialPDE mp(file);
   GenericMedialModel *model = mp.GetMedialModel();
 
-  size_t nInternalPoints = model->GetNumberOfInternalPoints(nCuts);
-
   // Use wedge-based system to compute volume. This is an old way that is
   // fairly slow but seemingly reliable
   double *xVolWedgeWeights = new double[model->GetNumberOfInternalPoints(nCuts)];
@@ -166,6 +164,7 @@ int TestVolumeComputation(const char *file)
   // Report what's computed by the two methods
   cout << "Wedge-Based Volume: " << volWedgeBased << endl;
   cout << "Fast Method Volume: " << volFastMethod << endl;
+  cout << "Surface Area: " << xMedSurfaceArea << endl;
 
   // Compute the volume via VolumeOverlap class
   TestFloatImage testimg(model->GetCenterOfRotation(), 100.0, 1.0);
@@ -384,7 +383,7 @@ int TestDifferentialGeometry(const char *fnMPDE)
   mp.LoadFromParameterFile(fnMPDE);
 
   // Pick a point to evaluate at
-  double u = 0.6, v = 0.2, eps = 0.0001;
+  double u = 0.6, v = 0.2;
 
   // Compute the jet at this point
   SMLVec3d X00, X10, X01, X20, X11, X02;
@@ -486,7 +485,7 @@ int TestBasisFunctionVariation(const char *fnMPDE)
   vm.push_back(new AffineTransformCoefficientMapping(model));
   vm.push_back(new SubsetCoefficientMapping(xMask));
   
-  char *nm[] = {
+  const char *nm[] = {
     "IdentityCoefficientMapping",
     "AffineTransformCoefficientMapping",
     "SubsetCoefficientMapping" };
@@ -866,7 +865,7 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
   vm.push_back(new SubsetCoefficientMapping(model->GetRadialCoefficientMask()));
   vm.push_back(new AffineTransformCoefficientMapping(model));
 
-  char *nm[] = {
+  const char *nm[] = {
     "IDENTY", "RADIAL", "AFFINE" };
 
   printf("%12s  %12s :  %10s  %10s  %10s  %8s  %8s  P/F\n",

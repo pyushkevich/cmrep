@@ -408,9 +408,6 @@ void MeshGradientComputer::ComputeGradient(
       // can compute the full Jacobian
       for(size_t ic = xRowIdx[i]; ic < xRowIdx[i+1]; ic++)
         {
-        // Get the current column 
-        size_t j = xColIdx[ic];
-
         // Get the weight 
         double w0 = xWeights[ic].w[0];
         double w1 = xWeights[ic].w[1];

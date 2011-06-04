@@ -12,8 +12,8 @@ bool ReadMatrixFile(vnl_matrix<double> &mat, const char *file)
     { fclose(fin); return false; }
 
   mat.set_size(r, c);
-  for(size_t i = 0; i < r; i++)
-    for(size_t j = 0; j < c; j++)
+  for(int i = 0; i < r; i++)
+    for(int j = 0; j < c; j++)
       fscanf(fin, "%lg", &mat[i][j]);
 
   fclose(fin);

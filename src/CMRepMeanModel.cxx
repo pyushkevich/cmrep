@@ -18,7 +18,7 @@ int main(int argc, char *argv[])
   // Read all models
   std::vector<MedialPDE *> mpde;
   MedialPDE *target;
-  for(size_t i = 1; i < argc-1;i++)
+  for(int i = 1; i < argc-1;i++)
     mpca.AddSample(target = new MedialPDE(argv[i]));
 
   // Compute PCA

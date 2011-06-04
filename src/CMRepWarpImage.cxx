@@ -180,7 +180,7 @@ int main(int argc, char *argv[])
   bool flip = false;
 
   // Parse the options
-  for(size_t iopt = 1; iopt < argc-5; iopt++)
+  for(int iopt = 1; iopt < argc-5; iopt++)
     {
     if(!strcmp(argv[iopt], "-f"))
       {
@@ -311,7 +311,6 @@ int main(int argc, char *argv[])
   vtkIdType npts; vtkIdType *pts;
   typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
   size_t itri = 0;
-  size_t iwedge = 0;
   for(tri->InitTraversal(); tri->GetNextCell(npts,pts); itri++)
     {
     for(size_t side = 0; side < 2; side++)

@@ -1027,7 +1027,6 @@ void TestTetrahedronVolumePartialDerivative()
     X2[i][j] = X[i][j] - eps * Xp[i][j];
     }
 
-  double V0 = TetrahedronVolume( X[0], X[1], X[2], X[3] );
   double V1 = TetrahedronVolume( X1[0], X1[1], X1[2], X1[3] );
   double V2 = TetrahedronVolume( X2[0], X2[1], X2[2], X2[3] );
 

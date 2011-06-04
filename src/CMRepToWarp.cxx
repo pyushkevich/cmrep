@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
   bool flip = false;
 
   // Parse the options
-  for(size_t iopt = 1; iopt < argc-4; iopt++)
+  for(int iopt = 1; iopt < argc-4; iopt++)
     {
     if(!strcmp(argv[iopt], "-e"))
       {
@@ -203,7 +203,7 @@ int main(int argc, char *argv[])
   ImageType::Pointer img = fltReader->GetOutput();
 
   // Create warp image (for now only the forward warp)
-  ImageType::Pointer warp[3], winverse[3];
+  ImageType::Pointer warp[3];
   for(size_t d = 0; d < 3; d++)
     {
     warp[d] = ImageType::New();
@@ -267,7 +267,6 @@ int main(int argc, char *argv[])
   vtkIdType npts; vtkIdType *pts;
   typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
   size_t itri = 0;
-  size_t iwedge = 0;
   for(tri->InitTraversal(); tri->GetNextCell(npts,pts); itri++)
     {
     for(size_t side = 0; side < 2; side++)

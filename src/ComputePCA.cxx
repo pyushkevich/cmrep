@@ -84,7 +84,6 @@ int main(int argc, char *argv[])
   // Read the filenames and models
   for(; i < argc; i++)
     {
-    MedialPDE *model = NULL;
     try 
       {
       MedialPDE *model = new MedialPDE(argv[i]);

@@ -314,6 +314,7 @@ SubdivisionMedialModelIO
   }
 
   poly->Delete();
+  return NULL;
 }
 
 void

@@ -273,11 +273,12 @@ MedialAtom::ComputeBoundaryAtomDerivatives(
   dAtom.xGradRMagSqr = z1iRi * dt.Ru + z2iRi * dt.Rv 
     + 2.0 * (dt.g1iRi * Pu + dt.g2iRi * Pv);
 
+  /*
   double test = 
     z11 * dt.Ru * dt.Ru + 2 * g11 * Pu * dt.Ru +
     z22 * dt.Rv * dt.Rv + 2 * g22 * Pv * dt.Rv +
     2.0 * (z12 * dt.Ru * dt.Rv + g12 * Pu * dt.Rv + g12 * dt.Ru * Pv);
-
+    */
 
   // Compute the 
 
@@ -362,7 +363,7 @@ MedialAtom::ComputeBoundaryAtomDerivativesUsingR(
   const double &z22 = dAtom.G.xContravariantTensor[1][1];
 
   // Get the g's
-  const double &g = G.g; const double &z = dAtom.G.g;
+  const double &z = dAtom.G.g;
 
   // Get the partials of Phi and its variational derivative
   double P = dAtom.R;
@@ -472,8 +473,6 @@ void MedialAtom::ComputeBoundaryCurvature()
     double Fij[2][2] = {{Fuu, Fuv},{Fuv, Fvv}};
 
     // Compute the partial derivatives of GradF
-    SMLVec3d NB_i[2], XB_i[2];
-
     size_t i,j,k,l;
     for(i=0;i<2;i++) 
       {

@@ -204,9 +204,6 @@ SmoothedImageSampler
       }
     }
 
-  // Scaling factor for speed
-  double inv_sum_w = 1.0 / sum_w;
-
   // Set the output value
   return sum_wf / sum_w;
 }

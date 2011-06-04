@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
     return usage();
 
   bool adaptive = false;
-  for(size_t iarg = 1; iarg < argc - 4; iarg++)
+  for(int iarg = 1; iarg < argc - 4; iarg++)
     {
     if(!strcmp(argv[iarg], "-b"))
       adaptive = true;

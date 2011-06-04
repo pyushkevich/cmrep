@@ -190,7 +190,6 @@ FDBorderSite
   F = xMask->ComputeOneJet(Y.data_block(), Fu, Fv);
 
   // Next, compute the weights for Hu and Hv and H
-  double (*G1)[2] = xAtom->G.xCovariantTensor;
   double (*G2)[2] = xAtom->G.xContravariantTensor;
 
   // Set the entries in the derivative matrix. Should be the same as

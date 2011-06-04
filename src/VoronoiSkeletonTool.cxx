@@ -684,10 +684,10 @@ int main(int argc, char *argv[])
       fCluster->GetNumberOfXDivisions(),
       fCluster->GetNumberOfYDivisions(),
       fCluster->GetNumberOfZDivisions());
-    printf("  Input mesh: %ld points, %ld cells\n", 
+    printf("  Input mesh: %d points, %d cells\n", 
       skelfinal->GetNumberOfPoints(),  
       skelfinal->GetNumberOfCells());
-    printf("  Output mesh: %ld points, %ld cells\n", 
+    printf("  Output mesh: %d points, %d cells\n", 
       fCluster->GetOutput()->GetNumberOfPoints(),  
       fCluster->GetOutput()->GetNumberOfCells());
 

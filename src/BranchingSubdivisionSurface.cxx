@@ -1055,7 +1055,7 @@ bool BranchingSubdivisionSurface::CheckMeshLevel (MeshLevel &mesh)
             tCount++;
 
             // Check that the index matches
-            if(j != tn.GetNeighborEdge(jn, an))
+            if((int) j != tn.GetNeighborEdge(jn, an))
               {
               printf("Error %d: T[%d].nedge[%d,%d] != T[%d].nedge[%d,%d]\n",
                 (int) nerr++, (int) i, (int) j, (int) a, (int) in, (int) jn, (int) an); 

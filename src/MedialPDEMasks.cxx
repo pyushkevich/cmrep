@@ -45,7 +45,7 @@ vector<size_t> SortTwoArrays(vector<T> &a1, vector<T> &a2)
 const size_t FiniteDifferenceMask::NUM_WEIGHTS = 6;
 
 FiniteDifferenceMask::FiniteDifferenceMask(size_t nNodes)
-: n(nNodes), W(nNodes, NUM_WEIGHTS, 0.0), flagTransposed(false)
+: W(nNodes, NUM_WEIGHTS, 0.0), n(nNodes), flagTransposed(false)
 { 
   qu.resize(nNodes); 
   qv.resize(nNodes); 
@@ -360,7 +360,7 @@ void FiniteDifferenceMask
   vnl_qr<double> qr(A.extract(n, n));
 
   // Solve the system for the relevant partial derivatives
-  for(int p = F00; p < F00 + n && p <= F11; p++)
+  for(size_t p = F00; p < F00 + n && p <= F11; p++)
     {
     // Set up the right hand (solution vector)
     vnl_vector<double> b(n, 0.0); b[p] = 1.0;
@@ -623,7 +623,6 @@ void TestFDMask(
 
 void TestFDStuff()
 {
-  int n = 7;
   double xUniformGrid[] = {-3, -2, -1, 0, 1, 2, 3};
   double xNonUniformGrid[] = {-4, -3, -2, 0, 1, 3, 4};
   Vec xUniGrid(xUniformGrid, 6), xNonGrid(xNonUniformGrid, 6);

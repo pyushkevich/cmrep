@@ -216,8 +216,6 @@ void ITKImageWrapperImpl<TPixel>
   fnInterpolatorNN->SetInputImage(xImage);
 }
 
-static bool glob_ITKCUBFactoryRegistered = false;
-
 template<typename TPixel>
 void ITKImageWrapperImpl<TPixel>
 ::LoadFromFile(const char *file)

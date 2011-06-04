@@ -61,7 +61,7 @@ public:
     
   MaskVector GetMaskForLevel(int level) const
     {
-    assert(-nlevels <= level && level >= nlevels && level != 0);
+    assert(-((int)nlevels) <= level && level >= (int) nlevels && level != 0);
     if(level > 0)
       {
       size_t d = (size_t) (nlevels - level);
