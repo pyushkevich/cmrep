@@ -621,7 +621,7 @@ digline(int x1, int y1,  int x2,   int y2,
 
 
 /*========================================================================*/
-/* List Handling for Triangle Draw
+/* List Handling for Triangle Draw                                        */
 /*========================================================================*/
 
 static int Make_head(PtrNode *head)

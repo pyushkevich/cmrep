@@ -157,7 +157,7 @@ int main(int argc, char *argv[])
 
   // Read optional parameters
   size_t irms = 0, nrms = 0;
-  for(size_t ip = 1; ip < argc-4; ip++)
+  for(int ip = 1; ip < argc-4; ip++)
     {
     if(strcmp(argv[ip], "-rms") == 0)
       {

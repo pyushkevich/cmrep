@@ -77,21 +77,21 @@ int usage()
 
 struct Cluster
 {
+  // Cluster size in nodes (?)
+  size_t n;
+
   // Surface area of the cluster
   double area;
 
   // Power of the thresholded data over the cluster
   double power;
 
-  // Cluster size in nodes (?)
-  size_t n;
-
-  // p-values
-  double pArea, pPower;
-
   // t-value
   double tvalue;
  
+  // p-values
+  double pArea, pPower;
+
   // Dummy constructor
   Cluster() : n(0), area(0.0), power(0.0), tvalue(0.0) {};
 };
@@ -494,7 +494,7 @@ ClusterArray ComputeClusters(
   daArea->FillComponent(0, 0.0);
 
   // Compute the volume of each tetra in the cluster set
-  for(size_t k = 0; k < p->GetNumberOfCells(); k++)
+  for(int k = 0; k < p->GetNumberOfCells(); k++)
     {
     vtkCell *cell = p->GetCell(k);
 /* Some cells are converted to VTK_WEDGE -- TODO
@@ -563,7 +563,7 @@ ClusterArray ComputeClusters(
 // Segment 7 old code
 //  for(size_t i = 0; i < p->GetNumberOfPoints(); i++)
 // Segment 7 new code
-  for(size_t i = 0; i < NumberOfPoints; i++)
+  for(int i = 0; i < NumberOfPoints; i++)
     {
     size_t region = (size_t) (daRegion->GetTuple1(i));
     double x = daData->GetTuple1(i);
@@ -1146,7 +1146,7 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
 
     // Compute the clusters for the mesh with the correct labels
     ClusterArray ca = ComputeClusters<TMeshType>(mesh[i], VOIttest.c_str(), domain.c_str(), thresh, &mout);
-    printf("MESH %s HAS %d CLUSTERS: \n", fnMeshes[i].c_str(), ca.size());
+    printf("MESH %s HAS %d CLUSTERS: \n", fnMeshes[i].c_str(), (int) ca.size());
 
     // Assign a p-value to each cluster
     for(size_t c = 0; c < ca.size(); c++)
@@ -1159,7 +1159,7 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
       ca[c].pPower = 1.0 - zPower * 1.0 / np;
       bool sig = (ca[c].pArea <= 0.05 || ca[c].pPower <= 0.05);
       printf("Cluster %03d:  AvgT = %6f; Area = %6f (p = %6f);  Power = %6f (p = %6f); %s\n",
-        c, ca[c].tvalue/ca[c].n, ca[c].area, ca[c].pArea, ca[c].power, ca[c].pPower, 
+        (int) c, ca[c].tvalue/ca[c].n, ca[c].area, ca[c].pArea, ca[c].power, ca[c].pPower, 
         sig ? "***" : "");
       }
 
@@ -1179,7 +1179,7 @@ int meshcluster(int argc, char *argv[], Registry registry, bool isPolyData)
     mout->GetPointData()->AddArray(aPower);
 
     // Set the mesh arrays' p-values
-    for(size_t p = 0; p < mout->GetNumberOfPoints(); p++)
+    for(int p = 0; p < mout->GetNumberOfPoints(); p++)
       {
       size_t r = (size_t) mout->GetPointData()->GetScalars()->GetTuple1(p);
       aArea->SetTuple1(p, ca[r].pArea);
