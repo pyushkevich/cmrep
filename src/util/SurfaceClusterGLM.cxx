@@ -635,6 +635,43 @@ ClusterComputer
   scalar_name = GetScalarsFromMesh(mesh, dom)->GetName();
 }
 
+double TetraVolume(vtkDataSet *mesh, 
+  vtkIdType a0, vtkIdType a1, vtkIdType a2, vtkIdType a3)
+{
+  return vtkTetra::ComputeVolume(
+    mesh->GetPoint(a0),
+    mesh->GetPoint(a1),
+    mesh->GetPoint(a2),
+    mesh->GetPoint(a3));
+}
+
+double ComputeCellVolume(vtkCell *cell)
+{
+  vtkSmartPointer<vtkIdList> ids;
+  if(cell->GetCellType() == VTK_TETRA)
+    {
+    ids = cell->GetPointIds();
+    }
+  else if(cell->GetCellType() == VTK_WEDGE)
+    {
+    ids = vtkIdList::New();
+    vtkSmartPointer<vtkPoints> pts = vtkPoints::New();
+    cell->Triangulate(0, ids, pts);
+    }
+  else throw MCException("Volume calculation only supported for Tetra and Wedge cells");
+
+  double vol = 0;
+  for(int k = 0; k < ids->GetNumberOfIds(); k+=4)
+    {
+    vol += fabs(vtkTetra::ComputeVolume(
+        cell->GetPoints()->GetPoint(ids->GetId(k)),
+        cell->GetPoints()->GetPoint(ids->GetId(k+1)),
+        cell->GetPoints()->GetPoint(ids->GetId(k+2)),
+        cell->GetPoints()->GetPoint(ids->GetId(k+3))));
+    }
+  return vol;
+}
+
 ClusterArray
 ClusterComputer::ComputeClusters(bool build_combo_mesh)
 {
@@ -659,8 +696,40 @@ ClusterComputer::ComputeClusters(bool build_combo_mesh)
   for(int k = 0; k < p->GetNumberOfCells(); k++)
     {
     vtkCell *cell = p->GetCell(k);
-    if(cell->GetCellType() != VTK_TRIANGLE)
-      throw MCException("Wrong cell type, should be VTK_TRIANGLE");
+    if(cell->GetCellType() == VTK_TRIANGLE)
+      {
+      // Compute the area of the triangle
+      double p0[3], p1[3], p2[3];
+      vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
+      p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2); 
+      double area = vtkTriangle::TriangleArea(p0, p1, p2);
+
+      if(dom == POINT)
+        {  
+        // Split the volume between neighbors
+        daArea[a0] += area / 3.0; daArea[a1] += area / 3.0; daArea[a2] += area / 3.0;
+        }
+      else
+        {
+        // No need to split, working with cells
+        daArea[k] = area;
+        }
+      }
+    else if(cell->GetCellType() == VTK_TETRA || cell->GetCellType() == VTK_WEDGE)
+      {
+      double vol = ComputeCellVolume(cell);
+      if(dom == POINT)
+        {
+        for(int m = 0; m < cell->GetNumberOfPoints(); m++)
+          daArea[cell->GetPointId(m)] += vol / cell->GetNumberOfPoints();
+        }
+      else
+        {
+        daArea[k] = vol;
+        }
+      }
+    else
+      throw MCException("Wrong cell type, should be VTK_TRIANGLE, VTK_TETRA or VTK_WEDGE");
 
     // Compute the area of the triangle
     double p0[3], p1[3], p2[3];
@@ -1294,36 +1363,38 @@ struct Parameters
     }
 };
 
-template <unsigned int VDim>
 class IdHash : public std::vector<vtkIdType>
 {
 public:
-  IdHash(vtkIdType *src) : std::vector<vtkIdType>(VDim, 0) 
+  IdHash(unsigned int dim, vtkIdType *src) : std::vector<vtkIdType>(dim, 0) 
     {
-    for(unsigned int i = 0; i < VDim; i++)
+    for(unsigned int i = 0; i < dim; i++)
       (*this)[i] = src[i];
     std::sort(this->begin(), this->end());
     }
 
-  IdHash() : std::vector<vtkIdType>(VDim, -1) {}
+  IdHash() : std::vector<vtkIdType>() {}
 
-  bool operator < (const IdHash<VDim> &b)
+  bool operator < (const IdHash &b)
     {
-    for(int k = 0; k < VDim; k++)
+    if(this->size() != b.size())
+      throw MCException("2D and 3D cells mixed");
+
+    for(unsigned int k = 0; k < size(); k++)
       {
-      if(*this[k] < b[k]) return true;
-      if(*this[k] > b[k]) return false;
+      if((*this)[k] < b[k]) return true;
+      if((*this)[k] > b[k]) return false;
       }
     return false;
     }
 };
 
-template <class TMeshType, unsigned int VDim>
+template <class TMeshType>
 int AppendOpenEdgesFromMesh(
   TMeshType *src, vtkDataArray *regarr, int region, TMeshType *trg)
 {
   // Hashtable
-  typedef IdHash<VDim> HashEntry;
+  typedef IdHash HashEntry;
   typedef std::map<HashEntry, int> Hash;
   Hash hash;
   int nadded = 0;
@@ -1335,14 +1406,15 @@ int AppendOpenEdgesFromMesh(
       {
       vtkCell *cell = src->GetCell(i);
 
+      // Edges or faces?
+      bool edges = cell->GetCellDimension() == 2;
+
       // Get all edges/faces in the cell
-      int ne = (VDim == 2) ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
+      int ne = edges ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
       for(int k = 0; k < ne; k++)
         {
-        vtkCell *edge = (VDim == 2) ? cell->GetEdge(k) : cell->GetFace(k);
-        if(edge->GetNumberOfPoints() != VDim)
-          throw MCException("Wrong number of points in edge (%d)", edge->GetNumberOfPoints());
-        HashEntry he(edge->GetPointIds()->GetPointer(0));
+        vtkCell *edge = edges ? cell->GetEdge(k) : cell->GetFace(k);
+        HashEntry he(edge->GetNumberOfPoints(), edge->GetPointIds()->GetPointer(0));
         if(hash.find(he) == hash.end())
           hash[he] = 1;
         else
@@ -1358,12 +1430,15 @@ int AppendOpenEdgesFromMesh(
       {
       vtkCell *cell = src->GetCell(i);
 
+      // Edges or faces?
+      bool edges = cell->GetCellDimension() == 2;
+
       // Get all edges/faces in the cell
-      int ne = (VDim == 2) ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
+      int ne = edges ? cell->GetNumberOfEdges() : cell->GetNumberOfFaces();
       for(int k = 0; k < ne; k++)
         {
-        vtkCell *edge = (VDim == 2) ? cell->GetEdge(k) : cell->GetFace(k);
-        HashEntry he(edge->GetPointIds()->GetPointer(0));
+        vtkCell *edge = edges ? cell->GetEdge(k) : cell->GetFace(k);
+        HashEntry he(edge->GetNumberOfPoints(), edge->GetPointIds()->GetPointer(0));
 
         if(hash[he] == 1)
           {
@@ -1633,7 +1708,7 @@ int meshcluster(Parameters &p, bool isPolyData)
           // Repeat for each cluster
           for(size_t c = 0; c < ca.size(); c++)
             {
-            int added = AppendOpenEdgesFromMesh<TMeshType,2> (mout, aClusterId, c, emesh);
+            int added = AppendOpenEdgesFromMesh<TMeshType> (mout, aClusterId, c, emesh);
             for(int q = 0; q < added; q++)
               {
               daArea->InsertNextTuple1(ca[c].pArea);
