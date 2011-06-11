@@ -52,7 +52,7 @@ PDESubdivisionMedialModel
       }
 
     // If R is negative at an edge vertex, we have a problem, can not recover
-    if(a.flagCrest && a.R <= 0.0)
+    if(!mlAtom.IsVertexInternal(i) && a.R <= 0.0)
       throw MedialModelException("Non-positive tau passed to PDESubdivisionMedialModel");
     }
 

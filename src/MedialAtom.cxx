@@ -46,6 +46,10 @@ MedialAtom
 
   // By default, atoms are assumed to depend on variation
   order = 0;
+
+  // Reset the crest flag
+  flagCrest = false;
+  flagValid = false;
 }
 
 void
