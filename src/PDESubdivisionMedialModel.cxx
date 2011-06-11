@@ -50,6 +50,10 @@ PDESubdivisionMedialModel
       a.xLapR += w * xCoefficients[j + 3];
       a.R += w * xCoefficients[j + 4];
       }
+
+    // If R is negative at an edge vertex, we have a problem, can not recover
+    if(a.flagCrest && a.R <= 0.0)
+      throw MedialModelException("Non-positive tau passed to PDESubdivisionMedialModel");
     }
 
   // Now have the solver solve the equation

@@ -71,6 +71,10 @@ struct MedialAtom
   // The magnitude of gradR and the term sqrt(1-xGradRMagSqr)
   double xGradRMagSqr, xNormalFactor;
 
+  // Square of the derivative of R per unit step along the medial edge. This
+  // should be less than 1, otherwise gradR would not point outwards
+  double Rs2;
+
   // The magnitude of gradR and the term sqrt(1- xGradRMagSqr) before
   // any fixes have been applied in BruteForceModel
   // THIS IS A HACK!!!

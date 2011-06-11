@@ -1405,39 +1405,47 @@ BoundaryGradRPenaltyTerm
   // Iterate over all crest atoms
   for(size_t i = 0; i < S->xAtomGrid->GetNumberOfAtoms(); i++)
     {
-    if(S->xAtoms[i].flagCrest)
+    MedialAtom &a = S->xAtoms[i];
+
+    // First the penalty that penalizes atoms at the edge for having a gradR that
+    // is not equal to 1. This is only in effect for BruteForce models. For the 
+    // PDE model this should always give a zero penalty
+    if(a.flagCrest)
       {
       // Get the badness of the atom. At boundary atoms, the badness
       // is a function of how far |gradR| is from zero. We can set the
       // penalty to have the form alpha * (1 - |gradR|^2)^2
       // double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
       // double penalty = (xScale * devn * devn);
-      double penalty = 0.0001 * (1.0 / S->xAtoms[i].xGradRMagSqrOrig);
+      double penalty = 0.0001 * (1.0 / a.xGradRMagSqrOrig);
 
       // Register the gradR
-      saGradR.Update(S->xAtoms[i].xGradRMagSqrOrig);
+      saGradR.Update(a.xGradRMagSqrOrig);
       saPenalty.Update(penalty); 
       }
-    else
-      {
-      // For atoms that aren't at the medial edge, we want to keep gradR
-      // from being anywhere near 1, since that will make the derivatives
-      // of the boundary nodes go to infinity, killing the optimizer. So 
-      // we let the penalty be of the form alpha / (1-gradR^2)^2
-      //
-      // Why this particular shape of the penalty? Because the penalty for
-      // |gradR|^2 = 0.95 is 60 times greater than for |gradR|^2 = 0.5 and
-      // |gradR|^2 = 0.99 is 1400 times greater than for |gradR|^2 = 0.5
-      // which I feel is an acceptably steep polynomial penalty
-      saGradRInt.Update(S->xAtoms[i].xGradRMagSqrOrig);
 
-      // p_ref is the reference penalty for |gradR|^2 = 0.5
-      const double p_ref = 0.5625;
-      double t = (1.0 - S->xAtoms[i].xGradRMagSqrOrig);
-      double t2 = t * t;
-      double penalty = 0.0001 * (p_ref / t2);
-      saPenalty.Update(penalty);
-      }
+    // Next the penalty term that penalizes gradR for being close to one at internal
+    // atoms, and that penalizes dRdS for being close to one at edge atoms. The same
+    // penalty structure applies in both cases.
+    double x = (a.flagCrest) ? a.Rs2 : a.xGradRMagSqrOrig;
+
+    // For atoms that aren't at the medial edge, we want to keep gradR
+    // from being anywhere near 1, since that will make the derivatives
+    // of the boundary nodes go to infinity, killing the optimizer. So 
+    // we let the penalty be of the form alpha / (1-gradR^2)^2
+    //
+    // Why this particular shape of the penalty? Because the penalty for
+    // |gradR|^2 = 0.95 is 60 times greater than for |gradR|^2 = 0.5 and
+    // |gradR|^2 = 0.99 is 1400 times greater than for |gradR|^2 = 0.5
+    // which I feel is an acceptably steep polynomial penalty
+    saGradRInt.Update(x);
+
+    // p_ref is the reference penalty for |gradR|^2 = 0.5
+    const double p_ref = 0.5625;
+    double t = (1.0 - x);
+    double t2 = t * t;
+    double penalty = 0.0001 * (p_ref / t2);
+    saPenalty.Update(penalty);
     }
 
   // Return the mean penalty
@@ -1456,30 +1464,36 @@ ComputePartialDerivative(
   size_t nAtoms = S->xAtomGrid->GetNumberOfAtoms();
   for(size_t i = 0; i < nAtoms; i++)
     {
-    if(dS->xAtoms[i].order <= 1)
+    MedialAtom &a = S->xAtoms[i], &da = dS->xAtoms[i];
+
+    if(da.order <= 1)
       {
-      if(S->xAtoms[i].flagCrest)
+      // The part for not being 1 at edge
+      if(a.flagCrest)
         {
         // double devn = (1.0 - S->xAtoms[i].xGradRMagSqr);
         // double ddevn = - dS->xAtoms[i].xGradRMagSqr;
         // double d_penalty = 2 * xScale * devn * ddevn; 
         // dTotalPenalty += d_penalty;
         double d_penalty = 0.0001 * 
-          (-dS->xAtoms[i].xGradRMagSqrOrig / (S->xAtoms[i].xGradRMagSqrOrig * S->xAtoms[i].xGradRMagSqrOrig));
+          (-da.xGradRMagSqrOrig / (a.xGradRMagSqrOrig * a.xGradRMagSqrOrig));
         dTotalPenalty += d_penalty;
         }
-      else
-        {
-        // p_ref is the reference penalty for |gradR|^2 = 0.5
-        const double p_ref = 0.5625;
-        double t = (1.0 - S->xAtoms[i].xGradRMagSqrOrig);
-        double dt = - dS->xAtoms[i].xGradRMagSqrOrig;
-        double t2 = t * t;
-        double dt2 = 2.0 * t * dt;
-        double penalty = 0.0001 * (p_ref / t2);
-        double d_penalty = penalty * (- dt2 / t2); 
-        dTotalPenalty += d_penalty;
-        }
+
+      // The part for being close to 1 on the interior or for the along-edge
+      // component being close to 1 at edge
+      double x = (a.flagCrest) ? a.Rs2 : a.xGradRMagSqrOrig;
+      double dx = (a.flagCrest) ? da.Rs2 : da.xGradRMagSqrOrig;
+
+      // p_ref is the reference penalty for |gradR|^2 = 0.5
+      const double p_ref = 0.5625;
+      double t = (1.0 - x);
+      double dt = - dx;
+      double t2 = t * t;
+      double dt2 = 2.0 * t * dt;
+      double penalty = 0.0001 * (p_ref / t2);
+      double d_penalty = penalty * (- dt2 / t2); 
+      dTotalPenalty += d_penalty;
       }
     }
 

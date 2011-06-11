@@ -313,6 +313,7 @@ int TestGradientComputation(
       dtq.Update("Atom's Fu", a0.Fu, a1.Fu, a2.Fu, a3.Fu, a4.Fu, eps);
       dtq.Update("Atom's Fv", a0.Fv, a1.Fv, a2.Fv, a3.Fv, a4.Fv, eps);
       dtq.Update("Atom's N", a0.N, a1.N, a2.N, a3.N, a4.N, eps);
+      dtq.Update("Atom's Rs2", a0.Rs2, a1.Rs2, a2.Rs2, a3.Rs2, a4.Rs2, eps);
 
       // Look at the difference in the specific terms of metric tensor
       for(size_t u = 0; u < 2; u++) for(size_t v = 0; v < 2; v++)

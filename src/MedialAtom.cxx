@@ -33,6 +33,7 @@ MedialAtom
   xGradR.fill(0.0);
   xLapR = 0.0;
   xGradRMagSqr = 0.0; xNormalFactor = 0.0; xGradRMagSqrOrig = 0.0;
+  Rs2 = 0;
 
   xBnd[0].X.fill(0.0); xBnd[0].N.fill(0.0);
   xBnd[1].X.fill(0.0); xBnd[1].N.fill(0.0);
@@ -88,6 +89,9 @@ bool MedialAtom::ComputeBoundaryAtoms(bool flagEdgeAtom)
     // There is a zero badness value
     xGradRMagSqr = 1.0;
     xNormalFactor = 0.0;
+
+    // Compute (dR / ds)^2
+    Rs2 = Fv * Fv / (4 * F * G.xCovariantTensor[1][1]);
 
     // Basically, we expect each medial model to give us boundary atoms
     // with gradR ~= 1. We simply set xBnd.N = -gradR. If the magnitude
@@ -162,6 +166,9 @@ bool MedialAtom::ComputeBoundaryAtomsUsingR(bool flagEdgeAtom)
 
     // There is a zero badness value
     xNormalFactor = 0.0;
+
+    // Compute (dR/ds) ^ 2
+    Rs2 = Rv * Rv / G.xCovariantTensor[1][1];
 
     // If the magnitude of gradR is zero, we are in real trouble
     if(xGradRMagSqr == 0.0)
@@ -286,6 +293,13 @@ MedialAtom::ComputeBoundaryAtomDerivatives(
   if(flagCrest) 
     {
     dAtom.xNormalFactor = 0.0;
+
+    // Compute the derivative of (dR/ds)^2
+    dAtom.Rs2 = (Fv == 0) ? 0 : Rs2 * (
+      - H / F 
+      - dAtom.G.xCovariantTensor[1][1] / G.xCovariantTensor[1][1]
+      + 2 * Hv / Fv); 
+
     if(flagValid)
       {
       // Compute (gradR / |gradR|)'
@@ -297,6 +311,7 @@ MedialAtom::ComputeBoundaryAtomDerivatives(
       // Compute the boundary atoms
       dAtom.xBnd[1].X = dAtom.xBnd[0].X = 
         Y + R * dAtom.xBnd[0].N + P * xBnd[0].N;
+
 
       // The normal term vanishes
       // dAtom.xBnd[0].N = dAtom.xBnd[1].N = - dAtom.xGradR;
@@ -391,6 +406,11 @@ MedialAtom::ComputeBoundaryAtomDerivativesUsingR(
   if(flagCrest) 
     {
     dAtom.xNormalFactor = 0.0;
+
+    dAtom.Rs2 = (Rv == 0) ? 0 : Rs2 * (
+      - dAtom.G.xCovariantTensor[1][1] / G.xCovariantTensor[1][1] 
+      + 2 * Pv / Rv);
+
     if(flagValid)
       {
       // Compute (gradR / |gradR|)'
@@ -839,6 +859,7 @@ void AddScaleMedialAtoms(
 
   C.N = A.N + p * B.N;
   C.xGradR = A.xGradR + p * B.xGradR;
+  C.Rs2 = A.Rs2 + p * B.Rs2;
   // C.xGradPhi = A.xGradPhi + p * B.xGradPhi;
   C.xGradRMagSqr = A.xGradRMagSqr + p * B.xGradRMagSqr;
   C.xGradRMagSqrOrig = A.xGradRMagSqrOrig + p * B.xGradRMagSqrOrig;
@@ -914,6 +935,7 @@ void MedialAtomCentralDifference(
   C.xGradRMagSqr = p * (A.xGradRMagSqr - B.xGradRMagSqr);
   C.xGradRMagSqrOrig = p * (A.xGradRMagSqrOrig - B.xGradRMagSqrOrig);
   C.xNormalFactor = p * (A.xNormalFactor - B.xNormalFactor);
+  C.Rs2 = p * (A.Rs2 - B.Rs2);
 
   // The differential geometry is also added and scaled 
   C.G.g = p * (A.G.g - B.G.g);

@@ -763,6 +763,7 @@ MeshMedialPDESolver
     // Compute the boundary atoms from this geometric information
     a.ComputeBoundaryAtoms(!topology->IsVertexInternal(i));
 
+
 #elif defined(TRANSFER_LOGR2)
 
     // Set the phi in the atom
@@ -796,6 +797,13 @@ MeshMedialPDESolver
         throw MedialModelException("Exception: |gradR| > 1 in non-crest atom");
       }
 
+    else if(a.flagCrest && a.Rs2 > 0.99)
+      {
+      // Issue a verbal warning (because this can lead to failed optimization)
+      cerr << "WARNING: |dR/dS|^2 = " << a.Rs2 << " (too close to 1) in crest atom " << i << endl;
+      if(a.Rs2 >= 1.0)
+        throw MedialModelException("Exception: |dR/dS| >= 1 in crest atom");
+      }
     }
 }
 

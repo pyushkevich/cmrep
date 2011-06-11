@@ -685,11 +685,11 @@ int main(int argc, char *argv[])
       fCluster->GetNumberOfYDivisions(),
       fCluster->GetNumberOfZDivisions());
     printf("  Input mesh: %d points, %d cells\n", 
-      skelfinal->GetNumberOfPoints(),  
-      skelfinal->GetNumberOfCells());
+      (int) skelfinal->GetNumberOfPoints(),  
+      (int) skelfinal->GetNumberOfCells());
     printf("  Output mesh: %d points, %d cells\n", 
-      fCluster->GetOutput()->GetNumberOfPoints(),  
-      fCluster->GetOutput()->GetNumberOfCells());
+      (int) fCluster->GetOutput()->GetNumberOfPoints(),  
+      (int) fCluster->GetOutput()->GetNumberOfCells());
 
     // Convert cell data to point data again
     vtkCellDataToPointData *c2p = vtkCellDataToPointData::New();
