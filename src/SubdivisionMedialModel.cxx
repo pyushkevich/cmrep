@@ -102,7 +102,9 @@ SubdivisionMedialModel
 
   if(xAffineDescriptor)
     delete xAffineDescriptor;
-  xAffineDescriptor = new PointArrayAffineTransformDescriptor(GetNumberOfComponents());
+  xAffineDescriptor = 
+    new PointArrayAffineTransformDescriptor(
+      GetNumberOfComponents(), GetScalingComponents());
 
 }
 

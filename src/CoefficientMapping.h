@@ -182,21 +182,19 @@ public:
     A[0][0] += 1.0; A[1][1] += 1.0; A[2][2] += 1.0;
 
     // Apply the affine transform to the coefficients
-    AffineTransformDescriptor::Mat AA(3,3);
-    AA = A;
-    return xTransformDescriptor->ApplyAffineTransform(C, AA, b, xCenter);
+    return xTransformDescriptor->ApplyAffineTransform(C, A, b, xCenter);
     }
 
   /** Compute the variation J_T(P) * v_P given C, P and v_P */
   Vec ApplyJacobianInParameters(const Vec &C, const Vec &P, const Vec &varP)
     {
     // Split the variation into matrix A and vector b
+    AffineMatrix A(P.data_block());
     AffineMatrix varA(varP.data_block());
     AffineVector varb = varP.extract(3, 9);
 
     // Compute the corresponding variation using the model
-    AffineTransformDescriptor::Mat AA = varA;
-    return xTransformDescriptor->ApplyJacobianInParameters(C, AA, varb, xCenter);
+    return xTransformDescriptor->ApplyJacobianInParameters(C, A, varA, varb, xCenter);
     }
 
   /** Compute the variation J_T(C) * v_C given C, P and v_C */
@@ -210,8 +208,7 @@ public:
     A[0][0] += 1.0; A[1][1] += 1.0; A[2][2] += 1.0;
 
     // Compute the corresponding variation using the model
-    AffineTransformDescriptor::Mat AA = A;
-    return xTransformDescriptor->ApplyJacobianInCoefficients(varC, AA, b, xCenter);
+    return xTransformDescriptor->ApplyJacobianInCoefficients(varC, A, b, xCenter);
     }
 
   /** Affine transform is linear */

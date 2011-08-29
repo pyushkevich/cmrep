@@ -912,8 +912,8 @@ int TestAffineTransform(const char *fnMPDE)
   // Generate a random affine transform. Because the PDE solution may change
   // under shear and non-uniform scaling, we stick just to the similarity
   // transform (A is an orthogonal matrix)
-  AffineTransformDescriptor::Vec b(3, 0.0), c(3, 0.0);
-  AffineTransformDescriptor::Mat A(3, 3, 0.0);
+  AffineTransformDescriptor::Vec3 b(0.0), c(0.0);
+  AffineTransformDescriptor::Mat33 A(0.0);
 
   // Generate random vectors V1, V2 for making the matrix A, plus b and c
   SMLVec3d v1, v2;

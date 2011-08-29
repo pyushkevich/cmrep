@@ -36,6 +36,10 @@ public:
    */
   virtual size_t GetNumberOfComponents() const = 0;
 
+  // Get a list of scaling coefficients. These are the coefficients that should
+  // be scaled by similarity transforms
+  virtual std::list<size_t> GetScalingComponents() const = 0;
+
   /** Get the number of optimizable coefficients that define this model */
   size_t GetNumberOfCoefficients() const
     { return xCoefficients.size(); }

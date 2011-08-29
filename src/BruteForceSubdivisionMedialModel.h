@@ -26,6 +26,10 @@ public:
   /** There are 4 components (x,y,z,r) */
   size_t GetNumberOfComponents() const { return 4; }
 
+  /** The fifth component is scaling */
+  std::list<size_t> GetScalingComponents() const
+    { std::list<size_t> lst; lst.push_back(3); return lst; }
+
   void SetMesh(const MeshLevel &mesh, 
     const Vec &C, const Vec &u, const Vec &v,
     size_t nAtomSubs, size_t nCoeffSubs);

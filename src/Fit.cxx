@@ -350,6 +350,7 @@ int main(int argc, char *argv[])
           {
           cout << "Treating input image as smooth speed image (bkg -1, fore: +1)" << endl;
           imgfloat.LoadFromFile(fn_image.c_str());
+          imgfloat.SetOutsideValue(-1.0);
           }
         else
           {

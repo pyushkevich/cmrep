@@ -17,6 +17,10 @@ public:
   /** There are 5 components */
   size_t GetNumberOfComponents() const { return 5; }
 
+  /** The fifth component is scaling */
+  std::list<size_t> GetScalingComponents() const
+    { std::list<size_t> lst; lst.push_back(3); lst.push_back(4); return lst; }
+
   /** Set the mesh and initial coefficient array. There are 5 
       coefficients per control point: x,y,z,rho and tau         */
   void SetMesh(

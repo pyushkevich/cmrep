@@ -2671,13 +2671,14 @@ void MedialPCA::ComputePCA(MedialPDE *mpde)
     Vec xAlignCoeff = affDesc->ApplyAffineTransform(
       xModelCoefficients[i], s[i] * R[i].transpose(), t[i], Vec(3, 0.0));
 
+
     // Create a new MedialPDE (?)
     // CartesianMPDE xJunk(8,12,32,80);
     // xJunk.xMedialModel->SetCoefficientArray(xAlignCoeff);
     // xJunk.Solve();
     cout << "Compute aligned " << i << endl;
     xMedialModel->SetCoefficientArray(xAlignCoeff);
-    xMedialModel->ComputeAtoms(xHints[i].data_block());
+    // xMedialModel->ComputeAtoms(xHints[i].data_block());
     }
 
   // Create a principal components object

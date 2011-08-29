@@ -12,6 +12,7 @@
 #include "vnl/vnl_matrix_fixed.h"
 #include "ReadWriteVTK.h"
 #include <iostream>
+#include "itkLinearInterpolateImageFunction.h"
 
 #include "itk_to_nifti_xform.h"
 
@@ -19,7 +20,9 @@ using namespace std;
 
 int usage()
 {
-  cout << "Usage: vtklevelset input.img output.vtk threshold" << endl;
+  cout << "Usage: vtklevelset [options] input.img output.vtk threshold" << endl;
+  cout << "Options: " << endl;
+  cout << "  -c clipimage.img   : clip output (keep part where clipimage > 0" << endl;
   return -1;
 }
 
@@ -40,16 +43,55 @@ void ConnectITKToVTK(itk::VTKImageExport<TImage> *fltExport,vtkImageImport *fltI
   fltImport->SetCallbackUserData( fltExport->GetCallbackUserData());
 }
 
+template<class TImage>
+class ClipFunction : public vtkImplicitFunction 
+{
+public:
+
+  vtkTypeMacro(ClipFunction, vtkImplicitFunction);
+
+  // This is used by the clip code
+  double EvaluateFunction(double x[3]);
+
+  // This is not really used in the clip code
+  void EvaluateGradient(double x[3], double g[3]) {}
+
+  // Set the image
+  void SetImage(TImage *image);
+
+private:
+
+  typedef itk::LinearInterpolateImageFunction<TImage> func;
+
+
+
+};
+
 int main(int argc, char *argv[])
 {
-  if(argc != 4)
+  if(argc < 4)
     return usage();
+
+  // Clip image
+  const char *imClip = NULL;
+  for(int i = 1; i < argc - 3; i++)
+    {
+    if(!strcmp(argv[i], "-c"))
+      {
+      imClip = argv[++i];
+      }
+    else 
+      { 
+      cerr << "Unknown option " << argv[i] << endl;
+      return -1;
+      }
+    }
 
   // Read the input image
   typedef itk::OrientedRASImage<float, 3> ImageType;
   typedef itk::ImageFileReader<ImageType> ReaderType;
   ReaderType::Pointer fltReader = ReaderType::New();
-  fltReader->SetFileName(argv[1]);
+  fltReader->SetFileName(argv[argc-3]);
   fltReader->Update();
   ImageType::Pointer imgInput = fltReader->GetOutput();
 
@@ -63,7 +105,7 @@ int main(int argc, char *argv[])
     imin = std::min(imin, x);
     }
 
-  float cut = atof(argv[3]);
+  float cut = atof(argv[argc-1]);
   cout << "Image Range: [" << imin << ", " << imax << "]" << endl;
   cout << "Taking level set at " << cut << endl;
 
@@ -83,6 +125,9 @@ int main(int argc, char *argv[])
   fltMarching->SetNumberOfContours(1);
   fltMarching->SetValue(0,cut);
   fltMarching->Update();
+
+  // If there is a clip filter, apply it
+  
 
   // Create the transform filter
   vtkTransformPolyDataFilter *fltTransform = vtkTransformPolyDataFilter::New();
@@ -116,5 +161,5 @@ int main(int argc, char *argv[])
     }
 
   // Write the output
-  WriteVTKData(mesh, argv[2]);
+  WriteVTKData(mesh, argv[argc-2]);
 }
