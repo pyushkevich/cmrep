@@ -425,14 +425,10 @@ int main(int argc, char **argv)
       for(unsigned int j=0;j<3;j++)
         pt[j] = x[j];
 
-      printf("%8.4f   %8.4f   %8.4f\t", pt[0], pt[1], pt[2]);
-
       ContinuousIndex<double,3> idx;
       img->TransformRASPhysicalPointToContinuousIndex(pt, idx);
       for(unsigned int j=0;j<3;j++)
         vtx[it][j] = idx[j];
-
-      printf("%8.4f   %8.4f   %8.4f\n", vtx[it][0], vtx[it][1], vtx[it][2]);
 
       ++it;
       }      
