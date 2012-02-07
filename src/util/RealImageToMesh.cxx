@@ -13,6 +13,7 @@
 #include "ReadWriteVTK.h"
 #include <iostream>
 #include "itkLinearInterpolateImageFunction.h"
+#include "vtkImplicitFunction.h"
 
 #include "itk_to_nifti_xform.h"
 

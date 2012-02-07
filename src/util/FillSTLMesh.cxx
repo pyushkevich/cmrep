@@ -18,6 +18,8 @@
 #include <itkImage.h>
 #include <itkImageFileReader.h>
 
+#include "itkOrientedRASImage.h"
+#include <itk_to_nifti_xform.h>
 #include "DrawTriangles.h"
 
 #ifndef vtkFloatingPointType
@@ -54,12 +56,9 @@ int usage()
   cout << "   -a NN NN NN XX              Automatic bounding box computation. First three " << endl;
   cout << "                               parameters are the voxel size, the last is the margin in mm" << endl;
   cout << "   -v                          Visualize (render) the STL mesh on the screen" << endl;
-  // updated by jwsuh 04/06/2011
-  // to use a reference image
-  // and, to use different segmentation mask value.
   cout << "   -ref file                   reference file for the origin, size, resolution, etc." << endl;
   cout << "   -c number                   set segmentation mask value (default: 1) " << endl;
- return -1;
+  return -1;
 }
 
 void drawPolyData(vtkPolyData *poly)
@@ -143,7 +142,7 @@ int main(int argc, char **argv)
         {
         fnRef = argv[++i];
         useRef = true;
-	flagAutoSize = true;
+        flagAutoSize = true;
         }
       else if(arg == "-o")
         {
@@ -181,7 +180,7 @@ int main(int argc, char **argv)
         }
       else if(arg == "-c")
         {
-	  segColor = atoi(argv[++i]);
+        segColor = atoi(argv[++i]);
         }
       else
         {
@@ -206,14 +205,14 @@ int main(int argc, char **argv)
   //cout << endl << "useRef ="  << useRef << endl;
   if(useRef)
     {
-      cout << "Reference file: "<< fnRef << endl;
-        // Read the reference image
-      typedef itk::ImageFileReader<RefImageType> RefReaderType;
-      RefReaderType::Pointer Refreader = RefReaderType::New();
-      Refreader->SetFileName(fnRef.c_str());
-      cout << "Reading the Reference file ..." << endl;
-      Refreader->Update();
-      ref = Refreader->GetOutput();
+    cout << "Reference file: "<< fnRef << endl;
+    // Read the reference image
+    typedef itk::ImageFileReader<RefImageType> RefReaderType;
+    RefReaderType::Pointer Refreader = RefReaderType::New();
+    Refreader->SetFileName(fnRef.c_str());
+    cout << "Reading the Reference file ..." << endl;
+    Refreader->Update();
+    ref = Refreader->GetOutput();
 
     }
 
@@ -222,44 +221,42 @@ int main(int argc, char **argv)
   if(!flagAutoSize)
     {
     cout << "   Image resolution  : " << res[0] << " by " << res[1] << " by " << res[2] << endl;
-    cout << "   Image box origin  : {" << bb[0][0] << ", " << bb[0][1] << ", " << bb[0][2] << "}" 
-      << endl;
-    cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" 
-      << endl << endl;
+    cout << "   Image box origin  : {" << bb[0][0] << ", " << bb[0][1] << ", " << bb[0][2] << "}" << endl;
+    cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" << endl << endl;
     }
   else if( (flagAutoSize) && (useRef)) 
     {
-      //      cout << " else if (flagAutoSize && useRef) " << endl;
-      bb[0][0] = ref->GetOrigin()[0];
-      bb[0][1] = ref->GetOrigin()[1];
-      bb[0][2] = ref->GetOrigin()[2];
-      cout << "Origin: ("<<bb[0][0]<<", "<<bb[0][1]<<", "<<bb[0][2]<<")"<<endl;
-   
-      bb[1][0] = ref->GetRequestedRegion().GetSize()[0];
-      bb[1][1] = ref->GetRequestedRegion().GetSize()[1];
-      bb[1][2] = ref->GetRequestedRegion().GetSize()[2];
-      cout << "Size: ("<<bb[1][0]<<", "<<bb[1][1]<<", "<<bb[1][2]<<")"<<endl;
+    //      cout << " else if (flagAutoSize && useRef) " << endl;
+    bb[0][0] = ref->GetOrigin()[0];
+    bb[0][1] = ref->GetOrigin()[1];
+    bb[0][2] = ref->GetOrigin()[2];
+    cout << "Origin: ("<<bb[0][0]<<", "<<bb[0][1]<<", "<<bb[0][2]<<")"<<endl;
 
-      xAutoSpacing[0] = ref->GetSpacing()[0];
-      xAutoSpacing[1] = ref->GetSpacing()[1];
-      xAutoSpacing[2] = ref->GetSpacing()[2];
+    bb[1][0] = ref->GetRequestedRegion().GetSize()[0];
+    bb[1][1] = ref->GetRequestedRegion().GetSize()[1];
+    bb[1][2] = ref->GetRequestedRegion().GetSize()[2];
+    cout << "Size: ("<<bb[1][0]<<", "<<bb[1][1]<<", "<<bb[1][2]<<")"<<endl;
 
-      cout << "Spacing X="<< xAutoSpacing[0]
-	   << "  Spacing Y="<< xAutoSpacing[1]
-	   << "  Spacing Z="<< xAutoSpacing[2] << endl << endl;
+    xAutoSpacing[0] = ref->GetSpacing()[0];
+    xAutoSpacing[1] = ref->GetSpacing()[1];
+    xAutoSpacing[2] = ref->GetSpacing()[2];
 
-      // Compute the resolution
-      // Actually res[] is not used as resolution, but used as image size
-      // by wook 4/6/2011
-      res[0] = (int) bb[1][0];
-      res[1] = (int) bb[1][1];
-      res[2] = (int) bb[1][2];
+    cout << "Spacing X="<< xAutoSpacing[0]
+      << "  Spacing Y="<< xAutoSpacing[1]
+      << "  Spacing Z="<< xAutoSpacing[2] << endl << endl;
 
-      cout << "res X="<< res[0]
-	   << "  res Y="<< res[1]
-	   << "  res Z="<< res[2] << endl << endl;
+    // Compute the resolution
+    // Actually res[] is not used as resolution, but used as image size
+    // by wook 4/6/2011
+    res[0] = (int) bb[1][0];
+    res[1] = (int) bb[1][1];
+    res[2] = (int) bb[1][2];
 
-      cout << "segColor = "<<segColor << endl;
+    cout << "res X="<< res[0]
+      << "  res Y="<< res[1]
+      << "  res Z="<< res[2] << endl << endl;
+
+    cout << "segColor = "<<segColor << endl;
     }
   else
     {
@@ -344,10 +341,8 @@ int main(int argc, char **argv)
 
     // Report the bounds
     cout << "   Image resolution  : " << res[0] << " by " << res[1] << " by " << res[2] << endl;
-    cout << "   Image box origin  : {" << bb[0][0] << ", " << bb[0][1] << ", " << bb[0][2] << "}" 
-      << endl;
-    cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" 
-      << endl << endl;
+    cout << "   Image box origin  : {" << bb[0][0] << ", " << bb[0][1] << ", " << bb[0][2] << "}" << endl;
+    cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" << endl << endl;
     }
 
   if(pd->GetBounds()[0] < bb[0][0] || pd->GetBounds()[1] > bb[0][0] + bb[1][0] ||
@@ -356,6 +351,59 @@ int main(int argc, char **argv)
     {
     cout << "User specified bounds (-o -s) are out of range! Can't continue!" << endl;
     return -1;
+    }
+
+  // Clean up
+  fltGenericReader->Delete();
+
+  // Create a ITK image to store the results
+  typedef OrientedRASImage<unsigned char,3> ImageType;
+  ImageType::Pointer img = ImageType::New();
+  ImageType::RegionType region;
+
+
+  if(useRef)
+    {
+    img->SetRegions(ref->GetBufferedRegion());
+    img->SetOrigin(ref->GetOrigin());
+    img->SetSpacing(ref->GetSpacing());
+    img->SetDirection(ref->GetDirection());
+    img->Allocate();
+    img->FillBuffer(0);
+    }
+  else
+    {
+    // Allocate the image
+    region.SetSize(0,res[0]); region.SetSize(1,res[1]); region.SetSize(2,res[2]);
+    img->SetRegions(region);
+    img->Allocate();
+    img->FillBuffer(0);
+
+
+    // Make it RAS!
+    ImageType::DirectionType dir;
+    dir(0,0) = -1; dir(1,1) = -1; dir(2,2) = 1;
+    img->SetDirection(dir);
+
+    // Set the origin and spacing of the image
+    ImageType::SpacingType xSpacing;
+    ImageType::PointType xOrigin;
+
+    // Make origin RAS
+    xOrigin[0] = -bb[0][0];
+    xOrigin[1] = -bb[0][1];
+    xOrigin[2] = bb[0][2];
+    img->SetOrigin(xOrigin);
+
+    // Set spacing
+    for(unsigned int d = 0; d < 3; d++)
+      {
+      if(flagAutoSize)
+        xSpacing[d] = xAutoSpacing[d];
+      else
+        xSpacing[d] = bb[1][d] / res[d];
+      }
+    img->SetSpacing(xSpacing);
     }
 
   // Create a vertex table from the polydata
@@ -370,43 +418,26 @@ int main(int argc, char **argv)
     for(unsigned int i=0;i<3;i++)
       {
       vtkFloatingPointType *x = pd->GetPoints()->GetPoint(pts[i]);
-      // float *x = pd->GetPoints()->GetPoint(pts[i]);
       vtx[it] = (double *) malloc(3*sizeof(double));
+
+      // Use ITK to map from spatial to voxel coordinates
+      Point<double,3> pt;
       for(unsigned int j=0;j<3;j++)
-        {
-        vtx[it][j] = res[j] * (x[j] - bb[0][j]) / bb[1][j];
-        }
+        pt[j] = x[j];
+
+      printf("%8.4f   %8.4f   %8.4f\t", pt[0], pt[1], pt[2]);
+
+      ContinuousIndex<double,3> idx;
+      img->TransformRASPhysicalPointToContinuousIndex(pt, idx);
+      for(unsigned int j=0;j<3;j++)
+        vtx[it][j] = idx[j];
+
+      printf("%8.4f   %8.4f   %8.4f\n", vtx[it][0], vtx[it][1], vtx[it][2]);
 
       ++it;
       }      
     }
 
-
-  // Clean up
-  fltGenericReader->Delete();
-
-  // Create a ITK image to store the results
-  typedef Image<unsigned char,3> ImageType;
-  ImageType::Pointer img = ImageType::New();
-  ImageType::RegionType region;
-
-
-  if(useRef)
-    {
-        img->SetRegions(ref->GetBufferedRegion());
-	img->SetOrigin(ref->GetOrigin());
-	img->SetSpacing(ref->GetSpacing());
-	img->SetDirection(ref->GetDirection());
-	img->Allocate();
-	img->FillBuffer(0);
-    }
-  else
-    {
-      region.SetSize(0,res[0]); region.SetSize(1,res[1]); region.SetSize(2,res[2]);
-      img->SetRegions(region);
-      img->Allocate();
-      img->FillBuffer(0);
-    }
 
   // Convert the polydata to an image
   if(doFloodFill)
@@ -421,23 +452,6 @@ int main(int argc, char **argv)
     }  
 
   cout << "zzz" << endl;
-  if(!useRef){
-
-    cout << "here?" <<endl;
-    // Set the origin and spacing of the image
-    ImageType::SpacingType xSpacing;
-    ImageType::PointType xOrigin;
-    for(unsigned int d = 0; d < 3; d++)
-      {
-	xOrigin[d] = bb[0][d];
-	if(flagAutoSize)
-	  xSpacing[d] = xAutoSpacing[d];
-	else
-	  xSpacing[d] = bb[1][d] / res[d];
-      }
-    img->SetOrigin(xOrigin);
-    img->SetSpacing(xSpacing);
-  }
 
   cout << "ORIGIN: " << img->GetOrigin() << endl;
 
