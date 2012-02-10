@@ -1,1 +1,42 @@
-BoundaryJacobianDistortionPenaltyTerm.ReferenceModel = @CMREP_SOURCE_DIR@/testing/t001_template_brute.cmrep
+DefaultParameters.Mapping = Identity
+DefaultParameters.ImageMatch = VolumeOverlap
+DefaultParameters.MedialRegularityTerm.Weight = 0
+DefaultParameters.BoundaryCurvaturePenaltyTerm.Weight = 0.0
+DefaultParameters.BoundaryGradRPenaltyTerm.Weight = 100.0
+DefaultParameters.LoopTangentSchemeValidityPenaltyTerm.Weight = 0.01
+DefaultParameters.BoundaryJacobianEnergyTerm.Weight = 0.1
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyA = 20
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyB = 10
+DefaultParameters.RadiusPenaltyTerm.Weight = 0.00001
+DefaultParameters.AtomBadnessTerm.Weight = 0.0
+DefaultParameters.MedialCurvaturePenaltyTerm.Weight = 0
+DefaultParameters.MedialAnglesPenaltyTerm.Weight = 10
+DefaultParameters.BoundaryAnglesPenaltyTerm.Weight = 10
+
+# Define optimization stages
+Stage.ArraySize = 4
+
+# Alignment 
+Stage.Element[0].Name = align
+Stage.Element[0].Mode = AlignMoments
+Stage.Element[0].Blur = 1.2
+
+# Affine
+Stage.Element[1].Name = affine
+Stage.Element[1].Mode = FitToBinary
+Stage.Element[1].Blur = 1.2
+Stage.Element[1].MaxIterations = 200
+Stage.Element[1].Parameters.Mapping = Affine
+
+# First deformable stage
+Stage.Element[2].Name = def1
+Stage.Element[2].Mode = FitToBinary
+Stage.Element[2].Blur = 1.2
+Stage.Element[2].MaxIterations = 800
+
+# Second deformable stage
+Stage.Element[3].Name = def2
+Stage.Element[3].Mode = FitToBinary
+Stage.Element[3].Blur = 0.8
+Stage.Element[3].MaxIterations = 200
+Stage.Element[3].Refinement.Subdivision.Controls = 1
