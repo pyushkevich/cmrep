@@ -16,6 +16,7 @@
 #include "vtkImplicitFunction.h"
 
 #include "itk_to_nifti_xform.h"
+#include <vnl/vnl_inverse.h>
 
 using namespace std;
 
@@ -24,6 +25,7 @@ int usage()
   cout << "Usage: vtklevelset [options] input.img output.vtk threshold" << endl;
   cout << "Options: " << endl;
   cout << "  -c clipimage.img   : clip output (keep part where clipimage > 0" << endl;
+  cout << "  -v                 : export mesh in voxel coordinates (not physical)" << endl;
   return -1;
 }
 
@@ -75,11 +77,16 @@ int main(int argc, char *argv[])
 
   // Clip image
   const char *imClip = NULL;
+  bool voxelSpace = false;
   for(int i = 1; i < argc - 3; i++)
     {
     if(!strcmp(argv[i], "-c"))
       {
       imClip = argv[++i];
+      }
+    if(!strcmp(argv[i], "-v"))
+      {
+      voxelSpace = true;
       }
     else 
       { 
@@ -135,15 +142,32 @@ int main(int argc, char *argv[])
   fltTransform->SetInput(fltMarching->GetOutput());
  
   // Compute the transform from VTK coordinates to NIFTI/RAS coordinates
-  vnl_matrix_fixed<double, 4, 4> vtk2nii = 
-    ConstructVTKtoNiftiTransform(
+  typedef vnl_matrix_fixed<double, 4, 4> Mat44;
+  Mat44 vtk2out;
+  Mat44 vtk2nii = ConstructVTKtoNiftiTransform(
+    imgInput->GetDirection().GetVnlMatrix(),
+    imgInput->GetOrigin().GetVnlVector(),
+    imgInput->GetSpacing().GetVnlVector());
+
+  // If we actually asked for voxel coordinates, we need to fix that
+  if(voxelSpace)
+    {
+    Mat44 vox2nii = ConstructNiftiSform(
       imgInput->GetDirection().GetVnlMatrix(),
       imgInput->GetOrigin().GetVnlVector(),
       imgInput->GetSpacing().GetVnlVector());
+    
+    Mat44 nii2vox = vnl_inverse(vox2nii);
+    vtk2out = nii2vox * vtk2nii;
+    }
+  else
+    {
+    vtk2out = vtk2nii;
+    }
   
   // Update the VTK transform to match
   vtkTransform *transform = vtkTransform::New();
-  transform->SetMatrix(vtk2nii.data_block());
+  transform->SetMatrix(vtk2out.data_block());
   fltTransform->SetTransform(transform);
   fltTransform->Update();
 
