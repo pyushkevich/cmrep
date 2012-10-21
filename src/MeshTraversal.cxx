@@ -236,6 +236,7 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
 
   // Associate each half-edge with a triangle
   Triangle tri;
+  std::cout << "Adding triangle " << v0 << ", " << v1 << ", " << v2 << std::endl;
   for(size_t j = 0; j < 3; j++)
   {
     // Set the vertices in each triangle
@@ -248,7 +249,14 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
     // Insert the half-edge and check for uniqueness
     pair<TriangleMap::iterator, bool> rc = tmap.insert(make_pair(he, trep));
     if(!rc.second)
-      throw MedialModelException("Half-edge appears twice in the mesh, that is illegal!");
+      {
+      std::ostringstream oss;
+      oss << "Half-edge [" << v[(j+1) % 3] << "," << v[(j+2) % 3] << "] " <<
+        "appears twice in the mesh, making the mesh irregular. This is often" <<
+        "caused by meshes where an entire triangle lies on the medial edge" <<
+        "curve. The solution is to remove the bad triangle from the mesh" << std::endl;
+      throw MedialModelException(oss.str().c_str());
+      }
   }
 
   // Store the triangle

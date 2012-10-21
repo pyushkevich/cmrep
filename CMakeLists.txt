@@ -18,11 +18,11 @@ SET(CMREP_VERSION_PATCH 0)
 SET(CMREP_VERSION_FULL "${CMREP_VERSION_MAJOR}.${CMREP_VERSION_MINOR}.${CMREP_VERSION_PATCH}")
 
 # Get ITK
-FIND_PACKAGE(ITK 3.14 REQUIRED)
+FIND_PACKAGE(ITK REQUIRED)
 INCLUDE(${ITK_USE_FILE})
 
 # Get VTK
-FIND_PACKAGE(VTK 5.2 REQUIRED)
+FIND_PACKAGE(VTK REQUIRED)
 INCLUDE(${VTK_USE_FILE})
 
 # Where to get additional modules
@@ -98,6 +98,12 @@ IF(USE_MKL)
   ENDIF(MKL_LIBRARIES)
 ENDIF(USE_MKL)
 
+OPTION(USE_IPOPT "Use the IpOpt Solver" OFF)
+IF(USE_IPOPT)
+  FIND_PACKAGE(IpOpt REQUIRED)
+  INCLUDE_DIRECTORIES(${IPOPT_INCLUDE_DIR})
+  LINK_LIBRARIES(${IPOPT_LIBRARIES})
+ENDIF(USE_IPOPT)
 
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
@@ -197,10 +203,6 @@ SET(DIJKSTRA_SRCS
 # Create library of shortest path routines
 ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 
-# Define the ITK libraries
-SET(ITK_LIBRARIES
-  ITKNumerics ITKIO ITKCommon ITKBasicFilters)
-
 # Define the VTK libraries
 SET(VTK_LIBRARIES
   vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
@@ -242,6 +244,11 @@ ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
 
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
 TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
+
+IF(USE_IPOPT)
+  ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
+  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
+ENDIF(USE_IPOPT)
 
 # Add installation targets
 INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh

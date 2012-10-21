@@ -1,7 +1,7 @@
 #ifndef __itkOrientedRASImage_h_
 #define __itkOrientedRASImage_h_
 
-#include "itkOrientedImage.h"
+#include "itkImage.h"
 
 namespace itk {
 
@@ -9,12 +9,12 @@ namespace itk {
  * Oriented image with RAS physical coordinates (as opposed to LPS)
  */
 template <class TPixel, unsigned int VImageDimension>
-class ITK_EXPORT OrientedRASImage : public OrientedImage<TPixel, VImageDimension>
+class ITK_EXPORT OrientedRASImage : public Image<TPixel, VImageDimension>
 {
 public:
   /** Standard class typedefs */
   typedef OrientedRASImage               Self;
-  typedef OrientedImage<TPixel, VImageDimension>  Superclass;
+  typedef Image<TPixel, VImageDimension>  Superclass;
   typedef SmartPointer<Self>  Pointer;
   typedef SmartPointer<const Self>  ConstPointer;
   typedef WeakPointer<const Self>  ConstWeakPointer;
@@ -24,7 +24,7 @@ public:
   itkNewMacro(Self);
 
   /** Run-time type information (and related methods). */
-  itkTypeMacro(OrientedRASImage, OrientedImage);
+  itkTypeMacro(OrientedRASImage, Image);
 
   /** Index typedef support. An index is used to access pixel values. */
   typedef typename Superclass::IndexType  IndexType;

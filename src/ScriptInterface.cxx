@@ -1058,8 +1058,8 @@ void MedialPDE::MatchImageByMoments(FloatImage *image, unsigned int nCuts)
   // Decompose xCov and yCov into eigenvalues
   vnl_vector<double> Dx(3), Dy(3);
   vnl_matrix<double> Vx(3,3), Vy(3,3);
-  vnl_symmetric_eigensystem_compute(xCov, Vx, Dx);
-  vnl_symmetric_eigensystem_compute(yCov, Vy, Dy);
+  vnl_symmetric_eigensystem_compute<double>(xCov, Vx, Dx);
+  vnl_symmetric_eigensystem_compute<double>(yCov, Vy, Dy);
 
   // Compute the scale factor
   // double s = sqrt(dot_product(Dx,Dy) / dot_product(Dy,Dy));
