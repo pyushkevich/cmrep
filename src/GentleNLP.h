@@ -152,6 +152,15 @@ public:
   static std::string GetName(Expression *a);
 };
 
+class SquareRootOperatorTraits
+{
+public:
+  static double Operate(double a) { return sqrt(a); }
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *dA);
+  static std::string GetName(Expression *a);
+};
+
 
 template<class TOperatorTraits>
 class UnaryExpression : public Expression
@@ -190,6 +199,7 @@ protected:
 
 typedef UnaryExpression<NegateOperatorTraits> Negation;
 typedef UnaryExpression<SquareOperatorTraits> Square;
+typedef UnaryExpression<SquareRootOperatorTraits> SquareRoot;
 
 
 
@@ -282,6 +292,118 @@ typedef BinaryExpression<ProductOperatorTraits> BinaryProduct;
 typedef BinaryExpression<RatioOperatorTraits> BinaryFraction;
 
 
+class GradientMagnitude3Traits
+{
+public:
+  static double Operate(double a, double b, double c)
+  {
+    return sqrt(a*a + b*b + c*c);
+  }
+
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *b, Expression *c,
+                                   Expression *dA, Expression *dB, Expression *dC);
+
+  static std::string GetName(Expression *a, Expression *b, Expression *c);
+};
+
+class GradientMagnitudeSqr3Traits
+{
+public:
+  static double Operate(double a, double b, double c)
+  {
+    return a*a + b*b + c*c;
+  }
+
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *b, Expression *c,
+                                   Expression *dA, Expression *dB, Expression *dC);
+
+  static std::string GetName(Expression *a, Expression *b, Expression *c);
+};
+
+class SumOperator3Traits
+{
+public:
+  static double Operate(double a, double b, double c)
+  {
+    return a + b + c;
+  }
+
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *b, Expression *c,
+                                   Expression *dA, Expression *dB, Expression *dC);
+
+  static std::string GetName(Expression *a, Expression *b, Expression *c);
+};
+
+class ProductOperator3Traits
+{
+public:
+  static double Operate(double a, double b, double c)
+  {
+    return a * b * c;
+  }
+
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *b, Expression *c,
+                                   Expression *dA, Expression *dB, Expression *dC);
+
+  static std::string GetName(Expression *a, Expression *b, Expression *c);
+};
+
+
+
+/**
+  A function of three expressions
+  */
+template <class TOperatorTraits>
+class TernaryExpression : public Expression
+{
+public:
+  TernaryExpression(Problem *parent, Expression *a, Expression *b, Expression *c)
+    : Expression(parent), m_A(a), m_B(b), m_C(c) {}
+
+  virtual double Evaluate()
+  {
+    return TOperatorTraits::Operate(m_A->Evaluate(), m_B->Evaluate(), m_C->Evaluate());
+  }
+
+  virtual bool DependsOn(Variable *variable)
+  {
+    return m_A->DependsOn(variable) || m_B->DependsOn(variable) || m_C->DependsOn(variable);
+  }
+
+  virtual void GetDependentVariables(std::set<Variable *> &vars)
+  {
+    m_A->GetDependentVariables(vars);
+    m_B->GetDependentVariables(vars);
+    m_C->GetDependentVariables(vars);
+  }
+
+  virtual Expression *MakePartialDerivative(Variable *variable)
+  {
+    return TOperatorTraits::Differentiate(
+          m_Problem, this,
+          m_A, m_B, m_C,
+          m_Problem->GetPartialDerivative(m_A, variable),
+          m_Problem->GetPartialDerivative(m_B, variable),
+          m_Problem->GetPartialDerivative(m_C, variable));
+  }
+
+  std::string GetName() { return TOperatorTraits::GetName(m_A, m_B, m_C); }
+
+protected:
+  Expression *m_A, *m_B, *m_C;
+};
+
+
+typedef TernaryExpression<GradientMagnitude3Traits> TernaryGradientMagnitude;
+typedef TernaryExpression<GradientMagnitudeSqr3Traits> TernaryGradientMagnitudeSqr;
+typedef TernaryExpression<SumOperator3Traits> TernarySum;
+typedef TernaryExpression<ProductOperator3Traits> TernaryProduct;
+
+
 /**
   A sum of several elements
   */
@@ -322,10 +444,17 @@ public:
   std::string GetName();
 
 protected:
-  typedef std::list<Expression *>::iterator Iterator;
-  std::list<Expression *> m_A;
-
+  typedef std::vector<Expression *>::iterator Iterator;
+  std::vector<Expression *> m_A;
 };
+
+
+/**
+  This helper function creates a sum of several expressions based on their
+  number, i.e., BinarySum, TernarySum or BigSum
+  */
+Expression *MakeSum(Problem *p, std::vector<Expression *> &expr);
+
 
 
 /**

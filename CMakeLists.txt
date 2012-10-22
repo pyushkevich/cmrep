@@ -247,7 +247,9 @@ TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
 
 IF(USE_IPOPT)
   ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
+  ADD_EXECUTABLE(contest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/ConstrainedCMRepTest.cxx)
   TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS})
 ENDIF(USE_IPOPT)
 
 # Add installation targets

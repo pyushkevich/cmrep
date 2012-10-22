@@ -236,7 +236,6 @@ void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
 
   // Associate each half-edge with a triangle
   Triangle tri;
-  std::cout << "Adding triangle " << v0 << ", " << v1 << ", " << v2 << std::endl;
   for(size_t j = 0; j < 3; j++)
   {
     // Set the vertices in each triangle

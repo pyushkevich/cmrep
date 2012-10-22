@@ -85,6 +85,23 @@ std::string SquareOperatorTraits::GetName(Expression *a)
   return oss.str();
 }
 
+Expression *SquareRootOperatorTraits::Differentiate(
+    Problem *p, Expression *self, Expression *a, Expression *dA)
+{
+  if(dA)
+    return new BinaryFraction(p,
+                              new BinaryProduct(p, new Constant(p, 0.5), dA),
+                              self);
+  else return NULL;
+}
+
+std::string SquareRootOperatorTraits::GetName(Expression *a)
+{
+  std::ostringstream oss;
+  oss << "sqrt(" << a->GetName() << ")";
+  return oss.str();
+}
+
 Expression *PlusOperatorTraits::Differentiate(
     Problem *p, Expression *self,
     Expression *a, Expression *b, Expression *dA, Expression *dB)
@@ -168,29 +185,151 @@ std::string RatioOperatorTraits::GetName(Expression *a, Expression *b)
   return oss.str();
 }
 
+Expression *MakeSum(Problem *p, std::vector<Expression *> &expr)
+{
+  switch(expr.size())
+    {
+    case 0: return NULL;
+    case 1: return expr[0];
+    case 2: return new BinarySum(p, expr[0], expr[1]);
+    case 3: return new TernarySum(p, expr[0], expr[1], expr[2]);
+    }
+
+  BigSum *bs = new BigSum(p);
+  for(int i = 0; i < expr.size(); i++)
+    bs->AddSummand(expr[i]);
+
+  return bs;
+}
+
+
+Expression *GradientMagnitude3Traits::Differentiate(
+    Problem *p, Expression *self,
+    Expression *a, Expression *b, Expression *c,
+    Expression *dA, Expression *dB, Expression *dC)
+{
+  // Ignore trivial case
+  if(!dA && !dB && !dC)
+    return NULL;
+
+  // Compute the numerator pieces
+  std::vector<Expression *> N;
+  if(dA) N.push_back(new BinaryProduct(p, a, dA));
+  if(dB) N.push_back(new BinaryProduct(p, b, dB));
+  if(dC) N.push_back(new BinaryProduct(p, c, dC));
+
+  // Create the numerator
+  Expression *num = MakeSum(p, N);
+
+  // Create the expression
+  return new BinaryFraction(p, num, self);
+}
+
+std::string GradientMagnitude3Traits::GetName(
+    Expression *a, Expression *b, Expression *c)
+{
+  std::ostringstream oss;
+  oss << "|" << a->GetName() << "," << b->GetName() << "," << c->GetName() << "|";
+  return oss.str();
+}
+
+
+Expression *GradientMagnitudeSqr3Traits::Differentiate(
+    Problem *p, Expression *self,
+    Expression *a, Expression *b, Expression *c,
+    Expression *dA, Expression *dB, Expression *dC)
+{
+  // Ignore trivial case
+  if(!dA && !dB && !dC)
+    return NULL;
+
+  // Compute the numerator pieces
+  std::vector<Expression *> N;
+  if(dA) N.push_back(new BinaryProduct(p, a, dA));
+  if(dB) N.push_back(new BinaryProduct(p, b, dB));
+  if(dC) N.push_back(new BinaryProduct(p, c, dC));
+
+  // Create the numerator
+  Expression *num = MakeSum(p, N);
+
+  // Create the expression
+  return new BinaryProduct(p, new Constant(p, 2), num);
+}
+
+std::string GradientMagnitudeSqr3Traits::GetName(
+    Expression *a, Expression *b, Expression *c)
+{
+  std::ostringstream oss;
+  oss << "|" << a->GetName() << "," << b->GetName() << "," << c->GetName() << "|^2";
+  return oss.str();
+}
+
+
+Expression *SumOperator3Traits::Differentiate(
+    Problem *p, Expression *self,
+    Expression *a, Expression *b, Expression *c,
+    Expression *dA, Expression *dB, Expression *dC)
+{
+  // Ignore trivial case
+  if(!dA && !dB && !dC)
+    return NULL;
+
+  // Combine the non-null pieces
+  std::vector<Expression *> N;
+  if(dA) N.push_back(dA);
+  if(dB) N.push_back(dB);
+  if(dC) N.push_back(dC);
+
+  // Create the numerator
+  return MakeSum(p, N);
+}
+
+std::string SumOperator3Traits::GetName(
+    Expression *a, Expression *b, Expression *c)
+{
+  std::ostringstream oss;
+  oss << "(" << a->GetName() << ") + (" << b->GetName() << ") + (" << c->GetName() << ")";
+  return oss.str();
+}
+
+
+Expression *ProductOperator3Traits::Differentiate(
+    Problem *p, Expression *self,
+    Expression *a, Expression *b, Expression *c,
+    Expression *dA, Expression *dB, Expression *dC)
+{
+  // Ignore trivial case
+  if(!dA && !dB && !dC)
+    return NULL;
+
+  // Combine the non-null pieces
+  std::vector<Expression *> N;
+  if(dA) N.push_back(new TernaryProduct(p, dA, b, c));
+  if(dB) N.push_back(new TernaryProduct(p, a, dB, c));
+  if(dC) N.push_back(new TernaryProduct(p, a, b, dC));
+
+  // Create the numerator
+  return MakeSum(p, N);
+}
+
+std::string ProductOperator3Traits::GetName(
+    Expression *a, Expression *b, Expression *c)
+{
+  std::ostringstream oss;
+  oss << "(" << a->GetName() << "+" << b->GetName() << "+" << c->GetName() << ")";
+  return oss.str();
+}
+
 Expression *BigSum::MakePartialDerivative(Variable *variable)
 {
-  std::list<Expression *> pd;
+  std::vector<Expression *> pd;
   for(Iterator it = m_A.begin(); it != m_A.end(); it++)
     {
     if((*it)->DependsOn(variable))
       pd.push_back(m_Problem->GetPartialDerivative(*it, variable));
     }
 
-  if(pd.size() == 0)
-    return NULL;
-  else if(pd.size() == 1)
-    return pd.front();
-  else if(pd.size() == 2)
-    return new BinarySum(m_Problem, pd.front(), pd.back());
-
-  BigSum *sum = new BigSum(m_Problem);
-  for(std::list<Expression *>::iterator it = pd.begin(); it!=pd.end(); ++it)
-    {
-    sum->AddSummand(*it);
-    }
-
-  return sum;
+  return MakeSum(m_Problem, pd);
 }
 
 std::string BigSum::GetName()
@@ -271,10 +410,15 @@ void ConstrainedNonLinearProblem
   // set up the Jacobian and Hessian matrices
 
   // Start with the gradient
+  std::cout << "Computing partial derivatives of the objective" << std::endl;
   for(int i = 0; i < m_X.size(); i++)
     {
     m_GradF.push_back(this->GetPartialDerivative(m_F, m_X[i]));
+    std::cout << "." << std::flush;
+    if((i+1) % 50 == 0)
+      std::cout << " " << (i+1) << std::endl;
     }
+  std::cout << std::endl;
 
   // Now the Jacobian of G
   SparseExpressionMatrix::STLSourceType stl_DG;
@@ -309,6 +453,7 @@ void ConstrainedNonLinearProblem
   SparseMap Hmap;
 
   // We begin by adding entries from the objective function
+  std::cout << "Computing Hessian entries" << std::endl;
   for(int i = 0; i < m_X.size(); i++)
     {
     Expression *df = m_GradF[i];
@@ -329,7 +474,11 @@ void ConstrainedNonLinearProblem
           }
         }
       }
+    std::cout << "." << std::flush;
+    if((i+1) % 50 == 0)
+      std::cout << " " << (i+1) << std::endl;
     }
+  std::cout << std::endl;
 
   // Now add entries for each of the constraints
   for(int j = 0; j < m_G.size(); j++)

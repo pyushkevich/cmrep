@@ -1,5 +1,7 @@
 #include "IPOptProblemInterface.h"
 
+#include "itkTimeProbe.h"
+
 using namespace gnlp;
 using namespace Ipopt;
 
@@ -89,6 +91,7 @@ bool IPOptProblemInterface::eval_g(
   for(unsigned int i = 0; i < m; i++)
     g[i] = m_Problem->GetConstraint(i)->Evaluate();
 
+
   return true;
 }
 
@@ -134,6 +137,7 @@ bool IPOptProblemInterface::eval_jac_g(
 
   return true;
 }
+
 
 bool IPOptProblemInterface::eval_h(
     Index n, const Number *x, bool new_x, Number obj_factor, Index m,
