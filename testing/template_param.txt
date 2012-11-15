@@ -1,0 +1,191 @@
+# ===================================================
+# Example CM-Rep parameter file for BruteForce models
+# ===================================================
+
+
+# -----------------------------
+# SECTION 1. Default Parameters
+# -----------------------------
+# These parameters are common for all stages of fitting. They can be overridden
+# for a specific fitting stage later.
+
+# DefaultParameters.Mapping
+#
+# This setting defines the mapping between coefficient space (in which
+# optimization takes place) and the medial control points (X,R)
+#
+# Usually, this setting will be adjusted from stage to stage
+#
+# The following values are allowed:
+#    Identity              Optimization over all control point values
+#    Affine                Optimization only over linear transformations
+#                          of the control points
+#    LaplaceBasis          Coefficients are weights of a laplace basis.
+#
+DefaultParameters.Mapping = Identity
+
+# DefaultParameters.ImageMatch
+#
+# The type of objective optimized to match the model to the image. 
+# Possible values:
+#    VolumeOverlap         Volumetric overlap between model interior and image
+#    BoundaryMatch         Surface-based attraction to image boundaries
+#
+DefaultParameters.ImageMatch = VolumeOverlap
+
+# DefaultParameters.BoundaryJacobianEnergyTerm
+#
+# This term penalizes values of the Jacobian that are too small or too large.
+# The Jacobian here is between triangles on the medial surface and the
+# corresponding triangles on the boundary. 
+#
+# The penalty has the form
+#   P = exp(A * J) + exp(J - B) 
+# where A, B are the values you can set below. The default values A=20, B=10
+# seem to work quite well.
+#
+DefaultParameters.BoundaryJacobianEnergyTerm.Weight = 0.1
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyA = 20
+DefaultParameters.BoundaryJacobianEnergyTerm.PenaltyB = 10
+
+# DefaultParameters.BoundaryGradRPenaltyTerm
+#
+# This penalty is used in BruteForce models to ensure that the term |GradR| is 
+# close to one along the edge of the medial surface. GradR is the surface of the
+# radius function on the medial surface. When this condition is violated, the
+# medial model is not a 'true medial model'. Of course the main difference
+# between BruteForce medial models and PDE-based medial models is that the
+# BruteForce model uses a soft penatly to prevent very large violations of this
+# condition, while the PDE term ensures that this condition always holds.
+# 
+# It's hard to come up with a good value of this term. The best rule is to look
+# at the output of cm-rep fit, and ensure that the overall value of this term is
+# about one order of magnitude smaller than the volume overlap term.
+DefaultParameters.BoundaryGradRPenaltyTerm.Weight = 100
+
+# DefaultParameters.LoopTangentSchemeValidityPenaltyTerm
+# 
+# This term makes sure that the scheme used to estimate the tangent plane to a
+# point on the Loop subdivision surface (i.e. the medial model) is well-defined.
+# This term should be left at a slow value, as it will explode before there are
+# serious problems. 
+DefaultParameters.LoopTangentSchemeValidityPenaltyTerm.Weight = 0.01
+
+# DefaultParameters.RadiusPenaltyTerm
+#
+# This term penalizes very small values of the radius function. It is needed to
+# prevent instability of the solution, but it should be assigned a very small
+# weight.
+DefaultParameters.RadiusPenaltyTerm.Weight = 0.00001
+
+# DefaultParameters.MedialAnglesPenaltyTerm
+#
+# This term penalizes very small or very large triangle angles in the medial
+# mesh. This has the effect of ensuring that the triangles are fairly even
+# and gives the model a smoother appearance. 
+#
+# Good values seem to be in the range 1-10, depending on how much smoothing you
+# want to apply to the model
+DefaultParameters.MedialAnglesPenaltyTerm.Weight = 4
+
+# DefaultParameters.BoundaryAnglesPenaltyTerm
+#
+# Same as MedialAnglesPenaltyTerm, but for boundary triangles
+DefaultParameters.BoundaryAnglesPenaltyTerm.Weight = 4
+
+# DefaultParameters.DiffeomorphicEnergyTerm 
+#
+# This term penalizes model self-intersections. These occur when one end of the
+# model runs into another end of the model, or when the medial surface curves in
+# a weird way and pieces of the boundary surface intersect. This term is slow to
+# compute, so I would avoid it unless there is a need for it.
+DefaultParameters.DiffeomorphicEnergyTerm = 0
+
+# -------------------------
+# SECTION 2. Fitting Stages 
+# -------------------------
+#
+# This section defines each of the stages of cm-rep model fitting. The stages
+# you use will depend on whether your model is initialized close to the target
+# shape or not. If it is, you should remove the align/affine stages, as they
+# will likely worsen the fitting results. The align stage uses moments of
+# inertia to align the model to the image, and the affine stage uses a poorly
+# optimized affine fitting algorithm. 
+
+# Define number of stages
+Stage.ArraySize = 4
+
+# +++ Alignment Stage +++
+#
+# This stage performs rough alignment between model and image based on moments
+# of inertia.
+
+# Name
+#
+# This is the name of the stage. It affects how the output from this stage will
+# be saved in the output directory. This is arbitrary, but may not include
+# whitespace characters
+Stage.Element[0].Name = align
+
+# Mode
+#
+# This is the mode used to fit the model to the data. There are only two modes:
+# AlignByMoments and FitToBinary. 
+Stage.Element[0].Mode = AlignMoments
+
+# Blur
+#
+# This is the amount of blurring (in units of spacing) applied to the binary
+# image before fitting the model. The binary image is expected to have
+# intensities in the set {0 1}.
+#
+# IMPORTANT NOTE: 
+# When you set the value of Blur to 0, we assume that instead of passing in a
+# binary image, you have passed in a foreground/background probability image,
+# similar to what you may see in ITK-SNAP when using region-based active contour
+# segmentation. The probability image has intensities in the interval [-1 1],
+# with -1 meaning background, +1 meaning foreground, 0 meaning equally likely to
+# be background or foreground, and so on.
+Stage.Element[0].Blur = 1.2
+
+# +++ Affine Registration Stage +++
+#
+# This stage performs 12-parameter affine registration
+
+# MaxIterations
+#
+# The number of iterations for gradient descent optimization
+Stage.Element[1].MaxIterations = 200
+
+# Parameters.Mapping
+#
+# See the note above under DefaultParameters.Mapping. Here we set the mapping to
+# Affine to achieve 12-paramter affine registration
+Stage.Element[1].Parameters.Mapping = Affine
+
+# See notes for the first stage for these fields
+Stage.Element[1].Name = affine
+Stage.Element[1].Mode = FitToBinary
+Stage.Element[1].Blur = 1.2
+
+# +++ First Deformable Fitting Stage +++
+# See notes for the first stage for these fields
+Stage.Element[2].Name = def1
+Stage.Element[2].Mode = FitToBinary
+Stage.Element[2].Blur = 1.2
+Stage.Element[2].MaxIterations = 800
+
+# +++ Second Deformable Fitting Stage +++
+
+# Refinement.Subdivision.Controls
+#
+# This parameter states that the control point mesh should be subdivided by the
+# given amount before continuing optimization. This increases the degrees of
+# freedom in the model.
+Stage.Element[3].Refinement.Subdivision.Controls = 1
+
+# See notes for the first stage for these fields
+Stage.Element[3].Name = def2
+Stage.Element[3].Mode = FitToBinary
+Stage.Element[3].Blur = 0.8
+Stage.Element[3].MaxIterations = 200

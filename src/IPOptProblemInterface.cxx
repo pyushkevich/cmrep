@@ -70,12 +70,23 @@ bool IPOptProblemInterface::eval_grad_f(
   if(new_x)
     m_Problem->SetVariableValues(x);
 
+  // Create a vector for the gradient
+  vnl_vector<double> df(n, 0.0);
+
   // Get the partial derivatives of the objective function
   for(unsigned int i = 0; i < n; i++)
     {
     Expression *pd = m_Problem->GetObjectivePD(i);
-    grad_f[i] = pd ? pd->Evaluate() : 0.0;
+    df[i] = pd ? pd->Evaluate() : 0.0;
     }
+
+  // Multiply by the kernel
+  if(m_Problem->GetGradientSmoothingKernel().GetNumberOfSparseValues())
+    {
+    df = m_Problem->GetGradientSmoothingKernel().MultiplyByVector(df);
+    }
+
+  df.copy_out(grad_f);
 
   return true;
 }

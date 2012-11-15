@@ -23,9 +23,20 @@ class Variable;
 class Problem
 {
 public:
+  typedef std::set<Variable *> Dependency;
+  typedef std::set<Expression *> ExpressionSet;
 
   Problem() {}
   virtual ~Problem();
+
+  /** Get the set of dependent variables for a given registered expression.
+      Like the partial derivatives, these sets are cached, so repeated calls
+      to this method will be quick. */
+  const Dependency &GetDependentVariables(Expression *ex);
+
+  /** Similar to above, but the dependent variables will be added to
+      the contents of the list deps passed in by reference */
+  void AppendDependentVariables(Expression *ex, Dependency &target);
 
   /** Get a partial derivative for an expression with repsect to a
     variable. The problem keeps track of these expressions so that
@@ -33,18 +44,34 @@ public:
     when the derivative has not previously been computed */
   Expression *GetPartialDerivative(Expression *, Variable *);
 
+  /** Register a child expression with the problem. This will make sure the
+    child expression is deleted. */
   void AddChildExpression(Expression *);
+
+  /** Dirty all the child expressions */
+  void MakeChildrenDirty();
+
+  /** Get the set of all stored expressions */
+  const ExpressionSet& GetChildExpressions() { return m_ChildExpressions; }
+
+  /** Clear the caches of partial variables and dependencies. Call this when
+    the problem has been fully configured and you want to just evaluate it
+    on different datasets */
+  void ClearDerivativeCaches();
 
 protected:
 
   // List of known expressions
-  typedef std::set<Expression *> ExpressionSet;
   ExpressionSet m_ChildExpressions;
 
   // List of partial derivatives of known expressions
   typedef std::pair<Expression *, Variable *> PartialDerivative;
   typedef std::map<PartialDerivative, Expression *> PartialDerivativeMap;
   PartialDerivativeMap m_Partials;
+
+  // List of dependencies for each expression
+  typedef std::map<Expression *, Dependency> DependencyMap;
+  DependencyMap m_DependencyMap;
 };
 
 /**
@@ -57,15 +84,13 @@ public:
   /** Create an expression. The memory for the expression is managed by
     the problem passed in to the constructor. Do not delete the expression */
   Expression(Problem *problem);
+  virtual ~Expression() {}
 
   /** Evaluate the expression */
   virtual double Evaluate() = 0;
 
-  /** Determine if the expression depends on a variable */
-  virtual bool DependsOn(Variable *variable) = 0;
-
   /** Populate a list of dependent variables */
-  virtual void GetDependentVariables(std::set<Variable *> &vars) = 0;
+  virtual void MakeDependencyList(Problem::Dependency &vars) = 0;
 
   /** Create a partial derivative of the expression with respect to variable.
       This should only be called once per expression/variable, since each call
@@ -74,6 +99,9 @@ public:
 
   /** Debugging purposes : print the expression using LateX */
   virtual std::string GetName() = 0;
+
+  /** Dirty the expression. Does nothing by default */
+  virtual void MakeDirty() {}
 
 protected:
 
@@ -90,7 +118,8 @@ class Variable : public Expression
 {
 public:
   Variable(Problem *parent, std::string name)
-    : Expression(parent), m_Name(name), m_Index(-1), m_Value(0) {}
+    : Expression(parent), m_Name(name), m_Index(-1),
+      m_Value(0), m_IndexInProblem(-1) {}
 
   void SetValue(double value) { m_Value = value; }
   std::string GetName() { return m_Name; }
@@ -99,10 +128,10 @@ public:
   int GetIndex() { return m_Index; }
 
   virtual double Evaluate() { return m_Value; }
-  virtual bool DependsOn(Variable *variable) { return this == variable; }
+
   virtual Expression *MakePartialDerivative(Variable *variable);
 
-  virtual void GetDependentVariables(std::set<Variable *> &vars)
+  virtual void MakeDependencyList(Problem::Dependency &vars)
   {
     vars.insert(this);
   }
@@ -110,8 +139,10 @@ public:
 protected:
   std::string m_Name;
   int m_Index;
+  int m_IndexInProblem;
   double m_Value;
 };
+
 
 /**
   A constant expression (in the context of optimization)
@@ -124,15 +155,46 @@ public:
 
   virtual double Evaluate() { return m_Value; }
   std::string GetName();
-  virtual bool DependsOn(Variable *variable) { return false; }
   virtual Expression *MakePartialDerivative(Variable *variable);
 
-  virtual void GetDependentVariables(std::set<Variable *> &vars) {}
+  virtual void MakeDependencyList(Problem::Dependency &vars) {}
 
 protected:
   double m_Value;
 };
 
+
+class CachingExpression : public Expression
+{
+public:
+  CachingExpression(Problem *parent)
+    : Expression(parent), m_Value(0.0), m_Dirty(true) {}
+
+  /** Evaluate returns cached value if possible */
+  virtual double Evaluate()
+  {
+    if(m_Dirty)
+      {
+      m_Value = this->ComputeValue();
+      m_Dirty = false;
+      }
+    return m_Value;
+  }
+
+  /** Do the actual evaluation */
+  virtual double ComputeValue() = 0;
+
+  /** Dirty the expression */
+  virtual void MakeDirty() { m_Dirty = true; }
+
+protected:
+
+  // The cached value of the expression
+  double m_Value;
+
+  // Whether the cached value is valid
+  bool m_Dirty;
+};
 
 class NegateOperatorTraits
 {
@@ -163,25 +225,20 @@ public:
 
 
 template<class TOperatorTraits>
-class UnaryExpression : public Expression
+class UnaryExpression : public CachingExpression
 {
 public:
   UnaryExpression(Problem *parent, Expression *a)
-    : Expression(parent), m_A(a) {}
+    : CachingExpression(parent), m_A(a) {}
 
-  virtual double Evaluate()
+  virtual double ComputeValue()
   {
     return TOperatorTraits::Operate(m_A->Evaluate());
   }
 
-  virtual bool DependsOn(Variable *variable)
+  virtual void MakeDependencyList(Problem::Dependency &vars)
   {
-    return m_A->DependsOn(variable);
-  }
-
-  virtual void GetDependentVariables(std::set<Variable *> &vars)
-  {
-    m_A->GetDependentVariables(vars);
+    m_Problem->AppendDependentVariables(m_A, vars);
   }
 
   virtual Expression *MakePartialDerivative(Variable *variable)
@@ -200,6 +257,35 @@ protected:
 typedef UnaryExpression<NegateOperatorTraits> Negation;
 typedef UnaryExpression<SquareOperatorTraits> Square;
 typedef UnaryExpression<SquareRootOperatorTraits> SquareRoot;
+
+
+
+
+class ScalarProduct : public CachingExpression
+{
+public:
+  ScalarProduct(Problem *parent, Expression *a, double value)
+    : CachingExpression(parent), m_A(a), m_Const(value) {}
+
+  virtual double ComputeValue()
+  {
+    return m_Const * m_A->Evaluate();
+  }
+
+  virtual void MakeDependencyList(Problem::Dependency &vars)
+  {
+    m_Problem->AppendDependentVariables(m_A, vars);
+  }
+
+  virtual Expression *MakePartialDerivative(Variable *variable);
+
+  std::string GetName();
+
+protected:
+  Expression *m_A;
+  double m_Const;
+};
+
 
 
 
@@ -231,6 +317,8 @@ public:
                                    Expression *a, Expression *b,
                                    Expression *dA, Expression *dB);
   static std::string GetName(Expression *a, Expression *b);
+protected:
+  static Expression *DiffProductHelper(Problem *p, Expression *dA, Expression *b);
 };
 
 class RatioOperatorTraits
@@ -248,26 +336,21 @@ public:
   A sum, difference, product of two expressions
   */
 template <class TOperatorTraits>
-class BinaryExpression : public Expression
+class BinaryExpression : public CachingExpression
 {
 public:
   BinaryExpression(Problem *parent, Expression *a, Expression *b)
-    : Expression(parent), m_A(a), m_B(b) {}
+    : CachingExpression(parent), m_A(a), m_B(b) {}
 
-  virtual double Evaluate()
+  virtual double ComputeValue()
   {
     return TOperatorTraits::Operate(m_A->Evaluate(), m_B->Evaluate());
   }
 
-  virtual bool DependsOn(Variable *variable)
+  virtual void MakeDependencyList(Problem::Dependency &vars)
   {
-    return m_A->DependsOn(variable) || m_B->DependsOn(variable);
-  }
-
-  virtual void GetDependentVariables(std::set<Variable *> &vars)
-  {
-    m_A->GetDependentVariables(vars);
-    m_B->GetDependentVariables(vars);
+    m_Problem->AppendDependentVariables(m_A, vars);
+    m_Problem->AppendDependentVariables(m_B, vars);
   }
 
   virtual Expression *MakePartialDerivative(Variable *variable)
@@ -358,27 +441,22 @@ public:
   A function of three expressions
   */
 template <class TOperatorTraits>
-class TernaryExpression : public Expression
+class TernaryExpression : public CachingExpression
 {
 public:
   TernaryExpression(Problem *parent, Expression *a, Expression *b, Expression *c)
-    : Expression(parent), m_A(a), m_B(b), m_C(c) {}
+    : CachingExpression(parent), m_A(a), m_B(b), m_C(c) {}
 
-  virtual double Evaluate()
+  virtual double ComputeValue()
   {
     return TOperatorTraits::Operate(m_A->Evaluate(), m_B->Evaluate(), m_C->Evaluate());
   }
 
-  virtual bool DependsOn(Variable *variable)
+  virtual void MakeDependencyList(Problem::Dependency &vars)
   {
-    return m_A->DependsOn(variable) || m_B->DependsOn(variable) || m_C->DependsOn(variable);
-  }
-
-  virtual void GetDependentVariables(std::set<Variable *> &vars)
-  {
-    m_A->GetDependentVariables(vars);
-    m_B->GetDependentVariables(vars);
-    m_C->GetDependentVariables(vars);
+    m_Problem->AppendDependentVariables(m_A, vars);
+    m_Problem->AppendDependentVariables(m_B, vars);
+    m_Problem->AppendDependentVariables(m_C, vars);
   }
 
   virtual Expression *MakePartialDerivative(Variable *variable)
@@ -404,20 +482,98 @@ typedef TernaryExpression<SumOperator3Traits> TernarySum;
 typedef TernaryExpression<ProductOperator3Traits> TernaryProduct;
 
 
+
+Expression *MakeSum(Problem *p, std::vector<Expression *> &expr);
+
+/**
+  Sample some external fixed function at a location. The function is specified
+  by the traits object, which must support the Evaluate(x,y,z,order_x,order_y,order_z)
+  operator.
+  */
+template <class TFunctionTraits>
+class SampleFunction3 : public CachingExpression
+{
+public:
+  typedef SampleFunction3<TFunctionTraits> Self;
+
+  SampleFunction3(Problem *parent,
+                  TFunctionTraits *traits,
+                  Expression *x, Expression *y, Expression *z)
+    : CachingExpression(parent), m_Traits(traits), m_X(x), m_Y(y), m_Z(z)
+  {
+    // Set to zero-th order derivatives by default
+    m_OrderX = 0; m_OrderY = 0; m_OrderZ = 0;
+    m_DfDx = NULL, m_DfDy = NULL, m_DfDz = NULL;
+  }
+
+  void SetOrder(int ox, int oy, int oz)
+  {
+    m_OrderX = ox; m_OrderY = oy; m_OrderZ = oz;
+  }
+
+  virtual double ComputeValue()
+  {
+    return m_Traits->Evaluate(m_X->Evaluate(), m_Y->Evaluate(), m_Z->Evaluate(),
+                              m_OrderX, m_OrderY, m_OrderZ);
+  }
+
+  virtual void MakeDependencyList(Problem::Dependency &vars)
+  {
+    m_Problem->AppendDependentVariables(m_X, vars);
+    m_Problem->AppendDependentVariables(m_Y, vars);
+    m_Problem->AppendDependentVariables(m_Z, vars);
+  }
+
+  virtual Expression *MakePartialDerivative(Variable *variable)
+  {
+    // Get the partials of X, Y, Z
+    Expression *dX = m_Problem->GetPartialDerivative(m_X, variable);
+    Expression *dY = m_Problem->GetPartialDerivative(m_Y, variable);
+    Expression *dZ = m_Problem->GetPartialDerivative(m_Z, variable);
+
+    // Define the gradient if undefined - notice it is only created once
+    if(!m_DfDx)
+      {
+      m_DfDx = new SampleFunction3(m_Problem, m_Traits, m_X, m_Y, m_Z);
+      m_DfDx->SetOrder(m_OrderX+1, m_OrderY, m_OrderZ);
+      m_DfDy = new SampleFunction3(m_Problem, m_Traits, m_X, m_Y, m_Z);
+      m_DfDy->SetOrder(m_OrderX, m_OrderY+1, m_OrderZ);
+      m_DfDz = new SampleFunction3(m_Problem, m_Traits, m_X, m_Y, m_Z);
+      m_DfDz->SetOrder(m_OrderX, m_OrderY, m_OrderZ+1);
+      }
+
+    // Create the necessary expressions - chain rule
+    std::vector<Expression *> N;
+    if(dX) N.push_back(new BinaryProduct(m_Problem, m_DfDx, dX));
+    if(dY) N.push_back(new BinaryProduct(m_Problem, m_DfDy, dY));
+    if(dZ) N.push_back(new BinaryProduct(m_Problem, m_DfDz, dZ));
+    return MakeSum(m_Problem, N);
+  }
+
+  std::string GetName() { return "f(x,y,z)"; }
+
+protected:
+  Expression *m_X, *m_Y, *m_Z;
+  Self *m_DfDx, *m_DfDy, *m_DfDz;
+  int m_OrderX, m_OrderY, m_OrderZ;
+  TFunctionTraits *m_Traits;
+};
+
+
 /**
   A sum of several elements
   */
-class BigSum : public Expression
+class BigSum : public CachingExpression
 {
 public:
-  BigSum(Problem *parent) : Expression(parent) {}
+  BigSum(Problem *parent) : CachingExpression(parent) {}
 
   void AddSummand(Expression *ex)
   {
     m_A.push_back(ex);
   }
 
-  virtual double Evaluate()
+  virtual double ComputeValue()
   {
     double val = 0;
     for(Iterator it = m_A.begin(); it!=m_A.end(); ++it)
@@ -425,18 +581,10 @@ public:
     return val;
   }
 
-  virtual bool DependsOn(Variable *variable)
+  virtual void MakeDependencyList(Problem::Dependency &vars)
   {
     for(Iterator it = m_A.begin(); it!=m_A.end(); ++it)
-      if((*it)->DependsOn(variable))
-        return true;
-    return false;
-  }
-
-  virtual void GetDependentVariables(std::set<Variable *> &vars)
-  {
-    for(Iterator it = m_A.begin(); it!=m_A.end(); ++it)
-      (*it)->GetDependentVariables(vars);
+      m_Problem->AppendDependentVariables(*it, vars);
   }
 
   virtual Expression *MakePartialDerivative(Variable *variable);
@@ -449,13 +597,33 @@ protected:
 };
 
 
+/** Typedefs for arrays of expressions */
+typedef std::vector<Expression *> VarVec;
+typedef std::vector<VarVec> VarVecArray;
+
 /**
   This helper function creates a sum of several expressions based on their
   number, i.e., BinarySum, TernarySum or BigSum
   */
-Expression *MakeSum(Problem *p, std::vector<Expression *> &expr);
+Expression *MakeSum(Problem *p, VarVec &expr);
 
 
+/**
+  A helper function to apply expressions to each element in a vector of
+  expressions, useful for vector addition, subtraction, dot-product.
+  */
+template<class TExpression>
+VarVec VectorApplyPairwise(Problem *p, const VarVec &a, const VarVec &b)
+{
+  VarVec out(a.size(), NULL);
+  for(int i = 0; i < a.size(); i++)
+    out[i] = new TExpression(p, a[i], b[i]);
+  return out;
+}
+
+VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b);
+Expression *DotProduct(Problem *p, const VarVec &a, const VarVec &b);
+Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c);
 
 /**
   A problem for IPOpt
@@ -467,6 +635,7 @@ public:
 
   // The Jacobian of G is stored as a sparse array of Expression pointers
   typedef ImmutableSparseArray<Expression *> SparseExpressionMatrix;
+  typedef ImmutableSparseMatrix<double> SparseRealMatrix;
 
   ConstrainedNonLinearProblem();
   virtual ~ConstrainedNonLinearProblem() {}
@@ -487,15 +656,29 @@ public:
   // Add a constraint (g)
   void AddConstraint(Expression *ex, double cmin, double cmax);
 
+  // Add a constrained variable, i.e. a variable is forced to equal expression
+  Variable* AddExpressionAsConstrainedVariable(Expression *exp);
+
   // Setup the problem for optimization. This must be called after all the variables
   // constraints, and the objective have been specified
-  void SetupProblem();
+  void SetupProblem(bool useHessian);
+
+  // As an option, we can provide a matrix for regularizing the gradient. The
+  // gradient will be multiplied by this matrix before being passed to the
+  // optimizer. This may have some benefit for convergence
+  void SetGradientSmoothingKernel(SparseRealMatrix K);
+
+  // Get the kernel for gradient smoothing
+  SparseRealMatrix &GetGradientSmoothingKernel() { return m_GradientKernel; }
 
   // Get the number of variables
   unsigned int GetNumberOfVariables();
 
   // Get the number of constraints
   unsigned int GetNumberOfConstraints();
+
+  // Get the variable
+  Variable *GetVariable(int i) { return m_X[i]; }
 
   // Get the value of a variable
   double GetVariableValue(int i) { return m_X[i]->Evaluate(); }
@@ -542,7 +725,6 @@ protected:
   std::vector<double> m_LowerBoundX, m_UpperBoundX;
   std::vector<double> m_LowerBoundG, m_UpperBoundG;
 
-
   // The matrix for the Jacobian
   SparseExpressionMatrix m_DG;
 
@@ -551,6 +733,9 @@ protected:
 
   // For IPOpt, during Hessian computation, there is a scaling factor
   Variable *m_SigmaF;
+
+  // Kernel for the gradient
+  SparseRealMatrix m_GradientKernel;
 };
 
 }

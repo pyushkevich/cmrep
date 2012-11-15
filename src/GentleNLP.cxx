@@ -9,6 +9,29 @@ void Problem::AddChildExpression(Expression *ex)
   m_ChildExpressions.insert(ex);
 }
 
+const Problem::Dependency &
+Problem::GetDependentVariables(Expression *ex)
+{
+  DependencyMap::const_iterator it = m_DependencyMap.find(ex);
+  if(it != m_DependencyMap.end())
+    {
+    return it->second;
+    }
+  else
+    {
+    // Ask the expression to collect the dependent variables
+    ex->MakeDependencyList(m_DependencyMap[ex]);
+    return m_DependencyMap[ex];
+    }
+}
+
+void
+Problem::AppendDependentVariables(Expression *ex, Dependency &target)
+{
+  const Dependency &dep = this->GetDependentVariables(ex);
+  target.insert(dep.begin(), dep.end());
+}
+
 Expression *Problem::GetPartialDerivative(Expression *ex, Variable *v)
 {
   PartialDerivative pd = std::make_pair(ex, v);
@@ -19,10 +42,26 @@ Expression *Problem::GetPartialDerivative(Expression *ex, Variable *v)
     }
   else
     {
+    const Dependency &dep = this->GetDependentVariables(ex);
     return m_Partials[pd] =
-        ex->DependsOn(v) ?
+        dep.find(v) != dep.end() ?
           ex->MakePartialDerivative(v) : NULL;
     }
+}
+
+void Problem::MakeChildrenDirty()
+{
+  for(ExpressionSet::iterator it = m_ChildExpressions.begin();
+      it != m_ChildExpressions.end(); it++)
+    {
+    (*it)->MakeDirty();
+    }
+}
+
+void Problem::ClearDerivativeCaches()
+{
+  m_DependencyMap.clear();
+  m_Partials.clear();
 }
 
 Problem::~Problem()
@@ -75,7 +114,7 @@ std::string NegateOperatorTraits::GetName(Expression *a)
 Expression *SquareOperatorTraits::Differentiate(
     Problem *p, Expression *self, Expression *a, Expression *dA)
 {
-  return new BinaryProduct(p, new BinaryProduct(p, a, dA), new Constant(p, 2));
+  return new ScalarProduct(p, new BinaryProduct(p, a, dA), 2.0);
 }
 
 std::string SquareOperatorTraits::GetName(Expression *a)
@@ -89,9 +128,7 @@ Expression *SquareRootOperatorTraits::Differentiate(
     Problem *p, Expression *self, Expression *a, Expression *dA)
 {
   if(dA)
-    return new BinaryFraction(p,
-                              new BinaryProduct(p, new Constant(p, 0.5), dA),
-                              self);
+    return new BinaryFraction(p, new ScalarProduct(p, dA, 0.5), self);
   else return NULL;
 }
 
@@ -138,16 +175,36 @@ std::string MinusOperatorTraits::GetName(Expression *a, Expression *b)
   return oss.str();
 }
 
+Expression *ProductOperatorTraits::DiffProductHelper(
+    Problem *p, Expression *dA, Expression *b)
+{
+  // Compute the term b * dA, simplifying if dA is a constant
+  if(!dA)
+    return NULL;
+
+  Constant *ctry = dynamic_cast<Constant *>(dA);
+
+  if(ctry && ctry->Evaluate() == 1.0)
+    return b;
+  else if(ctry)
+    return new ScalarProduct(p, b, ctry->Evaluate());
+  else
+    return new BinaryProduct(p, b, dA);
+}
+
 Expression *ProductOperatorTraits::Differentiate(
     Problem *p, Expression *self,
     Expression *a, Expression *b, Expression *dA, Expression *dB)
 {
-  if(dA && dB)
-    return new BinarySum(p,
-                         new BinaryProduct(p, a, dB),
-                         new BinaryProduct(p, b, dA));
-  if(dA) return new BinaryProduct(p, b, dA);
-  if(dB) return new BinaryProduct(p, a, dB);
+  // We should be careful about cases where the derivatives of some
+  // expressions are constants, since we can fold things into a
+  // simpler expression
+  Expression *AdB = DiffProductHelper(p, dB, a), *BdA = DiffProductHelper(p, dA, b);
+
+  if(AdB && BdA)
+    return new BinarySum(p,AdB,BdA);
+  else if(BdA) return BdA;
+  else if(AdB) return AdB;
   return NULL;
 }
 
@@ -184,6 +241,24 @@ std::string RatioOperatorTraits::GetName(Expression *a, Expression *b)
   oss << "(" << a->GetName() << ") / (" << b->GetName() << ")";
   return oss.str();
 }
+
+
+std::string
+ScalarProduct::GetName()
+{
+  std::ostringstream oss;
+  oss << "(" << m_Const << " * " << m_A->GetName() << ")";
+  return oss.str();
+}
+
+Expression *
+ScalarProduct::MakePartialDerivative(Variable *variable)
+{
+  Expression *dA = m_Problem->GetPartialDerivative(m_A, variable);
+  return dA ? new ScalarProduct(m_Problem, dA, m_Const) : NULL;
+}
+
+
 
 Expression *MakeSum(Problem *p, std::vector<Expression *> &expr)
 {
@@ -253,7 +328,7 @@ Expression *GradientMagnitudeSqr3Traits::Differentiate(
   Expression *num = MakeSum(p, N);
 
   // Create the expression
-  return new BinaryProduct(p, new Constant(p, 2), num);
+  return new ScalarProduct(p, num, 2.0);
 }
 
 std::string GradientMagnitudeSqr3Traits::GetName(
@@ -325,8 +400,9 @@ Expression *BigSum::MakePartialDerivative(Variable *variable)
   std::vector<Expression *> pd;
   for(Iterator it = m_A.begin(); it != m_A.end(); it++)
     {
-    if((*it)->DependsOn(variable))
-      pd.push_back(m_Problem->GetPartialDerivative(*it, variable));
+    Expression *pd_i = m_Problem->GetPartialDerivative(*it, variable);
+    if(pd_i)
+      pd.push_back(pd_i);
     }
 
   return MakeSum(m_Problem, pd);
@@ -343,6 +419,47 @@ std::string BigSum::GetName()
     }
   return oss.str();
 }
+
+
+/******************************************************************
+  Vector helper functions
+  *****************************************************************/
+VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b)
+{
+  VarVec out(3, NULL);
+
+  out[0] = new BinaryDifference(p,
+                                new BinaryProduct(p, a[1], b[2]),
+                                new BinaryProduct(p, a[2], b[1]));
+
+  out[1] = new BinaryDifference(p,
+                                new BinaryProduct(p, a[2], b[0]),
+                                new BinaryProduct(p, a[0], b[2]));
+
+  out[2] = new BinaryDifference(p,
+                                new BinaryProduct(p, a[0], b[1]),
+                                new BinaryProduct(p, a[1], b[0]));
+
+  return out;
+}
+
+Expression *DotProduct(Problem *p, const VarVec &a, const VarVec &b)
+{
+  VarVec sum;
+  for(int i = 0; i < a.size(); i++)
+    sum.push_back(new BinaryProduct(p, a[i], b[i]));
+  return MakeSum(p, sum);
+}
+
+// Return an expression for (2*A)^2, where A is area of the triangle formed by a,b,c
+Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c)
+{
+  VarVec U = VectorApplyPairwise<BinaryDifference>(p, b, a);
+  VarVec V = VectorApplyPairwise<BinaryDifference>(p, c, a);
+  VarVec W = CrossProduct(p, U, V);
+  return new TernaryGradientMagnitudeSqr(p, W[0], W[1], W[2]);
+}
+
 
 /******************************************************************
   Generic Constrained PRoblem STUFF
@@ -392,6 +509,14 @@ void ConstrainedNonLinearProblem
   m_Lambda.push_back(lambda);
 }
 
+Variable* ConstrainedNonLinearProblem
+::AddExpressionAsConstrainedVariable(Expression *exp)
+{
+  Variable *v = this->AddVariable("dummy", exp->Evaluate());
+  this->AddConstraint(new BinaryDifference(this, v, exp), 0, 0);
+  return v;
+}
+
 void ConstrainedNonLinearProblem
 ::SetObjective(Expression *ex)
 {
@@ -399,7 +524,7 @@ void ConstrainedNonLinearProblem
 }
 
 void ConstrainedNonLinearProblem
-::SetupProblem()
+::SetupProblem(bool hessian)
 {
   typedef std::set<Variable *> VarSet;
 
@@ -410,29 +535,24 @@ void ConstrainedNonLinearProblem
   // set up the Jacobian and Hessian matrices
 
   // Start with the gradient
-  std::cout << "Computing partial derivatives of the objective" << std::endl;
   for(int i = 0; i < m_X.size(); i++)
     {
     m_GradF.push_back(this->GetPartialDerivative(m_F, m_X[i]));
-    std::cout << "." << std::flush;
-    if((i+1) % 50 == 0)
-      std::cout << " " << (i+1) << std::endl;
     }
-  std::cout << std::endl;
 
   // Now the Jacobian of G
+  std::cout << "Computing Jacobian entries" << std::endl;
   SparseExpressionMatrix::STLSourceType stl_DG;
   for(int j = 0; j < m_G.size(); j++)
     {
     // Find the dependent variables of the constraint
-    VarSet vars;
-    m_G[j]->GetDependentVariables(vars);
+    const Dependency &vars = this->GetDependentVariables(m_G[j]);
 
     // Create a row for the sparse matrix
     SparseExpressionMatrix::STLRowType stl_row;
 
     // For each dependent variable, create a sparse entry.
-    for(VarSet::iterator it = vars.begin(); it != vars.end(); it++)
+    for(Dependency::const_iterator it = vars.begin(); it != vars.end(); it++)
       {
       Variable *v = *it;
       Expression *dg_dv = this->GetPartialDerivative(m_G[j], v);
@@ -441,7 +561,14 @@ void ConstrainedNonLinearProblem
 
     // Add the row
     stl_DG.push_back(stl_row);
+
+    if((j+1) % 50 == 0)
+      std::cout << "." << std::flush;
+    if((j+1) % 4000 == 0)
+      std::cout << " " << (j+1) << std::endl;
     }
+
+  std::cout << std::endl;
 
   // Form a proper sparse matrix from the STL construct
   m_DG.SetFromSTL(stl_DG, m_X.size());
@@ -452,6 +579,9 @@ void ConstrainedNonLinearProblem
   typedef std::map<IndexPair, Expression *> SparseMap;
   SparseMap Hmap;
 
+  if(!hessian)
+    return;
+
   // We begin by adding entries from the objective function
   std::cout << "Computing Hessian entries" << std::endl;
   for(int i = 0; i < m_X.size(); i++)
@@ -459,9 +589,8 @@ void ConstrainedNonLinearProblem
     Expression *df = m_GradF[i];
     if(df)
       {
-      VarSet depvar;
-      df->GetDependentVariables(depvar);
-      for(VarSet::iterator it = depvar.begin(); it != depvar.end(); it++)
+      const Dependency &depvar = this->GetDependentVariables(df);
+      for(Dependency::const_iterator it = depvar.begin(); it != depvar.end(); it++)
         {
         Variable *v = *it;
         if(v->GetIndex() <= i)   // Hessian must be lower triangular!
@@ -474,8 +603,9 @@ void ConstrainedNonLinearProblem
           }
         }
       }
-    std::cout << "." << std::flush;
     if((i+1) % 50 == 0)
+      std::cout << "." << std::flush;
+    if((i+1) % 4000 == 0)
       std::cout << " " << (i+1) << std::endl;
     }
   std::cout << std::endl;
@@ -488,10 +618,9 @@ void ConstrainedNonLinearProblem
       {
       Expression *dg = rit.Value();
       int row = rit.Column(); // Column in DG = Row in the hessian matrix
-      VarSet depvar;
-      dg->GetDependentVariables(depvar);
 
-      for(VarSet::iterator it = depvar.begin(); it != depvar.end(); it++)
+      const Dependency &depvar = this->GetDependentVariables(dg);
+      for(Dependency::const_iterator it = depvar.begin(); it != depvar.end(); it++)
         {
         Variable *v = *it;
         if(v->GetIndex() <= row)   // Hessian must be lower triangular!
@@ -530,10 +659,19 @@ void ConstrainedNonLinearProblem
   m_Hessian.SetFromSTL(stl_H, m_X.size());
 }
 
+void ConstrainedNonLinearProblem::SetGradientSmoothingKernel(SparseRealMatrix K)
+{
+  m_GradientKernel = K;
+}
+
+
 void ConstrainedNonLinearProblem::SetLambdaValues(const double *l)
 {
   for(int i = 0; i < m_Lambda.size(); i++)
     m_Lambda[i]->SetValue(l[i]);
+
+  // Make all the expressions dirty
+  this->MakeChildrenDirty();
 }
 
 void ConstrainedNonLinearProblem::GetVariableBounds(int i, double &lb, double &ub)
@@ -544,8 +682,12 @@ void ConstrainedNonLinearProblem::GetVariableBounds(int i, double &lb, double &u
 
 void ConstrainedNonLinearProblem::SetVariableValues(const double *x)
 {
+  // Set the variable values
   for(int i = 0; i < m_X.size(); i++)
     m_X[i]->SetValue(x[i]);
+
+  // Make all the expressions dirty
+  this->MakeChildrenDirty();
 }
 
 void ConstrainedNonLinearProblem::GetConstraintBounds(int i, double &lb, double &ub)
@@ -567,6 +709,9 @@ unsigned int ConstrainedNonLinearProblem::GetNumberOfConstraints()
 void ConstrainedNonLinearProblem::SetSigma(double value)
 {
   m_SigmaF->SetValue(value);
+
+  // Make all the expressions dirty
+  this->MakeChildrenDirty();
 }
 
 

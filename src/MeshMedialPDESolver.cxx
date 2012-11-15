@@ -853,7 +853,9 @@ MeshMedialPDESolver
 
   // The solution must be positive, otherwise this is an ill-posed problem
   if(!flagAllowErrors)
+    {
     for(size_t i = 0; i < topology->nVertices; i++)
+      {
       if(!vnl_math_isfinite(xSolution[i]))
         {
         // Dump the matrix for examination
@@ -874,6 +876,8 @@ MeshMedialPDESolver
 
 #endif
         }
+      }
+    }
 
   // Compute the medial atoms
   ComputeMedialAtoms(xSolution.data_block());

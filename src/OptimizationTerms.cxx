@@ -1214,6 +1214,10 @@ double VolumeIntegralEnergyTerm
       if(gradient_mode)
         function->ComputeGradient(Xj, p.xImageGrad[j]);
 
+
+      // printf("Spoke %04d:%04d, Sample %02d: VE=%8.4f\t IM=%8.4f\t X=%f, %f, %f\n",
+      //        ibnd, iatom, j, p.xVolumeElt[j], p.xImageVal[j], Xj[0], Xj[1], Xj[2]);
+
       // Compute the contribution to the total
       xVolumeIntegral += p.xVolumeElt[j];
       xObjectIntegral += p.xVolumeElt[j] * p.xImageVal[j];

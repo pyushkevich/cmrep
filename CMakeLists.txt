@@ -105,6 +105,11 @@ IF(USE_IPOPT)
   LINK_LIBRARIES(${IPOPT_LIBRARIES})
 ENDIF(USE_IPOPT)
 
+OPTION(USE_TETGEN "Use the TetGen library" OFF)
+IF(USE_TETGEN)
+  FIND_PACKAGE(TetGen REQUIRED)
+ENDIF(USE_TETGEN)
+
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
@@ -247,9 +252,13 @@ TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
 
 IF(USE_IPOPT)
   ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
-  ADD_EXECUTABLE(contest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/ConstrainedCMRepTest.cxx)
-  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
-  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS})
+  ADD_EXECUTABLE(contest
+                 src/GentleNLP.cxx
+                 src/IPOptProblemInterface.cxx
+                 src/ConstrainedCMRepObjectives.cxx
+                 src/ConstrainedCMRepTest.cxx)
+  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS} ${PARDISO_LIB})
+  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS} ${PARDISO_LIB})
 ENDIF(USE_IPOPT)
 
 # Add installation targets
