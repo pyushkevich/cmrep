@@ -987,16 +987,25 @@ int main(int argc, char *argv[])
 
   // Define a basis for the surface
   int nBasis = 20;
-  MeshBasisCoefficientMapping basismap(
+  MeshBasisCoefficientMapping basismap_X(
         model->GetIterationContext()->GetBoundaryMesh(), nBasis, 3);
+
+  // Define a basis for the medial axis
+  MeshBasisCoefficientMapping basismap_M(
+        model->GetIterationContext()->GetMedialMesh(), nBasis, 4);
 
   // Create the coefficient variables
   VarVecArray XC(nBasis, VarVec(3, NULL));
+  VarVecArray MC(nBasis, VarVec(4, NULL));
   for(int i = 0; i < nBasis; i++)
     {
     for(int j = 0; j < 3; j++)
       {
       XC[i][j] = p->AddVariable("XC", 0.0);
+      }
+    for(int j = 0; j < 4; j++)
+      {
+      MC[i][j] = p->AddVariable("MC", 0.0);
       }
     }
 
@@ -1016,12 +1025,39 @@ int main(int argc, char *argv[])
       for(int i = 0; i < nBasis; i++)
         {
         xfit->AddSummand(new ScalarProduct(p, XC[i][j],
-                                           basismap.GetBasisComponent(i, iBnd)));
+                                           basismap_X.GetBasisComponent(i, iBnd)));
         }
 
       // Xfit is the approximation of X using the basis
       objBasisResidual->AddSummand(
             new Square(p, new BinaryDifference(p, xfit, X[iBnd][j])));
+      }
+    }
+
+  for(MedialAtomIterator it = model->GetAtomIterator();
+      !it.IsAtEnd(); ++it)
+    {
+    int iatm = it.GetIndex();
+
+    MedialAtom &a = model->GetAtomArray()[iatm];
+
+    for(int j = 0; j < 4; j++)
+      {
+      double xfixed = (j < 3) ? a.X[j] : a.R;
+      Expression *xdata = (j < 3) ? M[iatm][j] : R[iatm];
+
+      BigSum *xfit = new BigSum(p);
+
+      xfit->AddSummand(new Constant(p, xfixed));
+      for(int i = 0; i < nBasis; i++)
+        {
+        xfit->AddSummand(new ScalarProduct(p, MC[i][j],
+                                           basismap_M.GetBasisComponent(i, iatm)));
+        }
+
+      // Xfit is the approximation of X using the basis
+      objBasisResidual->AddSummand(
+            new Square(p, new BinaryDifference(p, xfit, xdata)));
       }
     }
 
