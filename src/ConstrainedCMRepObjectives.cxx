@@ -306,7 +306,7 @@ CreateOverlapObjective(
     for(int j = 0; j < 3; j++)
       {
       // Create a variable that equals v[j]
-      Variable *vc = p->AddExpressionAsConstrainedVariable(v[j]);
+      Variable *vc = p->AddExpressionAsConstrainedVariable(v[j], "VJ");
 
       // Add that variable to each spoke
       static_cast<BigSum *>(xInteriorVolumeElement[ib0][j])->AddSummand(vc);
@@ -514,4 +514,5 @@ void CreateAreaElementScaledOverlapObjective(
   *outVolumeIntegral = xVolumeIntegral;
   *outObjectIntegral = xObjectIntegral;
 }
+
 

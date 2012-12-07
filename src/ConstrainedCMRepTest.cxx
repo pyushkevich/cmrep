@@ -220,14 +220,19 @@ Expression *TetraHedronVolume(
 }
 
 
-double GetCentralDifference(Expression *ex, Variable *v, double delta=1e-5)
+double GetCentralDifference(Problem *p, Expression *ex, Variable *v, double delta=1e-5)
 {
-  // Do the perturbation
   double val = v->Evaluate();
+
+  // Do the perturbation
+  ex->MakeTreeDirty();
   v->SetValue(val + delta);
-  double f2 = ex->Evaluate();
+    double f2 = ex->Evaluate();
+
+  ex->MakeTreeDirty();
   v->SetValue(val - delta);
   double f1 = ex->Evaluate();
+
   v->SetValue(val);
 
   return (f2 - f1) / (2 * delta);
@@ -260,7 +265,7 @@ void TestExpressionRandomDerivative(
     return;
 
   double dAnalytic = pd ? pd->Evaluate() : 0.0;
-  double dCentralDiff = GetCentralDifference(ex, v);
+  double dCentralDiff = GetCentralDifference(p, ex, v);
 
   printf("D[%10s,%10s,%d]: %12.8f  %12.8f  %12.8f\n",
          nickname, v->GetName().c_str(), order,
@@ -272,6 +277,7 @@ void TestExpressionRandomDerivative(
 
 void DerivativeTest(ConstrainedNonLinearProblem *p, int nTests)
 {
+  p->MakeChildrenDirty();
   printf("TEST [%12s]: %12s  %12s  %12s\n",
          "Variable", "Analytic", "CentralDiff", "Delta");
 
@@ -293,6 +299,8 @@ void DerivativeTest(ConstrainedNonLinearProblem *p, int nTests)
 
     TestExpressionRandomDerivative(p, con, buffer, 2);
     }
+
+  p->MakeChildrenDirty();
 }
 
 
@@ -354,7 +362,9 @@ void SaveGradient(
     Expression *dx = p->GetPartialDerivative(f, (Variable *)X[i][0]);
     Expression *dy = p->GetPartialDerivative(f, (Variable *)X[i][1]);
     Expression *dz = p->GetPartialDerivative(f, (Variable *)X[i][2]);
-    arr->InsertNextTuple3(dx->Evaluate(), dy->Evaluate(), dz->Evaluate());
+    arr->InsertNextTuple3(dx ? dx->Evaluate() : 0,
+                          dy ? dy->Evaluate() : 0,
+                          dz ? dz->Evaluate() : 0);
     }
 
   vtkPolyData *poly = vtkPolyData::New();
@@ -582,10 +592,159 @@ void CreateTetgenMesh(GenericMedialModel *model,
 
     double tv = vol->Evaluate();
 
-    problem->AddConstraint(vol, 0.1 * tv, 100 * tv);
+    problem->AddConstraint(vol, "TETVOL", 0.1 * tv, 100 * tv);
     }
 }
 
+
+
+
+
+
+
+void SaveCircumcenterMesh(VarVecArray &CC, VarVec &CR, VarVecArray &CCBC)
+{
+
+  vtkPoints *out_pts = vtkPoints::New();
+  out_pts->Allocate(CC.size());
+
+  vtkPolyData *out_poly = vtkPolyData::New();
+  out_poly->SetPoints(out_pts);
+
+  vtkFloatArray *arrRad = vtkFloatArray::New();
+  arrRad->SetNumberOfComponents(1);
+  arrRad->Allocate(CC.size());
+  arrRad->SetName("Radius");
+
+  vtkFloatArray *arrBC = vtkFloatArray::New();
+  arrBC->SetNumberOfComponents(3);
+  arrBC->Allocate(CC.size());
+  arrBC->SetName("BC");
+
+  for(int i = 0; i < CC.size(); i++)
+    {
+    out_pts->InsertNextPoint(
+          CC[i][0]->Evaluate(), CC[i][1]->Evaluate(), CC[i][2]->Evaluate());
+
+    arrRad->InsertNextTuple1(CR[i]->Evaluate());
+    arrBC->InsertNextTuple3(
+          CCBC[i][0]->Evaluate(),
+          CCBC[i][1]->Evaluate(),
+          CCBC[i][2]->Evaluate());
+    }
+
+  out_poly->GetPointData()->SetScalars(arrRad);
+  out_poly->GetPointData()->AddArray(arrBC);
+
+  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
+  writer->SetInput(out_poly);
+  writer->SetFileName("circumcenter.vtk");
+  writer->Update();
+}
+
+
+
+
+/**
+ * Compute edge and triangle properties (areas, normals, lengths) using
+ * only quadratic expressions and constraints
+ */
+VarVecArray dummyArray;
+
+void ComputeTriangleAndEdgeProperties(
+    ConstrainedNonLinearProblem *p,
+    TriangleMesh *mesh,
+    const VarVecArray &X,   // Vertices
+    VarVecArray &NT,        // Triangle normals
+    VarVec &AT,             // Triangle areas
+    bool doEdges = false,   // Triangle edge lengths (opposite each vertex)
+    VarVecArray &TEL = dummyArray)
+{
+  // Initialize to arrays of NULLS
+  std::fill(AT.begin(), AT.end(), (Expression *) NULL);
+  std::fill(NT.begin(), NT.end(), VarVec(3, NULL));
+  AT.resize(mesh->triangles.size(), NULL);
+  NT.resize(mesh->triangles.size(), VarVec(3, NULL));
+
+  if(doEdges)
+    {
+    std::fill(TEL.begin(), TEL.end(), VarVec(3, NULL));
+    TEL.resize(mesh->triangles.size(), VarVec(3, NULL));
+    }
+
+  // Iterate over all the triangles in this mesh
+  for(int it = 0; it < mesh->triangles.size(); it++)
+    {
+    // Here is a triangle
+    Triangle &t = mesh->triangles[it];
+    size_t *v = t.vertices;
+
+    // The un-normalized normal of the triangle
+    VarVec Xu = VectorApplyPairwise<BinaryDifference>(p, X[v[1]], X[v[0]]);
+    VarVec Xv = VectorApplyPairwise<BinaryDifference>(p, X[v[2]], X[v[0]]);
+    VarVec Xu_cross_Xv = CrossProduct(p, Xu, Xv);
+
+    // The area is half the norm of this cross product
+    vnl_vector_fixed<double, 3> v_Xu_cross_Xv = VectorEvaluate(Xu_cross_Xv);
+    double v_area = 0.5 * v_Xu_cross_Xv.magnitude();
+    vnl_vector_fixed<double, 3> v_normal = 0.5 * v_Xu_cross_Xv / v_area;
+
+    // Create the variables for the triangle area and normal
+    AT[it] = p->AddVariable("AT", v_area, 0);
+    for(int d = 0; d < 3; d++)
+      NT[it][d] = p->AddVariable("NT", v_normal[d]);
+
+    // Create the constraint relating the area and the normal
+    for(int d = 0; d < 3; d++)
+      {
+      Expression *con = new BinaryDifference(
+            p,
+            new ScalarProduct(p, new BinaryProduct(p, AT[it], NT[it][d]), 2.0),
+            Xu_cross_Xv[d]);
+
+      if(fabs(con->Evaluate()) > 1e-6)
+        std::cout << "Con_TA-TN: " << con->Evaluate() << std::endl;
+
+      p->AddConstraint(con, "TA-TN", 0, 0);
+      }
+
+    // Normal is length one
+    Expression *normlen = DotProduct(p, NT[it], NT[it]);
+    p->AddConstraint(normlen, "TN.TN", 1.0, 1.0);
+
+    // Compute the edges
+    if(doEdges)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        // The edge may have been set up by the opposite triangle
+        if(TEL[it][d] != NULL)
+          continue;
+
+        // The opposite vertices
+        size_t v1 = v[(d + 1) % 3], v2 = v[(d + 2) % 3];
+
+        // Set up the egde length expression
+        Expression *edgeLenSq = DistanceSqr(p, X[v1], X[v2]);
+
+        // Create a variable for the edge length
+        Expression *edgeLen = p->AddVariable("EL", sqrt(edgeLenSq->Evaluate()), 0);
+
+        // Create the constraint linking the two
+        Expression *con = new BinaryDifference(
+              p, new Square(p, edgeLen), edgeLenSq);
+        p->AddConstraint(con, "EDGELEN", 0, 0);
+
+        // Assign the edge length variable to the current and opposite triangle
+        TEL[it][d] = edgeLen;
+        if(t.neighbors[d] != NOID)
+          {
+          TEL[t.neighbors[d]][t.nedges[d]] = edgeLen;
+          }
+        }
+      }
+    }
+}
 
 
 int main(int argc, char *argv[])
@@ -603,6 +762,9 @@ int main(int argc, char *argv[])
   MedialPDE mrep(cmrepfile);
   SubdivisionMedialModel *model =
       dynamic_cast<SubdivisionMedialModel *>(mrep.GetMedialModel());
+
+  // Get the number of boundary and medial points
+  int nb = model->GetNumberOfBoundaryPoints(), nm = model->GetNumberOfAtoms();
 
   // Load the target mesh
   vtkPolyData *target = ReadVTKMesh(targetmesh);
@@ -665,15 +827,13 @@ int main(int argc, char *argv[])
   // as -R*N. They appear in multiple places though, so we should store them
   VarVecArray U(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL));
 
-  // The triangle areas on the boundary surface (to avoid square roots)
-  VarVec taX(model->GetNumberOfBoundaryTriangles(), NULL);
-
-  // The triangle areas on the medial surface
-  VarVec taM(model->GetNumberOfTriangles(), NULL);
+  // The triangle areas, normals and edge lengths on the boundary surface
+  // and on the medial surface (to avoid square roots)
+  VarVec taX, taM;
+  VarVecArray NT_X, TEL_X, NT_M, TEL_M;
 
   // A buffer for making variable names
   char buffer[64];
-
 
   // Configure the medial point variables
   for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
@@ -733,13 +893,52 @@ int main(int argc, char *argv[])
   // Configure the boundary and medial triangle area variables
   // ------------------------------------------------------------------------
 
+  // Compute boundary triangle edges, normals, and areas
+  ComputeTriangleAndEdgeProperties(
+        p, model->GetIterationContext()->GetBoundaryMesh(),
+        X, NT_X, taX, true, TEL_X);
+
+  // Compute medial triangle edges, normals, and areas
+  ComputeTriangleAndEdgeProperties(
+        p, model->GetIterationContext()->GetMedialMesh(),
+        M, NT_M, taM);
+
   // Create and initialize expression arrays for boundary area element
+  /*
   VarVec AeltX(model->GetNumberOfBoundaryPoints(), NULL);
   for(int i = 0; i < AeltX.size(); i++) AeltX[i] = new BigSum(p);
 
+  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
+      !trit.IsAtEnd(); ++trit)
+    {
+    // Get the triangle index
+    int k = trit.GetIndex();
+
+    // Accumulate the area element
+    for(int j = 0; j < 3; j++)
+      static_cast<BigSum *>(AeltX[trit.GetBoundaryIndex(j)])->AddSummand(taX[k]);
+    }
+  */
+
   // Create and initialize expression arrays for medial area element
+  /*
   VarVec AeltM(model->GetNumberOfAtoms(), NULL);
   for(int i = 0; i < AeltM.size(); i++) AeltM[i] = new BigSum(p);
+
+  // Process medial triangles
+  for(MedialTriangleIterator trit = model->GetMedialTriangleIterator();
+      !trit.IsAtEnd(); ++trit)
+    {
+    // Get the triangle index
+    int k = trit.GetIndex();
+
+    // Accumulate the area element
+    for(int j = 0; j < 3; j++)
+      static_cast<BigSum *>(AeltM[trit.GetAtomIndex(j)])->AddSummand(taM[k]);
+    }
+  */
+
+  /* OLD CODE
 
   // Process boundary triangles
   for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
@@ -805,6 +1004,8 @@ int main(int argc, char *argv[])
             areaSq), 0.0, 0.0);
     }
 
+    */
+
   // ------------------------------------------------------------------------
   // Configure the constraints on boundary normal and also compute curvatures
   // ------------------------------------------------------------------------
@@ -815,15 +1016,18 @@ int main(int argc, char *argv[])
   lts.SetMesh(bmesh);
 
   // Expressions describing Xu, Xv, Nu, Nv at each point on the boundary
-  VarVecArray Xd[] = {
-    VarVecArray(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL)),
-    VarVecArray(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL)) };
+  VarVecArray Xd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
+  VarVecArray Nd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
 
-  VarVecArray Nd[] = {
-    VarVecArray(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL)),
-    VarVecArray(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL)) };
+  // Expression for the first fundamental and the shape operator
+  VarVec F1[2][2] = {{VarVec(nb, NULL), VarVec(nb, NULL)},{VarVec(nb, NULL), VarVec(nb, NULL)}};
+  VarVec F2[2][2] = {{VarVec(nb, NULL), VarVec(nb, NULL)},{VarVec(nb, NULL), VarVec(nb, NULL)}};
 
-  VarVec curv_mean(model->GetNumberOfBoundaryPoints(), NULL);
+  VarVec curv_mean(nb, NULL);
+  VarVec curv_gauss(nb, NULL);
+  VarVec curv_k1(nb, NULL);
+  VarVec curv_k2(nb, NULL);
+
   BigSum *objBending = new BigSum(p);
   BigSum *objSimpleBending = new BigSum(p);
 
@@ -867,7 +1071,7 @@ int main(int argc, char *argv[])
       Expression *constrNormXu = DotProduct(p, Xd[d][i], N[i]);
 
       // Add the constraint to the problem
-      p->AddConstraint(constrNormXu, 0, 0);
+      p->AddConstraint(constrNormXu, "N.Xu", 0, 0);
       }
 
     // While we are here, add the constraint on the normal being norm 1
@@ -876,41 +1080,161 @@ int main(int argc, char *argv[])
                                         N[it.GetIndex()][0],
                                         N[it.GetIndex()][1],
                                         N[it.GetIndex()][2]);
-    p->AddConstraint(constrNormMag, 1.0, 1.0);
+    p->AddConstraint(constrNormMag, "N.N", 1.0, 1.0);
 
-    // Compute the first/second fundamental form at the point
-    Expression *FF1[2][2], *FF2[2][2];
+    // For non-edge atoms, we are done, no need to compute the rest
+    // TURN THIS BACK ON!
+   // if(!it.IsEdgeAtom())
+   //   {
+      curv_mean[i] = new Constant(p, 0);
+      curv_gauss[i] = new Constant(p, 0);
+      curv_k1[i] = new Constant(p, 0);
+      curv_k2[i] = new Constant(p, 0);
+      continue;
+    //  }
+
+    // Compute the first fundamental form at the point.
+    vnl_matrix_fixed<double, 2, 2> mFF1, mFF2, mSO;
+    Expression *FF1[2][2], *FF2_neg[2][2], *SO[2][2];
     for(int q = 0; q < 2; q++)
       {
       for(int r = 0; r < 2; r++)
         {
-        FF1[q][r] = DotProduct(p, Xd[q][i], Xd[r][i]);
-        FF2[q][r] = new Negation(p, DotProduct(p, Xd[q][i], Nd[r][i]));
+        // Add the expression for the first f. f. as a constrained variable
+        FF1[q][r] = p->AddExpressionAsConstrainedVariable(DotProduct(p, Xd[q][i], Xd[r][i]), "FF1");
+        mFF1[q][r] = FF1[q][r]->Evaluate();
+
+        // Minus the second f.f.
+        FF2_neg[q][r] = DotProduct(p, Xd[q][i], Nd[r][i]);
+        mFF2[q][r] = FF2_neg[q][r]->Evaluate();
         }
       }
 
-    // Compute the mean curvature
-    curv_mean[i] =
-        new BinaryFraction(
-          p,
-          new BinaryDifference(
-            p,
-            new BinarySum(
-              p,
-              new BinaryProduct(p, FF2[0][0], FF1[1][1]),
-              new BinaryProduct(p, FF2[1][1], FF1[0][0])),
-            new BinarySum(
-              p,
-              new BinaryProduct(p, FF2[0][1], FF1[1][0]),
-              new BinaryProduct(p, FF2[1][0], FF1[0][1]))),
-          new ScalarProduct(
-            p,
-            new BinaryDifference(
-              p,
-              new BinaryProduct(p, FF1[0][0], FF1[1][1]),
-              new Square(p, FF1[0][1])),
-            2.0)) ;
+    // Numerically solve for the shape operator
+    mSO = - vnl_inverse(mFF1) * mFF2;
 
+    // Add the expression for the shape operator
+    for(int q = 0; q < 2; q++)
+      {
+      for(int r = 0; r < 2; r++)
+        {
+        SO[q][r] = p->AddVariable("SO", mSO[q][r]);
+        }
+      }
+
+    // Solve for the shape operator
+    for(int q = 0; q < 2; q++)
+      {
+      for(int r = 0; r < 2; r++)
+        {
+        // Minus the second f.f.
+        Expression *sff = DotProduct(p, Xd[q][i], Nd[r][i]);
+
+        // Expression for FFF * S - SFF
+        Expression *con = new TernarySum(
+              p,
+              new BinaryProduct(p, FF1[q][0], SO[0][r]),
+              new BinaryProduct(p, FF1[q][1], SO[1][r]),
+              sff);
+
+        if(fabs(con->Evaluate()) > 1e-6)
+          std::cout << "Con_SO = " << con->Evaluate() << std::endl;
+
+        // Set as a hard constraint
+        p->AddConstraint(con, "SO", 0, 0);
+        }
+      }
+
+    // Numerically solve for k1
+    double mH = vnl_trace(mSO) / 2;
+    double mK = vnl_det(mSO);
+    double mk1 = mH - sqrt(mH*mH - mK);
+
+    // Solve the characteristic polynomial for kappa1
+    Expression *k1 = p->AddVariable("k1", mk1);
+
+    // The constraint on kappa1
+    Expression * con = new BinaryDifference(p,
+                                            new BinaryProduct(p,
+                                                              new BinaryDifference(p, SO[0][0], k1),
+                                                              new BinaryDifference(p, SO[1][1], k1)),
+                                            new BinaryProduct(p, SO[0][1], SO[1][0]));
+
+    // Evaluate the constraint
+    p->AddConstraint(con, "Kappa-eq", 0, 0);
+
+    if(fabs(con->Evaluate()) > 1e-6)
+      std::cout << "Con_K1 = " << con->Evaluate() << std::endl;
+
+    // We want kappa1 to be the larger in magnitude of the two curvatures. This is equivalent
+    // to having kappa1 > trace(SO)/2. K1 is negative.
+    Expression *H = new ScalarProduct(p, new BinarySum(p, SO[0][0], SO[1][1]), 0.5);
+    Expression *con2 = new BinaryDifference(p, k1, H);
+
+    p->AddConstraint(con2, "Kappa-ineq", ConstrainedNonLinearProblem::LBINF, 0);
+
+    if(con2->Evaluate() > -1e-6)
+      std::cout << "Con_K1_sign = " << con2->Evaluate() << std::endl;
+
+    // Store these curvatures for future reference
+    curv_mean[i] = H;
+    curv_k1[i] = k1;
+    curv_k2[i] = new BinaryDifference(p, new ScalarProduct(p, H, 2), k1);
+    curv_gauss[i] = new BinaryProduct(p, k1, curv_k2[i]);
+
+    // std::cout << "K1 = " << curv_k1[i]->Evaluate() << "; K2 = " << curv_k2[i]->Evaluate() << std::endl;
+
+    /*
+
+    // Compute the mean and Gaussian curvature
+    Expression *kE = FF1[0][0], *kG = FF1[1][1], *kF1 = FF1[0][1], *kF2 = FF1[1][0];
+    Expression *kL = FF2[0][0], *kN = FF2[1][1], *kM1 = FF2[0][1], *kM2 = FF2[1][0];
+
+    // EG - F^2
+    Expression *denom = new BinaryDifference(p,
+                                             new BinaryProduct(p, kE, kG),
+                                             new BinaryProduct(p, kF1, kF2));
+
+    // Expression for H : (GL - 2FM + EN) / (2 * denom)
+    Expression *kH_num =
+        new BinaryDifference(
+          p,
+          new BinarySum(p, new BinaryProduct(p, kG, kL), new BinaryProduct(p, kE, kN)),
+          new BinarySum(p, new BinaryProduct(p, kF1, kM1), new BinaryProduct(p, kF2, kM2)));
+
+    // Note teh minus sign!
+    Expression *kH = new BinaryFraction(p, kH_num, new ScalarProduct(p, denom, -2));
+
+    // Expression for K : (LN - M^2) / denom
+    Expression *kK =
+        new BinaryFraction(p,
+                           new BinaryDifference(p, new BinaryProduct(p, kL, kN),
+                                                new BinaryProduct(p, kM1, kM2)),
+                           denom);
+
+    // Expression for the principal curvatures
+    Expression *determ = new SquareRoot(p, new BinaryDifference(p, new Square(p, kH), kK));
+    Expression *k1 = new BinaryDifference(p, kH, determ);
+    Expression *k2 = new BinarySum(p, kH, determ);
+
+    // Compute the mean curvature
+    curv_mean[i] = kH;
+    curv_gauss[i] = kK;
+    curv_k1[i] = k1;
+    curv_k2[i] = k2;
+
+    */
+
+    // For the boundary nodes, link the radius function to the curvature!
+    if(it.IsEdgeAtom())
+      {
+      Expression *con = new BinaryProduct(p, R[it.GetAtomIndex()], k1);
+      p->AddConstraint(con, "R*kappa", -1.0, -1.0);
+      std::cout << "con-RadK = " << con->Evaluate() << std::endl;
+      }
+
+    // The complex bending objective
+    /*
     objBending->AddSummand(new Square(p, new BinaryDifference(
                                         p,
                                         new BinarySum(
@@ -921,6 +1245,7 @@ int main(int argc, char *argv[])
                                           p,
                                           new BinaryProduct(p, FF2[0][1], FF1[1][0]),
                                           new BinaryProduct(p, FF2[1][0], FF1[0][1])))));
+                                          */
 
     // Compute the simple bending objective
     BigSum *Xj[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
@@ -976,7 +1301,7 @@ int main(int argc, char *argv[])
                                              new BinaryProduct(p,
                                                                R[iAtom],
                                                                N[iBnd][j])));
-      p->AddConstraint(constMedial, 0, 0);
+      p->AddConstraint(constMedial, "X-rNM", 0, 0);
       }
     }
 
@@ -1105,10 +1430,36 @@ int main(int argc, char *argv[])
     objVolume->AddSummand(wedgeVol[trit.GetIndex()]);
     }
 
+
   // ------------------------------------------------------------------------
   // Create the medial/boundary Jacobian constraint (normals point in same direction)
   // ------------------------------------------------------------------------
+  double constJacFact = 0.1;
+  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
+      !trit.IsAtEnd(); ++trit)
+    {
+    // For this constraint, we just want the medial triangle normal and
+    // the boundary triangle normal to point in the same direction!
+    Expression *dp =
+        DotProduct(p, NT_X[trit.GetIndex()], NT_M[trit.GetMedialTriangleIndex()]);
 
+    // Depending on the side, constrain up or down
+    if(trit.GetBoundarySide() == 1)
+      {
+      if(dp->Evaluate() < constJacFact)
+        std::cout << "Wrong: " << dp->Evaluate() << std::endl;
+      p->AddConstraint(dp, "Jac", constJacFact, ConstrainedNonLinearProblem::UBINF);
+      }
+    else
+      {
+      if(dp->Evaluate() > -constJacFact)
+        std::cout << "Wrong: " << dp->Evaluate() << std::endl;
+      p->AddConstraint(dp, "Jac", ConstrainedNonLinearProblem::LBINF, -constJacFact);
+      }
+    }
+
+
+#ifdef OLD_CODE
   // Lower bound for Nm . Nx / (Nm . Nm)
   double constJacFact = 0.1;
 
@@ -1151,7 +1502,8 @@ int main(int argc, char *argv[])
     // Print the ratio
     // printf("JACCON: %f %f \n", NmNm->Evaluate(), NmNx->Evaluate() / NmNm->Evaluate());
 
-    }
+    } 
+#endif
 
   // ------------------------------------------------------------------------
   // Create the MIB constraint
@@ -1166,16 +1518,13 @@ int main(int argc, char *argv[])
     for(EdgeWalkAroundVertex walk(mesh, iBnd); !walk.IsAtEnd(); ++walk)
       {
       int k = walk.MovingVertexId();
-      Expression *distsq = new TernarySum(
-            p,
-            new Square(p, new BinaryDifference(p, M[iAtom][0], X[k][0])),
-            new Square(p, new BinaryDifference(p, M[iAtom][1], X[k][1])),
-            new Square(p, new BinaryDifference(p, M[iAtom][2], X[k][2])));
+      Expression *distsq = DistanceSqr(p, M[iAtom], X[k]);
       p->AddConstraint(
             new BinaryDifference(p, distsq, new Square(p, R[iAtom])),
-            0, ConstrainedNonLinearProblem::UBINF);
+            "MIB", 0, ConstrainedNonLinearProblem::UBINF);
       }
     }
+
 
   // ------------------------------------------------------------------------
   // Construct the first part of the objective function
@@ -1196,7 +1545,8 @@ int main(int argc, char *argv[])
   // Construct an opposite objective: distance from a selected set of points
   // to the closest point on the medial mesh
   // ------------------------------------------------------------------------
-  std::vector<PointMatch> meshToModel = find_closest_to_mesh(target, model, 1000);
+  std::vector<PointMatch> meshToModel =
+      find_closest_to_mesh(target, model, model->GetNumberOfBoundaryPoints());
   BigSum *objRecipSqDist = new BigSum(p);
   for(int i = 0; i < meshToModel.size(); i++)
     {
@@ -1221,6 +1571,139 @@ int main(int argc, char *argv[])
     // Add the area to the objective
     objSurfArea->AddSummand(taX[trit.GetIndex()]);
     }
+
+
+
+  // ------------------------------------------------------------------------
+  // Solve for the circumcenter and circumradius of each boundary triangle
+  // ------------------------------------------------------------------------
+
+#ifdef CIRCUMCENTER
+
+  // Define arrays for circumcenter, circumradius, barycentric coords of the c.c.
+  VarVecArray CC(model->GetNumberOfBoundaryTriangles(), VarVec(3, NULL));
+  VarVecArray CCBC(model->GetNumberOfBoundaryTriangles(), VarVec(3, NULL));
+  VarVec CR(model->GetNumberOfBoundaryTriangles(), NULL);
+
+  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
+      !trit.IsAtEnd(); ++trit)
+    {
+
+    // Get the corners of the triangle
+    VarVec XT[3] = {
+      X[trit.GetBoundaryIndex(0)],
+      X[trit.GetBoundaryIndex(1)],
+      X[trit.GetBoundaryIndex(2)]
+    };
+
+
+
+    // We define the barycentric coordinates of the circumcenter, the circum
+    // center itself and the circumradius using implicit equations, arising
+    // from solving the constrained problem R=argmin(R^2) subj to. |X-C|^2 = R,
+    // |Y-C|^2 = R, |Z-C|^2 = R, using Lagrange multipliers
+    VarVec &lambda = CCBC[trit.GetIndex()];
+    VarVec &C = CC[trit.GetIndex()];
+
+    // Expressions for squared edge lengths
+    VarVec elen2(3, NULL);
+    elen2[0] = DistanceSqr(p, XT[1], XT[2]);
+    elen2[1] = DistanceSqr(p, XT[2], XT[0]);
+    elen2[2] = DistanceSqr(p, XT[0], XT[1]);
+
+    // Sum of the edge lengths squared
+    double elen2sum = elen2[0]->Evaluate() + elen2[1]->Evaluate() + elen2[2]->Evaluate();
+
+    // Compute what the barycenter coordinates should be (Wikipedia)
+    vnl_vector_fixed<double, 3> lambdaVal;
+    for(int j = 0; j < 3; j++)
+      lambdaVal[j] = elen2[j]->Evaluate() * (elen2sum - 2 * elen2[j]->Evaluate());
+    lambdaVal /= lambdaVal.sum();
+
+    // We constrain lambdas to be positive - forces acute triangles! And
+    // probably setting an upper limit would work to constrain the minimal
+    // angle of the triangle
+    for(int j = 0; j < 3; j++)
+      {
+      // Wikipedia expression for the lambdas
+      lambda[j] = p->AddVariable("l", lambdaVal[j], 0);
+      }
+
+    // Now we define the seven constraints that tie these variables.
+
+    // L1 + L2 + L3 = 1
+    p->AddConstraint(new TernarySum(p, lambda[0], lambda[1], lambda[2]), 1.0, 1.0);
+
+    // C = L1 X + L2 Y + L3 Z
+    for(int j = 0; j < 3; j++)
+      {
+      // What C should equal
+      Expression *rhs = new TernarySum(p,
+                                       new BinaryProduct(p, lambda[0], XT[0][j]),
+                                       new BinaryProduct(p, lambda[1], XT[1][j]),
+                                       new BinaryProduct(p, lambda[2], XT[2][j]));
+      // Add the variable and the constraint
+      C[j] = p->AddExpressionAsConstrainedVariable(rhs);
+      }
+
+    // Compute squared distances from the vertices to the center
+    VarVec XCd2(3, NULL);
+    XCd2[0] = DistanceSqr(p, XT[0], C);
+    XCd2[1] = DistanceSqr(p, XT[1], C);
+    XCd2[2] = DistanceSqr(p, XT[2], C);
+
+    // Create radius variable
+    Expression *Rc = CR[trit.GetIndex()] = p->AddVariable("Rc", sqrt(XCd2[0]->Evaluate()), 0);
+
+    // |C-X|^2 = R^2
+    for(int j = 0; j < 3; j++)
+      {
+      p->AddConstraint(new BinaryDifference(p, XCd2[j], new Square(p,Rc)), 0.0, 0.0);
+      }
+
+    /*
+
+    // Add variables for cotan alpha
+    for(int j = 0; j < 3; j++)
+      {
+      // Edge length opposite vertex j
+      Expression *elen = p->AddVariable("len", sqrt(elen2[j]->Evaluate()), 0);
+
+      // Make it equal its square!
+      Expression *conEdge = new BinaryDifference(p, new Square(p, elen), elen2[j]);
+      p->AddConstraint(conEdge, 0, 0);
+
+      // The distance from circumcenter to edge
+      Expression *height = p->AddVariable("hgt", sqrt(Rc->Evaluate()*Rc->Evaluate() - 0.25 * elen->Evaluate() * elen->Evaluate()), 0);
+
+      // Simple linking expressions: 0.25 * elen^2 + h^2 = r^2
+
+      Expression *conPytha = new TernarySum(p,
+                                            new ScalarProduct(p, new Square(p, elen), 0.25),
+                                            new Square(p, height),
+                                            new Negation(p, new Square(p, Rc)));
+
+      p->AddConstraint(conPytha, 0, 0);
+
+      // The cotan we care about!
+      Expression *cotA = p->AddVariable("cotA", height->Evaluate() / elen->Evaluate(), 0);
+
+      // cot-alpha * elen = height
+      p->AddConstraint(new BinaryDifference(p,
+                                            new BinaryProduct(p, cotA, elen),
+                                            height), 0, 0);
+
+      printf("CotA[%d] : %f\n", j, cotA->Evaluate());
+      }
+      */
+
+    }
+
+#endif
+
+#define ASPECTRATIO 1
+
+#ifdef ASPECTRATIO_OLD
 
   // ------------------------------------------------------------------------
   // Add a constraint on triangle aspect ratios
@@ -1273,6 +1756,36 @@ int main(int argc, char *argv[])
         }
       }
 
+/*
+    // Create a variable for the cosine of each angle in the triangle
+    for(int j = 0; j < 3; j++)
+      {
+      int k0 = trit.GetBoundaryIndex(j);
+      int k1 = trit.GetBoundaryIndex((j + 1) % 3);
+      int k2 = trit.GetBoundaryIndex((j + 2) % 3);
+
+      // cos(theta) = dot(u,v) / (|u| * |v|)
+      Expression *UdotV = DotProduct(
+            p,
+            VectorApplyPairwise<BinaryDifference>(p, X[k1], X[k0]),
+            VectorApplyPairwise<BinaryDifference>(p, X[k2], X[k0]));
+
+      Expression *lenU = edge[(j+1) % 3];
+      Expression *lenV = edge[(j+2) % 3];
+
+      // Add the cosine of alpha with constraints on range
+      Expression *cosAlpha = p->AddVariable(
+            "cos", UdotV->Evaluate() / (lenU->Evaluate() * lenV->Evaluate()),
+            0, acos(vnl_math::pi * 15 / 180));
+
+      // Create a constraint linking the cosine
+      Expression *constr = new BinaryDifference(
+            p, new TernaryProduct(p, lenU, lenV, cosAlpha), UdotV);
+
+      p->AddConstraint(constr, 0, 0);
+      }
+*/
+
     // Create constraints based on the cosine rule
     double min_angle = vnl_math::pi * 20 / 180;
     double max_cos = cos(min_angle);
@@ -1289,6 +1802,42 @@ int main(int argc, char *argv[])
               p, c2, new ScalarProduct(p, new BinaryProduct(p, a, b), 2 * max_cos)),
             new BinarySum(p, a2, b2));
       p->AddConstraint(constr, 0.0, ConstrainedNonLinearProblem::UBINF);
+      }
+    }
+
+#endif
+
+  // ------------------------------------------------------------------------
+  // Add a constraint on minimal angle of boundary triangles
+  // ------------------------------------------------------------------------
+  double min_angle = vnl_math::pi * 12 / 180;
+  double max_csc = 1.0 / sin(min_angle);
+
+  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
+      !trit.IsAtEnd(); ++trit)
+    {
+    int k = trit.GetIndex();
+    for(int d = 0; d < 3; d++)
+      {
+      Expression *l1 = TEL_X[k][(d + 1) % 3];
+      Expression *l2 = TEL_X[k][(d + 2) % 3];
+      double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taX[k]->Evaluate());
+
+      // Create a constrainted variable for the angle
+      Expression *csc_alpha = p->AddVariable("cscAlpha", v_csc_alpha,
+                                             ConstrainedNonLinearProblem::LBINF,
+                                             max_csc);
+
+      // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
+      Expression *con = new BinaryDifference(
+            p,
+            new ScalarProduct(p, new BinaryProduct(p, taX[k], csc_alpha), 2.0),
+            new BinaryProduct(p, l1, l2));
+
+      if(fabs(con->Evaluate()) > 1e-6)
+        std::cout << "Con-CSC: " << con->Evaluate() << std::endl;
+
+      p->AddConstraint(con, "CSC", 0, 0);
       }
     }
 
@@ -1323,6 +1872,8 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Derive an image match objective
   // ------------------------------------------------------------------------
+
+#ifdef USE_DICE
   VarVecArray sampleX;
   VarVec sampleF;
   Expression *objObjectIntegral, *objVolumeIntegral;
@@ -1380,11 +1931,14 @@ int main(int argc, char *argv[])
     }
     */
 
+
   // Compute a Dice-like objective value
   double volTarget = image->ComputeObjectVolume();
   Expression *objDice = new BinaryDifference(
         p, new Constant(p, 1.0),
         new ScalarProduct(p, objObjectIntegral, 1.0 / volTarget));
+
+#endif // USE_DICE
 
   // As an initial objective, we just want to resolve all the constraints
   BigSum *objDisplacement = new BigSum(p);
@@ -1403,7 +1957,7 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Derive the final objective
   // ------------------------------------------------------------------------
-  double scaleRecip = model->GetNumberOfBoundaryPoints() * 1.0 / 1000;
+  double scaleRecip = 1.0;
   BigSum *obj = new BigSum(p);
   // obj->AddSummand(objSqDist);
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, scaleRecip), objRecipSqDist));
@@ -1411,7 +1965,6 @@ int main(int argc, char *argv[])
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.01), objSurfArea));
 
 
-  obj->AddSummand(new ScalarProduct(p, objDice, 2000));
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.5), objSimpleBending));
 
   // Set of objectives for fitting the model to itself
@@ -1419,7 +1972,17 @@ int main(int argc, char *argv[])
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.1), objSimpleBending));
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.02), objSurfArea));
 
-  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1.0));
+  // Dice!
+  /*
+  obj->AddSummand(new ScalarProduct(p, objDice, 4 * (nb + nm)));
+  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+  */
+
+  // ICP-style
+  obj->AddSummand(objSqDist);
+  obj->AddSummand(new BinaryProduct(p, new Constant(p, scaleRecip), objRecipSqDist));
+  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+
 
   // ------------------------------------------------------------------------
   // Create diffeomorphic constraints for the mesh
@@ -1471,14 +2034,8 @@ int main(int argc, char *argv[])
   p->SetGradientSmoothingKernel(K);
   */
 
-
-  // Save the sample and image values at samples
-  SaveSamples(sampleX, sampleF, "samples_before.vtk");
-
-  // Plot the gradient of the problem
+  // Save the true objective
   SaveGradient(p, model, X, obj, "grad_obj_before.vtk");
-  SaveGradient(p, model, X, objDice, "grad_obj_dice_before.vtk");
-  SaveGradient(p, model, X, objSimpleBending, "grad_obj_bend_before.vtk");
 
 
   // Evaluate the objective
@@ -1486,14 +2043,25 @@ int main(int argc, char *argv[])
   std::cout << "MSD to model: " << scaleRecip * objRecipSqDist->Evaluate() << std::endl;
   std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
   std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Target volume: " << volTarget << std::endl;
-  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
-  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
   std::cout << "Bending energy: " << objBending->Evaluate() << std::endl;
   std::cout << "Simple bending energy: " << objSimpleBending->Evaluate() << std::endl;
-  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
   std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
   std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+#ifdef USE_DICE
+  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
+  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
+  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
+  std::cout << "Target volume: " << volTarget << std::endl;
+
+  // Save the sample and image values at samples
+  SaveSamples(sampleX, sampleF, "samples_before.vtk");
+
+  // Plot the gradient of the problem
+  SaveGradient(p, model, X, objDice, "grad_obj_dice_before.vtk");
+  SaveGradient(p, model, X, objSimpleBending, "grad_obj_bend_before.vtk");
+#endif
+
 
   // Configure the problem
   p->SetObjective(obj);
@@ -1501,7 +2069,7 @@ int main(int argc, char *argv[])
   p->ClearDerivativeCaches();
 
   // Test some derivatives;
-  // DerivativeTest(p, 100);
+  // DerivativeTest(p, 1000);
 
   // Stats on how many expressions we have
   const Problem::ExpressionSet &expr = p->GetChildExpressions();
@@ -1513,7 +2081,7 @@ int main(int argc, char *argv[])
       nConst++;
     }
 
-  printf("Expressions: %d, constants: %d\n", expr.size(), nConst);
+  printf("Expressions: %d, constants: %d\n", (int) expr.size(), nConst);
 
 
   // Solve the problem
@@ -1530,6 +2098,7 @@ int main(int argc, char *argv[])
   // Note: The following choices are only examples, they might not be
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
+  app->Options()->SetStringValue("linear_solver", "ma86");
   // app->Options()->SetNumericValue("mu_init", 1e-3);
   // app->Options()->SetNumericValue("mu_target", 1e-5);
   // app->Options()->SetStringValue("mu_strategy", "adaptive");
@@ -1555,16 +2124,19 @@ int main(int argc, char *argv[])
   std::cout << "MSD to model: " << scaleRecip * objRecipSqDist->Evaluate() << std::endl;
   std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
   std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Target volume: " << volTarget << std::endl;
-  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
-  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
   std::cout << "Bending energy: " << objBending->Evaluate() << std::endl;
   std::cout << "Simple bending energy: " << objSimpleBending->Evaluate() << std::endl;
-  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
   std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
   std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
   std::cout << "Total objective: " << obj->Evaluate() << std::endl;
 
+
+#ifdef USE_DICE
+  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
+  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
+  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
+  std::cout << "Target volume: " << volTarget << std::endl;
+#endif
 
   if (status == Solve_Succeeded) {
     printf("\n\n*** The problem solved!\n");
@@ -1573,6 +2145,8 @@ int main(int argc, char *argv[])
     printf("\n\n*** The problem FAILED!\n");
     }
 
+  // Test some derivatives;
+  // DerivativeTest(p, 1000);
 
   // Save the mesh for output
   for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
@@ -1585,6 +2159,7 @@ int main(int argc, char *argv[])
       B.X[j] = X[i][j]->Evaluate();
       B.N[j] = N[i][j]->Evaluate();
       B.curv_mean = curv_mean[i]->Evaluate();
+      B.curv_gauss = curv_gauss[i]->Evaluate();
       }
     }
 
@@ -1605,13 +2180,16 @@ int main(int argc, char *argv[])
   ExportMedialMeshToVTK(model, NULL, "test.med.vtk");
   ExportBoundaryMeshToVTK(model, NULL, "test.bnd.vtk");
 
+  SaveGradient(p, model, X, obj, "grad_obj_after.vtk");
+
+#ifdef USE_DICE
   // Save the sample and image values at samples
   SaveSamples(sampleX, sampleF, "samples_after.vtk");
 
   // Plot the gradient of the problem
-  SaveGradient(p, model, X, obj, "grad_obj_after.vtk");
   SaveGradient(p, model, X, objDice, "grad_obj_dice_after.vtk");
   SaveGradient(p, model, X, objBasisResidual, "grad_obj_residual_after.vtk");
+#endif
 
   vtkPoints *out_pts = vtkPoints::New();
   out_pts->Allocate(model->GetNumberOfBoundaryPoints());
@@ -1673,6 +2251,9 @@ int main(int argc, char *argv[])
   mwriter->SetFileName("testmout.vtk");
   mwriter->Update();
 
+#ifdef CIRCUMCENTER
+  SaveCircumcenterMesh(CC, CR, CCBC);
+#endif
 
   // As the SmartPtrs go out of scope, the reference count
   // will be decremented and the objects will automatically

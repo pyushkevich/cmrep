@@ -139,6 +139,10 @@ public:
   size_t GetAtomIndex(size_t j) const
     { return itTriangle.GetAtomIndex( iSide == 1 ? j : 2 - j); }
 
+  /** Get the index of the corresponding triangle in the medial mesh */
+  size_t GetMedialTriangleIndex() const
+    { return itTriangle.GetIndex(); }
+
   size_t GetBoundarySide() const
     { return iSide; }
 

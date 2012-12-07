@@ -103,6 +103,24 @@ public:
   /** Dirty the expression. Does nothing by default */
   virtual void MakeDirty() {}
 
+  /** Dirty the expression and the children */
+  virtual void MakeTreeDirty()
+  {
+    this->MakeDirty();
+    for(int i = 0; i < this->GetNumberOfOperands(); i++)
+      this->GetOperand(i)->MakeTreeDirty();
+  }
+
+  /** Whether the expression is a constant */
+  virtual bool IsConstant() = 0;
+
+  /** Compute the statistics of the expression (three depth, size) */
+  virtual void GetTreeStats(int &depth, int &size) = 0;
+
+  /** Get the operands of the expression */
+  virtual int GetNumberOfOperands() const = 0;
+  virtual Expression* GetOperand(int i) const = 0;
+
 protected:
 
   // The problem that owns this expression
@@ -136,6 +154,17 @@ public:
     vars.insert(this);
   }
 
+  virtual bool IsConstant() { return false; }
+
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    depth = 1;
+    size = 1;
+  }
+
+  virtual int GetNumberOfOperands() const { return 0; }
+  virtual Expression* GetOperand(int i) const { return NULL; }
+
 protected:
   std::string m_Name;
   int m_Index;
@@ -158,6 +187,17 @@ public:
   virtual Expression *MakePartialDerivative(Variable *variable);
 
   virtual void MakeDependencyList(Problem::Dependency &vars) {}
+
+  virtual bool IsConstant() { return true; }
+
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    depth = 1;
+    size = 1;
+  }
+
+  virtual int GetNumberOfOperands() const { return 0; }
+  virtual Expression* GetOperand(int i)  const { return NULL; }
 
 protected:
   double m_Value;
@@ -186,6 +226,8 @@ public:
 
   /** Dirty the expression */
   virtual void MakeDirty() { m_Dirty = true; }
+
+  virtual bool IsConstant() { return false; }
 
 protected:
 
@@ -249,6 +291,18 @@ public:
 
   std::string GetName() { return TOperatorTraits::GetName(m_A); }
 
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int da, sa;
+    m_A->GetTreeStats(da, sa);
+    depth = 1 + da;
+    size = 1 + sa;
+  }
+
+  virtual int GetNumberOfOperands() const { return 1; }
+  virtual Expression* GetOperand(int i) const { return i == 0 ? m_A : NULL; }
+
+
 
 protected:
   Expression *m_A;
@@ -280,6 +334,19 @@ public:
   virtual Expression *MakePartialDerivative(Variable *variable);
 
   std::string GetName();
+
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int da, sa;
+    m_A->GetTreeStats(da, sa);
+    depth = 1 + da;
+    size = 1 + sa;
+  }
+
+  virtual int GetNumberOfOperands() const { return 1; }
+  virtual Expression* GetOperand(int i) const { return i == 0 ? m_A : NULL; }
+
+  double GetScalar() { return m_Const; }
 
 protected:
   Expression *m_A;
@@ -317,8 +384,6 @@ public:
                                    Expression *a, Expression *b,
                                    Expression *dA, Expression *dB);
   static std::string GetName(Expression *a, Expression *b);
-protected:
-  static Expression *DiffProductHelper(Problem *p, Expression *dA, Expression *b);
 };
 
 class RatioOperatorTraits
@@ -363,6 +428,27 @@ public:
   }
 
   std::string GetName() { return TOperatorTraits::GetName(m_A, m_B); }
+
+
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int da, sa, db, sb;
+    m_A->GetTreeStats(da, sa);
+    m_B->GetTreeStats(db, sb);
+    depth = 1 + std::max(da, db);
+    size = 1 + sa + sb;
+  }
+
+  virtual int GetNumberOfOperands() const { return 2; }
+  virtual Expression* GetOperand(int i) const
+  {
+    switch(i)
+      {
+      case 0 : return m_A;
+      case 1 : return m_B;
+      default: return NULL;
+      }
+  }
 
 protected:
   Expression *m_A, *m_B;
@@ -471,6 +557,29 @@ public:
 
   std::string GetName() { return TOperatorTraits::GetName(m_A, m_B, m_C); }
 
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int da, sa, db, sb, dc, sc;
+    m_A->GetTreeStats(da, sa);
+    m_B->GetTreeStats(db, sb);
+    m_C->GetTreeStats(dc, sc);
+    depth = 1 + std::max(dc, std::max(da, db));
+    size = 1 + sa + sb + sc;
+  }
+
+  virtual int GetNumberOfOperands() const { return 3; }
+  virtual Expression* GetOperand(int i) const
+  {
+    switch(i)
+      {
+      case 0 : return m_A;
+      case 1 : return m_B;
+      case 2 : return m_C;
+      default: return NULL;
+      }
+  }
+
+
 protected:
   Expression *m_A, *m_B, *m_C;
 };
@@ -484,6 +593,42 @@ typedef TernaryExpression<ProductOperator3Traits> TernaryProduct;
 
 
 Expression *MakeSum(Problem *p, std::vector<Expression *> &expr);
+Expression *MakeProduct(Problem *p, Expression *e1, Expression *e2);
+Expression *MakeProduct(Problem *p, Expression *e1, Expression *e2, Expression *e3);
+
+/**
+  This helper function creates a sum of several expressions based on their
+  number, i.e., BinarySum, TernarySum or BigSum
+  */
+// Expression *MakeSum(Problem *p, VarVec &expr);
+
+/**
+ * A class that generates an expression for a weighted sum of terms,
+ * simplifying as much as possible by pulling together constants and
+ * similar expressions
+ */
+class WeightedSumGenerator
+{
+public:
+  WeightedSumGenerator(Problem *p);
+
+  void AddTerm(Expression *expr, double weight = 1.0);
+
+  Expression *GenerateSum();
+
+protected:
+  Problem *m_Problem;
+
+  Expression *DoGenerateSum();
+
+  typedef std::map<Expression *, double> WeightMap;
+  WeightMap m_WeightMap;
+
+  double m_Constant;
+  double m_BuildValue;
+};
+
+
 
 /**
   Sample some external fixed function at a location. The function is specified
@@ -543,14 +688,36 @@ public:
       }
 
     // Create the necessary expressions - chain rule
-    std::vector<Expression *> N;
-    if(dX) N.push_back(new BinaryProduct(m_Problem, m_DfDx, dX));
-    if(dY) N.push_back(new BinaryProduct(m_Problem, m_DfDy, dY));
-    if(dZ) N.push_back(new BinaryProduct(m_Problem, m_DfDz, dZ));
-    return MakeSum(m_Problem, N);
+    WeightedSumGenerator wsg(m_Problem);
+    if(dX) wsg.AddTerm(MakeProduct(m_Problem, m_DfDx, dX));
+    if(dY) wsg.AddTerm(MakeProduct(m_Problem, m_DfDy, dY));
+    if(dZ) wsg.AddTerm(MakeProduct(m_Problem, m_DfDz, dZ));
+    return wsg.GenerateSum();
   }
 
   std::string GetName() { return "f(x,y,z)"; }
+
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int da, sa, db, sb, dc, sc;
+    m_X->GetTreeStats(da, sa);
+    m_Y->GetTreeStats(db, sb);
+    m_Z->GetTreeStats(dc, sc);
+    depth = 1 + std::max(dc, std::max(da, db));
+    size = 1 + sa + sb + sc;
+  }
+
+  virtual int GetNumberOfOperands() const { return 3; }
+  virtual Expression* GetOperand(int i) const
+  {
+    switch(i)
+      {
+      case 0 : return m_X;
+      case 1 : return m_Y;
+      case 2 : return m_Z;
+      default: return NULL;
+      }
+  }
 
 protected:
   Expression *m_X, *m_Y, *m_Z;
@@ -591,6 +758,25 @@ public:
 
   std::string GetName();
 
+  virtual void GetTreeStats(int &depth, int &size)
+  {
+    int di, si;
+    depth = 0; size = 1;
+    for(Iterator it = m_A.begin(); it!=m_A.end(); ++it)
+      {
+      Expression *ei = *it;
+      ei->GetTreeStats(di, si);
+      depth = std::max(depth, di);
+      size += si;
+      }
+  }
+
+  virtual int GetNumberOfOperands() const { return m_A.size(); }
+  virtual Expression* GetOperand(int i) const
+  {
+    return (i < m_A.size()) ? m_A[i] : NULL;
+  }
+
 protected:
   typedef std::vector<Expression *>::iterator Iterator;
   std::vector<Expression *> m_A;
@@ -600,12 +786,6 @@ protected:
 /** Typedefs for arrays of expressions */
 typedef std::vector<Expression *> VarVec;
 typedef std::vector<VarVec> VarVecArray;
-
-/**
-  This helper function creates a sum of several expressions based on their
-  number, i.e., BinarySum, TernarySum or BigSum
-  */
-Expression *MakeSum(Problem *p, VarVec &expr);
 
 
 /**
@@ -621,9 +801,18 @@ VarVec VectorApplyPairwise(Problem *p, const VarVec &a, const VarVec &b)
   return out;
 }
 
+inline vnl_vector<double> VectorEvaluate(VarVec &vec)
+{
+  vnl_vector<double> v(vec.size());
+  for(int i = 0; i < vec.size(); i++)
+    v[i] = vec[i]->Evaluate();
+  return v;
+}
+
 VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *DotProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c);
+Expression *DistanceSqr(Problem *p, const VarVec &a, const VarVec &b);
 
 /**
   A problem for IPOpt
@@ -654,10 +843,10 @@ public:
   void SetObjective(Expression *ex);
 
   // Add a constraint (g)
-  void AddConstraint(Expression *ex, double cmin, double cmax);
+  void AddConstraint(Expression *ex, const std::string &category, double cmin, double cmax);
 
   // Add a constrained variable, i.e. a variable is forced to equal expression
-  Variable* AddExpressionAsConstrainedVariable(Expression *exp);
+  Variable* AddExpressionAsConstrainedVariable(Expression *exp, const std::string &category);
 
   // Setup the problem for optimization. This must be called after all the variables
   // constraints, and the objective have been specified
@@ -709,6 +898,9 @@ public:
   // Get the bounds of a constraint
   void GetConstraintBounds(int i, double &lb, double &ub);
 
+  // Get the category of a constraint
+  const std::string &GetConstraintCategory(int i) { return m_ConstraintCategory[i]; }
+
   // Get the Jacobian sparse matrix
   SparseExpressionMatrix &GetConstraintsJacobian() { return m_DG; }
 
@@ -724,6 +916,7 @@ protected:
 
   std::vector<double> m_LowerBoundX, m_UpperBoundX;
   std::vector<double> m_LowerBoundG, m_UpperBoundG;
+  std::vector<std::string> m_ConstraintCategory;
 
   // The matrix for the Jacobian
   SparseExpressionMatrix m_DG;

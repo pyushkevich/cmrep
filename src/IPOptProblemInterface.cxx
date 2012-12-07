@@ -98,10 +98,35 @@ bool IPOptProblemInterface::eval_g(
   if(new_x)
     m_Problem->SetVariableValues(x);
 
+  // Keep track of categories
+  typedef std::map<std::string, double> CatMap;
+  CatMap cmap;
+
   // Get the partial derivatives of the objective function
   for(unsigned int i = 0; i < m; i++)
+    {
     g[i] = m_Problem->GetConstraint(i)->Evaluate();
+    std::string cat = m_Problem->GetConstraintCategory(i);
+    std::pair<CatMap::iterator, bool> ret = cmap.insert(std::make_pair(cat, 0.0));
 
+    double lb, ub;
+    m_Problem->GetConstraintBounds(i, lb, ub);
+    double viol_lb = std::max(0.0, lb - g[i]);
+    double viol_ub = std::max(0.0, g[i] - ub);
+    double viol = std::max(viol_lb, viol_ub);
+
+    ret.first->second = std::max(ret.first->second, viol);
+    }
+
+  // Print the categories
+  /*
+  std::cout << "#CV#";
+  for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
+    {
+    std::cout << " " << it->first << " " << it->second;
+    }
+  std::cout << std::endl;
+  */
 
   return true;
 }
