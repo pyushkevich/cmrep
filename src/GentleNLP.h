@@ -813,6 +813,7 @@ VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *DotProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c);
 Expression *DistanceSqr(Problem *p, const VarVec &a, const VarVec &b);
+Expression *MagnitudeSqr(Problem *p, const VarVec &a);
 
 /**
   A problem for IPOpt
@@ -850,7 +851,7 @@ public:
 
   // Setup the problem for optimization. This must be called after all the variables
   // constraints, and the objective have been specified
-  void SetupProblem(bool useHessian);
+  void SetupProblem(bool useHessian, bool deriv_test = false);
 
   // As an option, we can provide a matrix for regularizing the gradient. The
   // gradient will be multiplied by this matrix before being passed to the

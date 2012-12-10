@@ -577,6 +577,14 @@ VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b)
   return out;
 }
 
+Expression *MagnitudeSqr(Problem *p, const VarVec &a)
+{
+  WeightedSumGenerator wsg(p);
+  for(int i = 0; i < a.size(); i++)
+    wsg.AddTerm(new Square(p, a[i]));
+  return wsg.GenerateSum();
+}
+
 Expression *DistanceSqr(Problem *p, const VarVec &a, const VarVec &b)
 {
   WeightedSumGenerator wsg(p);
@@ -711,12 +719,12 @@ void TestDeriv(Problem *p, Expression *ex, Variable *v, Expression *deriv, std::
 }
 
 void ConstrainedNonLinearProblem
-::SetupProblem(bool hessian)
+::SetupProblem(bool hessian, bool deriv_test)
 {
   typedef std::set<Variable *> VarSet;
 
   // Only a single initialization is allowed!
-  assert(m_GradF.size() == 0);
+  m_GradF.clear();
 
   // This is where all the work takes place. This function is responsible to
   // set up the Jacobian and Hessian matrices
@@ -725,7 +733,8 @@ void ConstrainedNonLinearProblem
   for(int i = 0; i < m_X.size(); i++)
     {
     m_GradF.push_back(this->GetPartialDerivative(m_F, m_X[i]));
-    TestDeriv(this, m_F, m_X[i], m_GradF.back(), "Objective");
+    if(deriv_test)
+      TestDeriv(this, m_F, m_X[i], m_GradF.back(), "Objective");
     }
 
   // Now the Jacobian of G
@@ -746,7 +755,8 @@ void ConstrainedNonLinearProblem
       Expression *dg_dv = this->GetPartialDerivative(m_G[j], v);
       if(dg_dv)
         stl_row.push_back(std::make_pair(v->GetIndex(), dg_dv));
-      TestDeriv(this, m_G[j], v, dg_dv, "Constraints");
+      if(deriv_test)
+        TestDeriv(this, m_G[j], v, dg_dv, "Constraints");
       }
 
     // Add the row
@@ -795,7 +805,8 @@ void ConstrainedNonLinearProblem
 
           Expression *ddf = this->GetPartialDerivative(df, v);
 
-          TestDeriv(this, df, v, ddf, "Hessian-F");
+          if(deriv_test)
+            TestDeriv(this, df, v, ddf, "Hessian-F");
 
           if(ddf)
             {
@@ -850,7 +861,8 @@ void ConstrainedNonLinearProblem
           BigSum *sum = (BigSum *) ret.first->second;
 
           Expression *ddg = this->GetPartialDerivative(dg, v);
-          TestDeriv(this, dg, v, ddg, "Hessian-G");
+          if(deriv_test)
+            TestDeriv(this, dg, v, ddg, "Hessian-G");
           if(ddg)
             {
             // Do some stats on the hessian entries

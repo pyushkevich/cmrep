@@ -18,6 +18,9 @@
 
 #include "vtkPolyData.h"
 #include "vtkCellLocator.h"
+#include "vtkSmartPointer.h"
+#include <vtkPointLocator.h>
+
 #include <vector>
 #include <map>
 #include <utility>
@@ -53,75 +56,96 @@ using namespace gnlp;
 
 typedef itk::Image<float, 3> ImageType;
 
-
-
-
-
-
-std::vector<SMLVec3d> find_closest(GenericMedialModel *model, vtkPolyData *target)
+class ClosestPointMatcher
 {
-  // Create locator for finding closest points
-  vtkCellLocator *loc = vtkCellLocator::New();
-  loc->SetDataSet(target);
-  loc->CacheCellBoundsOn();
-  loc->BuildLocator();
+public:
+  typedef std::pair<int, SMLVec3d> PointMatch;
 
+  ClosestPointMatcher(vtkPolyData *target, int nSamples);
+
+  std::vector<SMLVec3d> FindClosestToTarget(VarVecArray &X);
+
+  std::vector<PointMatch> FindClosestToSource(VarVecArray &X);
+
+protected:
+  vtkSmartPointer<vtkPolyData> m_Target;
+  vtkSmartPointer<vtkCellLocator> m_TargetLocator;
+  vtkSmartPointer<vtkPoints> m_ReducedTarget;
+};
+
+ClosestPointMatcher
+::ClosestPointMatcher(vtkPolyData *target, int nSamples)
+{
+  // Store the target
+  m_Target = target;
+
+  // Create a locator
+  m_TargetLocator = vtkSmartPointer<vtkCellLocator>::New();
+  m_TargetLocator->SetDataSet(m_Target);
+  m_TargetLocator->CacheCellBoundsOn();
+  m_TargetLocator->BuildLocator();
+
+  // Create a set of samples from the target
+  // TODO: reimplement using quadric clustering!
+  m_ReducedTarget = vtkSmartPointer<vtkPoints>::New();
+  m_ReducedTarget->Allocate(nSamples);
+  for(int i = 0; i < nSamples; i++)
+    {
+    int q = rand() % m_Target->GetNumberOfPoints();
+    m_ReducedTarget->InsertNextPoint(m_Target->GetPoint(q));
+    }
+}
+
+std::vector<SMLVec3d>
+ClosestPointMatcher::FindClosestToTarget(VarVecArray &X)
+{
   // Output vector
-  std::vector<SMLVec3d> cp(model->GetNumberOfBoundaryPoints());
+  std::vector<SMLVec3d> cp(X.size());
 
   // Compute thickness values
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int i = 0; i < X.size(); i++)
     {
-    SMLVec3d x = GetBoundaryPoint(it, model->GetAtomArray()).X;
+    SMLVec3d xi = gnlp::VectorEvaluate(X[i]);
 
     double xs[3], d2, d;
     int subid;
     vtkIdType cellid;
 
-    loc->FindClosestPoint(x.data_block(), xs, cellid, subid, d2);
+    m_TargetLocator->FindClosestPoint(xi.data_block(), xs, cellid, subid, d2);
 
-    cp[it.GetIndex()] = SMLVec3d(xs);
+    cp[i] = SMLVec3d(xs);
     }
 
   return cp;
 }
 
-#include <vtkPointLocator.h>
-
-typedef std::pair<int, SMLVec3d> PointMatch;
-
-std::vector<PointMatch>
-find_closest_to_mesh(vtkPolyData *target, GenericMedialModel *model, int nSamples)
+std::vector<ClosestPointMatcher::PointMatch>
+ClosestPointMatcher::FindClosestToSource(VarVecArray &X)
 {
   // Create a VTK points object
-  vtkPoints *out_pts = vtkPoints::New();
-  out_pts->Allocate(model->GetNumberOfBoundaryPoints());
+  vtkSmartPointer<vtkPoints> out_pts = vtkSmartPointer<vtkPoints>::New();
+  out_pts->Allocate(X.size());
 
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int i = 0; i < X.size(); i++)
     {
-    int i = it.GetIndex();
-    out_pts->InsertNextPoint(GetBoundaryPoint(it,model->GetAtomArray()).X.data_block());
+    out_pts->InsertNextPoint(
+          X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
     }
 
-  vtkPolyData *poly = vtkPolyData::New();
+  vtkSmartPointer<vtkPolyData> poly = vtkSmartPointer<vtkPolyData>::New();
   poly->SetPoints(out_pts);
 
   // Create locator for finding closest points
-  vtkPointLocator *loc = vtkPointLocator::New();
+  vtkSmartPointer<vtkPointLocator> loc = vtkSmartPointer<vtkPointLocator>::New();
   loc->SetDataSet(poly);
   loc->BuildLocator();
 
   // Sample points from the target mesh
   std::vector<PointMatch> result;
-  for(int i = 0; i < nSamples; i++)
+  for(int i = 0; i < m_ReducedTarget->GetNumberOfPoints(); i++)
     {
-    int q = rand() % target->GetNumberOfPoints();
-    SMLVec3d xTarget(target->GetPoint(q));
-
+    SMLVec3d xTarget(m_ReducedTarget->GetPoint(i));
     vtkIdType id = loc->FindClosestPoint(xTarget.data_block());
-
     result.push_back(std::make_pair((int) id, xTarget));
     }
 
@@ -181,7 +205,7 @@ void run_toms(IPOptProblemInterface *ip, ConstrainedNonLinearProblem *p)
 }
 
 Expression *TetraHedronVolume(
-    Problem *p, GenericMedialModel *model,
+    Problem *p,
     std::vector<Expression *> a,
     std::vector<Expression *> b,
     std::vector<Expression *> c,
@@ -341,17 +365,16 @@ void SaveSamples(std::vector<std::vector<Expression *> > sampleX,
 
 void SaveGradient(
     ConstrainedNonLinearProblem *p,
-    SubdivisionMedialModel *model,
     std::vector<std::vector<Expression *> > X,
     Expression *f,
     const char *filename)
 {
   vtkPoints *pts = vtkPoints::New();
-  pts->Allocate(model->GetNumberOfBoundaryPoints());
+  pts->Allocate(X.size());
 
   vtkFloatArray *arr = vtkFloatArray::New();
   arr->SetNumberOfComponents(3);
-  arr->Allocate(model->GetNumberOfBoundaryPoints());
+  arr->Allocate(X.size());
   arr->SetName("Gradient");
 
   for(int i = 0; i < X.size(); i++)
@@ -588,7 +611,7 @@ void CreateTetgenMesh(GenericMedialModel *model,
     int *tet = out.tetrahedronlist + i * 4;
 
     Expression *vol =
-        TetraHedronVolume(problem, model, Y[tet[0]], Y[tet[1]], Y[tet[2]], Y[tet[3]]);
+        TetraHedronVolume(problem, Y[tet[0]], Y[tet[1]], Y[tet[2]], Y[tet[3]]);
 
     double tv = vol->Evaluate();
 
@@ -657,6 +680,7 @@ void ComputeTriangleAndEdgeProperties(
     const VarVecArray &X,   // Vertices
     VarVecArray &NT,        // Triangle normals
     VarVec &AT,             // Triangle areas
+    double minArea,         // Smallest area allowed
     bool doEdges = false,   // Triangle edge lengths (opposite each vertex)
     VarVecArray &TEL = dummyArray)
 {
@@ -690,7 +714,7 @@ void ComputeTriangleAndEdgeProperties(
     vnl_vector_fixed<double, 3> v_normal = 0.5 * v_Xu_cross_Xv / v_area;
 
     // Create the variables for the triangle area and normal
-    AT[it] = p->AddVariable("AT", v_area, 0);
+    AT[it] = p->AddVariable("AT", v_area, minArea);
     for(int d = 0; d < 3; d++)
       NT[it][d] = p->AddVariable("NT", v_normal[d]);
 
@@ -746,9 +770,166 @@ void ComputeTriangleAndEdgeProperties(
     }
 }
 
+#include "BruteForceSubdivisionMedialModel.h"
+
+
+Expression *ComputeDistanceToMeshObjective(
+    ConstrainedNonLinearProblem *p,
+    ClosestPointMatcher *cpm,
+    VarVecArray &X)
+{
+  // For each point on the model, find the closest target point
+  std::vector<SMLVec3d> targetPoint = cpm->FindClosestToTarget(X);
+
+  BigSum *objSqDist = new BigSum(p);
+  for(int i = 0; i < X.size(); i++)
+    {
+    for(int j = 0; j < 3; j++)
+      {
+      objSqDist->AddSummand(
+            new Square(p,
+                       new BinaryDifference(p, X[i][j],
+                                            new Constant(p, targetPoint[i][j]))));
+      }
+    }
+
+  return objSqDist;
+}
+
+Expression *ComputeDistanceToModelObjective(
+    ConstrainedNonLinearProblem *p,
+    ClosestPointMatcher *cpm,
+    VarVecArray &X)
+{
+  std::vector<ClosestPointMatcher::PointMatch> meshToModel = cpm->FindClosestToSource(X);
+  BigSum *objRecipSqDist = new BigSum(p);
+  for(int i = 0; i < meshToModel.size(); i++)
+    {
+    SMLVec3d xMesh = meshToModel[i].second;
+    int iModel = meshToModel[i].first;
+    for(int j = 0; j < 3; j++)
+      {
+      objRecipSqDist->AddSummand(
+            new Square(p,
+                       new BinaryDifference(p, X[iModel][j],
+                                            new Constant(p, xMesh[j]))));
+      }
+    }
+
+  return objRecipSqDist;
+}
+
+void SaveBoundaryMesh(const char *file,
+                      ConstrainedNonLinearProblem *p,
+                      TriangleMesh *bmesh,
+                      std::vector<int> &mIndex,
+                      std::vector<std::vector<int> > &mtbIndex,
+                      VarVecArray &X,
+                      VarVecArray &N,
+                      const VarVec &R)
+{
+  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+  pts->Allocate(X.size());
+
+  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+  rad->SetNumberOfComponents(1);
+  rad->Allocate(X.size());
+  rad->SetName("Radius");
+
+  vtkSmartPointer<vtkIntArray> mix = vtkSmartPointer<vtkIntArray>::New();
+  mix->SetNumberOfComponents(1);
+  mix->Allocate(X.size());
+  mix->SetName("MedialIndex");
+
+  vtkSmartPointer<vtkIntArray> mult = vtkSmartPointer<vtkIntArray>::New();
+  mult->SetNumberOfComponents(1);
+  mult->Allocate(X.size());
+  mult->SetName("Tangency");
+
+  vtkSmartPointer<vtkFloatArray> norm = vtkSmartPointer<vtkFloatArray>::New();
+  norm->SetNumberOfComponents(3);
+  norm->Allocate(X.size());
+
+  for(int i = 0; i < X.size(); i++)
+    {
+    int j = mIndex[i];
+    pts->InsertNextPoint(X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
+    norm->InsertNextTuple3(N[i][0]->Evaluate(), N[i][1]->Evaluate(), N[i][2]->Evaluate());
+    rad->InsertNextTuple1(R[j]->Evaluate());
+    mix->InsertNextTuple1(j);
+    mult->InsertNextTuple1(mtbIndex[j].size());
+    }
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->Allocate(bmesh->triangles.size());
+  pd->SetPoints(pts);
+  pd->GetPointData()->SetNormals(norm);
+  pd->GetPointData()->AddArray(mix);
+  pd->GetPointData()->AddArray(mult);
+  pd->GetPointData()->AddArray(rad);
+
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    vtkIdType vtx[3];
+    for(int j = 0; j < 3; j++)
+      vtx[j] = bmesh->triangles[i].vertices[j];
+    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+    }
+
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+  writer->SetInput(pd);
+  writer->SetFileName(file);
+  writer->Update();
+}
+
+
+
+void SaveMedialMesh(const char *file,
+                    ConstrainedNonLinearProblem *p,
+                    TriangleMesh *bmesh,
+                    std::vector<int> &mIndex,
+                    const VarVecArray &M,
+                    const VarVec &R)
+{
+  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+  pts->Allocate(M.size());
+
+  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+  rad->SetNumberOfComponents(1);
+  rad->Allocate(M.size());
+  rad->SetName("Radius");
+
+  for(int i = 0; i < M.size(); i++)
+    {
+    pts->InsertNextPoint(M[i][0]->Evaluate(), M[i][1]->Evaluate(), M[i][2]->Evaluate());
+    rad->InsertNextTuple1(R[i]->Evaluate());
+    }
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->Allocate(bmesh->triangles.size());
+  pd->SetPoints(pts);
+  pd->GetPointData()->SetScalars(rad);
+
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    vtkIdType vtx[3];
+    for(int j = 0; j < 3; j++)
+      vtx[j] = mIndex[bmesh->triangles[i].vertices[j]];
+    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+    }
+
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+  writer->SetInput(pd);
+  writer->SetFileName(file);
+  writer->Update();
+}
+
 
 int main(int argc, char *argv[])
 {
+  // We want to load a triangular mesh in which each point is associated with
+  // a tag (corresponding medial atom).
+
   // The first parameter is the cm-rep to start from
   char *cmrepfile = argv[1];
 
@@ -756,20 +937,52 @@ int main(int argc, char *argv[])
   char *targetmesh = argv[2];
 
   // The image to fit to
-  char *targetimage = argv[3];
+  // char *targetimage = argv[3];
 
-  // Load and process the mrep
+  // Load and process the mrep (TODO: remove)
   MedialPDE mrep(cmrepfile);
-  SubdivisionMedialModel *model =
+  SubdivisionMedialModel *tmpmodel =
       dynamic_cast<SubdivisionMedialModel *>(mrep.GetMedialModel());
 
-  // Get the number of boundary and medial points
-  int nb = model->GetNumberOfBoundaryPoints(), nm = model->GetNumberOfAtoms();
+  // We will restrict our operations to a boundary triangle mesh and a set of medial
+  // atom indices for each point on the triangle mesh
+  TriangleMesh *bmesh = tmpmodel->GetIterationContext()->GetBoundaryMesh();
+
+  // Get the number of boundary points
+  int nb = bmesh->nVertices;
+
+  // Initialize the data we are extracting from the boundary mesh
+  std::vector<int> mIndex(nb);
+  std::vector<SMLVec3d> xInput(nb), nInput(nb);
+  std::vector<double> rInput(nb);
+  for(MedialBoundaryPointIterator it = tmpmodel->GetBoundaryPointIterator();
+      !it.IsAtEnd(); ++it)
+    {
+    mIndex[it.GetIndex()] = it.GetAtomIndex();
+    xInput[it.GetIndex()] = GetBoundaryPoint(it, tmpmodel->GetAtomArray()).X;
+    }
+
+  // At this point, we are only working with bMesh and mIndex and xInput
+
+
+  // Get the number of medial points. TODO: we need to make sure that every
+  // index between 0 and nm is represented.
+  int nm = 1 + *std::max_element(mIndex.begin(), mIndex.end());
+
+  // Create a list of boundary atoms for each medial atom
+  typedef std::vector<std::vector<int> > MedialToBoundaryIndex;
+  MedialToBoundaryIndex mtbIndex(nm);
+  for(int i = 0; i < nb; i++)
+    {
+    mtbIndex[mIndex[i]].push_back(i);
+    }
+
 
   // Load the target mesh
   vtkPolyData *target = ReadVTKMesh(targetmesh);
 
   // Load the target image
+  /*
   BinaryImage imgBinary;
   imgBinary.LoadFromFile(targetimage);
 
@@ -804,214 +1017,57 @@ int main(int argc, char *argv[])
     for(int j = 0; j < 3; j++)
       printf("DDx[%d][%d]:   A = %f   N = %f\n", i, j, hNew[i][j], (g2[j]-g1[j]) / 0.002);
     }
+    */
 
   // Create the optimization problem
   ConstrainedNonLinearProblem *p = new ConstrainedNonLinearProblem();
 
-  // For each point on the model, find the closest target point
-  std::vector<SMLVec3d> targetPoint = find_closest(model, target);
-
   // The boundary positions
-  VarVecArray X(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL));
+  VarVecArray X(nb, VarVec(3, NULL));
 
   // The medial positions
-  VarVecArray M(model->GetNumberOfAtoms(), VarVec(3, NULL));
+  VarVecArray M(nm, VarVec(3, NULL));
 
   // The radius values
-  VarVec R(model->GetNumberOfAtoms(), NULL);
+  VarVec R(nm, NULL);
 
   // The boundary normal vectors
-  VarVecArray N(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL));
+  VarVecArray N(nb, VarVec(3, NULL));
 
   // The vectors U from the medial axis to the boundary. They are the same
   // as -R*N. They appear in multiple places though, so we should store them
-  VarVecArray U(model->GetNumberOfBoundaryPoints(), VarVec(3, NULL));
+  VarVecArray U(nb, VarVec(3, NULL));
 
   // The triangle areas, normals and edge lengths on the boundary surface
   // and on the medial surface (to avoid square roots)
   VarVec taX, taM;
-  VarVecArray NT_X, TEL_X, NT_M, TEL_M;
+  VarVecArray NT_X, TEL_X, NT_M;
 
   // A buffer for making variable names
   char buffer[64];
 
+  // ------------------------------------------------------------------------
+  // Configure the boundary point variables
+  // ------------------------------------------------------------------------
+
   // Configure the medial point variables
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int i = 0; i < nb; i++)
     {
-    int i = (int) it.GetIndex();
-    SMLVec3d x = GetBoundaryPoint(it, model->GetAtomArray()).X;
-    SMLVec3d n = GetBoundaryPoint(it, model->GetAtomArray()).N;
+    SMLVec3d x = xInput[i];
 
     // Set up the medial coordinate and normal
     for(int j = 0; j < 3; j++)
       {
       sprintf(buffer, "X[%d,%d]", i, j);
       X[i][j] = p->AddVariable(buffer, x[j]);
-
-      sprintf(buffer, "N[%d,%d]", i, j);
-      N[i][j] = p->AddVariable(buffer, n[j]);
       }
     }
 
   // ------------------------------------------------------------------------
-  // Configure the medial axis variables
-  // ------------------------------------------------------------------------
-  for(MedialAtomIterator it = model->GetAtomIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int i = it.GetIndex();
-    MedialAtom &a = model->GetAtomArray()[i];
-    for(int j = 0; j < 3; j++)
-      {
-      // Create the medial point
-      sprintf(buffer, "M[%d,%d]", i, j);
-      M[i][j] = p->AddVariable(buffer, a.X[j]);
-      }
-
-    sprintf(buffer, "R[%d]", i);
-    // R[i] = p->AddVariable(buffer, a.R,
-    //                       it.IsEdgeAtom() ? a.R : 0,
-    //                       it.IsEdgeAtom() ? a.R : 32);
-    R[i] = p->AddVariable(buffer, a.R, 0.1);
-    }
-
-  // Compute the U vectors
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int i = (int) it.GetIndex();
-    SMLVec3d x = GetBoundaryPoint(it, model->GetAtomArray()).X;
-    SMLVec3d n = GetBoundaryPoint(it, model->GetAtomArray()).N;
-
-    // Set up the medial coordinate and normal
-    for(int j = 0; j < 3; j++)
-      U[i][j] = new BinaryDifference(p, X[i][j], M[it.GetAtomIndex()][j]);
-    }
-
-  // ------------------------------------------------------------------------
-  // Configure the boundary and medial triangle area variables
-  // ------------------------------------------------------------------------
-
-  // Compute boundary triangle edges, normals, and areas
-  ComputeTriangleAndEdgeProperties(
-        p, model->GetIterationContext()->GetBoundaryMesh(),
-        X, NT_X, taX, true, TEL_X);
-
-  // Compute medial triangle edges, normals, and areas
-  ComputeTriangleAndEdgeProperties(
-        p, model->GetIterationContext()->GetMedialMesh(),
-        M, NT_M, taM);
-
-  // Create and initialize expression arrays for boundary area element
-  /*
-  VarVec AeltX(model->GetNumberOfBoundaryPoints(), NULL);
-  for(int i = 0; i < AeltX.size(); i++) AeltX[i] = new BigSum(p);
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Get the triangle index
-    int k = trit.GetIndex();
-
-    // Accumulate the area element
-    for(int j = 0; j < 3; j++)
-      static_cast<BigSum *>(AeltX[trit.GetBoundaryIndex(j)])->AddSummand(taX[k]);
-    }
-  */
-
-  // Create and initialize expression arrays for medial area element
-  /*
-  VarVec AeltM(model->GetNumberOfAtoms(), NULL);
-  for(int i = 0; i < AeltM.size(); i++) AeltM[i] = new BigSum(p);
-
-  // Process medial triangles
-  for(MedialTriangleIterator trit = model->GetMedialTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Get the triangle index
-    int k = trit.GetIndex();
-
-    // Accumulate the area element
-    for(int j = 0; j < 3; j++)
-      static_cast<BigSum *>(AeltM[trit.GetAtomIndex(j)])->AddSummand(taM[k]);
-    }
-  */
-
-  /* OLD CODE
-
-  // Process boundary triangles
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Get the triangle index
-    int k = trit.GetIndex();
-
-    // Get the expression for (2A)^2
-    Expression *areaSq = TriangleTwiceAreaSqr(p,
-                                              X[trit.GetBoundaryIndex(0)],
-                                              X[trit.GetBoundaryIndex(1)],
-                                              X[trit.GetBoundaryIndex(2)]);
-
-    // Get the actual area
-    double a = sqrt(areaSq->Evaluate()) / 2.0;
-
-    // Create the area variable
-    sprintf(buffer, "taX[%d]", k);
-    taX[k] = p->AddVariable(buffer, a, 0.0);
-
-    // Accumulate the area element
-    for(int j = 0; j < 3; j++)
-      static_cast<BigSum *>(AeltX[trit.GetBoundaryIndex(j)])->AddSummand(taX[k]);
-
-    // Create the constraint on the triangle area (2*A)^2 = areaSq
-    p->AddConstraint(
-          new BinaryDifference(
-            p,
-            new ScalarProduct(p, new Square(p, taX[k]), 2.0),
-            areaSq), 0.0, 0.0);
-    }
-
-  // Process medial triangles
-  for(MedialTriangleIterator trit = model->GetMedialTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Get the triangle index
-    int k = trit.GetIndex();
-
-    // Get the expression for (2A)^2
-    Expression *areaSq = TriangleTwiceAreaSqr(p,
-                                              M[trit.GetAtomIndex(0)],
-                                              M[trit.GetAtomIndex(1)],
-                                              M[trit.GetAtomIndex(2)]);
-
-    // Get the actual area
-    double a = sqrt(areaSq->Evaluate()) / 2.0;
-
-    // Create the area variable
-    sprintf(buffer, "taM[%d]", k);
-    taM[k] = p->AddVariable(buffer, a, 0.0);
-
-    // Accumulate the area element
-    for(int j = 0; j < 3; j++)
-      static_cast<BigSum *>(AeltM[trit.GetAtomIndex(j)])->AddSummand(taM[k]);
-
-    // Create the constraint on the triangle area (2*A)^2 = areaSq
-    p->AddConstraint(
-          new BinaryDifference(
-            p,
-            new ScalarProduct(p, new Square(p, taM[k]), 2.0),
-            areaSq), 0.0, 0.0);
-    }
-
-    */
-
-  // ------------------------------------------------------------------------
-  // Configure the constraints on boundary normal and also compute curvatures
+  // Configure the constraints on the boundary normal
   // ------------------------------------------------------------------------
 
   // Create a LoopScheme for specifying normal vector constraints
-  TriangleMesh *bmesh = model->GetIterationContext()->GetBoundaryMesh();
   LoopTangentScheme lts;
   lts.SetMesh(bmesh);
 
@@ -1020,43 +1076,31 @@ int main(int argc, char *argv[])
   VarVecArray Nd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
 
   // Expression for the first fundamental and the shape operator
-  VarVec F1[2][2] = {{VarVec(nb, NULL), VarVec(nb, NULL)},{VarVec(nb, NULL), VarVec(nb, NULL)}};
-  VarVec F2[2][2] = {{VarVec(nb, NULL), VarVec(nb, NULL)},{VarVec(nb, NULL), VarVec(nb, NULL)}};
-
   VarVec curv_mean(nb, NULL);
   VarVec curv_gauss(nb, NULL);
   VarVec curv_k1(nb, NULL);
   VarVec curv_k2(nb, NULL);
 
-  BigSum *objBending = new BigSum(p);
-  BigSum *objSimpleBending = new BigSum(p);
-
   // Add the constraints relating each normal to the neighboring vertices
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int i = 0; i < nb; i++)
     {
-    int i = it.GetIndex();
-
     // Repeat for u and v directions
     for(int d = 0; d < 2; d++)
       {
       BigSum *Xdi[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
-      BigSum *Ndi[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
 
-      double wi = lts.GetOwnWeight(d, it.GetIndex());
+      double wi = lts.GetOwnWeight(d, i);
       for(int j = 0; j < 3; j++)
         {
         Xdi[j]->AddSummand(new ScalarProduct(p, X[i][j], wi));
-        Ndi[j]->AddSummand(new ScalarProduct(p, N[i][j], wi));
         }
 
-      for(EdgeWalkAroundVertex walk(bmesh, it.GetIndex()); !walk.IsAtEnd(); ++walk)
+      for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
         {
         double wij = lts.GetNeighborWeight(d, walk);
         for(int j = 0; j < 3; j++)
           {
           Xdi[j]->AddSummand(new ScalarProduct(p, X[walk.MovingVertexId()][j], wij));
-          Ndi[j]->AddSummand(new ScalarProduct(p, N[walk.MovingVertexId()][j], wij));
           }
         }
 
@@ -1064,9 +1108,24 @@ int main(int argc, char *argv[])
       for(int j = 0; j < 3; j++)
         {
         Xd[d][i][j] = Xdi[j];
-        Nd[d][i][j] = Ndi[j];
         }
+      }
 
+    // Compute the initial value of the normal
+    SMLVec3d v_xu = VectorEvaluate(Xd[0][i]);
+    SMLVec3d v_xv = VectorEvaluate(Xd[1][i]);
+    SMLVec3d v_n = vnl_cross_3d(v_xu, v_xv).normalize();
+
+    // Create the variables for the normal
+    for(int j = 0; j < 3; j++)
+      {
+      sprintf(buffer, "N[%d,%d]", i, j);
+      N[i][j] = p->AddVariable(buffer, v_n[j]);
+      }
+
+    // Create the constraints on the normal
+    for(int d = 0; d < 2; d++)
+      {
       // Create the constrait Xu . N = 0
       Expression *constrNormXu = DotProduct(p, Xd[d][i], N[i]);
 
@@ -1074,24 +1133,56 @@ int main(int argc, char *argv[])
       p->AddConstraint(constrNormXu, "N.Xu", 0, 0);
       }
 
-    // While we are here, add the constraint on the normal being norm 1
-    Expression *constrNormMag =
-        new TernaryGradientMagnitudeSqr(p,
-                                        N[it.GetIndex()][0],
-                                        N[it.GetIndex()][1],
-                                        N[it.GetIndex()][2]);
+    // Add the constraint on the normal being norm 1
+    Expression *constrNormMag = MagnitudeSqr(p, N[i]);
     p->AddConstraint(constrNormMag, "N.N", 1.0, 1.0);
+    }
+
+
+  // ------------------------------------------------------------------------
+  // Configure the constraints relating boundary curvature to the radius fn
+  // ------------------------------------------------------------------------
+
+  for(int i = 0; i < nb; i++)
+    {
 
     // For non-edge atoms, we are done, no need to compute the rest
-    // TURN THIS BACK ON!
-   // if(!it.IsEdgeAtom())
-   //   {
+    if(mtbIndex[mIndex[i]].size() > 1)
+      {
       curv_mean[i] = new Constant(p, 0);
       curv_gauss[i] = new Constant(p, 0);
       curv_k1[i] = new Constant(p, 0);
       curv_k2[i] = new Constant(p, 0);
       continue;
-    //  }
+      }
+
+    // Compute the expressions Nu, Nv
+    // Repeat for u and v directions
+    for(int d = 0; d < 2; d++)
+      {
+      BigSum *Ndi[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
+
+      double wi = lts.GetOwnWeight(d, i);
+      for(int j = 0; j < 3; j++)
+        {
+        Ndi[j]->AddSummand(new ScalarProduct(p, N[i][j], wi));
+        }
+
+      for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
+        {
+        double wij = lts.GetNeighborWeight(d, walk);
+        for(int j = 0; j < 3; j++)
+          {
+          Ndi[j]->AddSummand(new ScalarProduct(p, N[walk.MovingVertexId()][j], wij));
+          }
+        }
+
+      // Store these expressions
+      for(int j = 0; j < 3; j++)
+        {
+        Nd[d][i][j] = Ndi[j];
+        }
+      }
 
     // Compute the first fundamental form at the point.
     vnl_matrix_fixed<double, 2, 2> mFF1, mFF2, mSO;
@@ -1182,113 +1273,85 @@ int main(int argc, char *argv[])
     curv_k2[i] = new BinaryDifference(p, new ScalarProduct(p, H, 2), k1);
     curv_gauss[i] = new BinaryProduct(p, k1, curv_k2[i]);
 
-    // std::cout << "K1 = " << curv_k1[i]->Evaluate() << "; K2 = " << curv_k2[i]->Evaluate() << std::endl;
+    // Create the radius variable for this node
+    int iAtom = mIndex[i];
+    sprintf(buffer, "R[%d]", iAtom);
+    R[iAtom] = p->AddVariable(buffer, -1.0 / k1->Evaluate(), 0.1);
 
-    /*
+    // Now enforce the link between R and K1
+    Expression *conR = new BinaryProduct(p, R[iAtom], k1);
+    p->AddConstraint(conR, "R*kappa", -1.0, -1.0);
 
-    // Compute the mean and Gaussian curvature
-    Expression *kE = FF1[0][0], *kG = FF1[1][1], *kF1 = FF1[0][1], *kF2 = FF1[1][0];
-    Expression *kL = FF2[0][0], *kN = FF2[1][1], *kM1 = FF2[0][1], *kM2 = FF2[1][0];
-
-    // EG - F^2
-    Expression *denom = new BinaryDifference(p,
-                                             new BinaryProduct(p, kE, kG),
-                                             new BinaryProduct(p, kF1, kF2));
-
-    // Expression for H : (GL - 2FM + EN) / (2 * denom)
-    Expression *kH_num =
-        new BinaryDifference(
-          p,
-          new BinarySum(p, new BinaryProduct(p, kG, kL), new BinaryProduct(p, kE, kN)),
-          new BinarySum(p, new BinaryProduct(p, kF1, kM1), new BinaryProduct(p, kF2, kM2)));
-
-    // Note teh minus sign!
-    Expression *kH = new BinaryFraction(p, kH_num, new ScalarProduct(p, denom, -2));
-
-    // Expression for K : (LN - M^2) / denom
-    Expression *kK =
-        new BinaryFraction(p,
-                           new BinaryDifference(p, new BinaryProduct(p, kL, kN),
-                                                new BinaryProduct(p, kM1, kM2)),
-                           denom);
-
-    // Expression for the principal curvatures
-    Expression *determ = new SquareRoot(p, new BinaryDifference(p, new Square(p, kH), kK));
-    Expression *k1 = new BinaryDifference(p, kH, determ);
-    Expression *k2 = new BinarySum(p, kH, determ);
-
-    // Compute the mean curvature
-    curv_mean[i] = kH;
-    curv_gauss[i] = kK;
-    curv_k1[i] = k1;
-    curv_k2[i] = k2;
-
-    */
-
-    // For the boundary nodes, link the radius function to the curvature!
-    if(it.IsEdgeAtom())
+    // Initialize the medial axis position
+    for(int j = 0; j < 3; j++)
       {
-      Expression *con = new BinaryProduct(p, R[it.GetAtomIndex()], k1);
-      p->AddConstraint(con, "R*kappa", -1.0, -1.0);
-      std::cout << "con-RadK = " << con->Evaluate() << std::endl;
+      sprintf(buffer, "M[%d,%d]", iAtom, j);
+      double mval = X[i][j]->Evaluate() - R[iAtom]->Evaluate() * N[i][j]->Evaluate();
+      M[iAtom][j] = p->AddVariable(buffer, mval);
       }
+    }
 
-    // The complex bending objective
-    /*
-    objBending->AddSummand(new Square(p, new BinaryDifference(
-                                        p,
-                                        new BinarySum(
-                                          p,
-                                          new BinaryProduct(p, FF2[0][0], FF1[1][1]),
-                                          new BinaryProduct(p, FF2[1][1], FF1[0][0])),
-                                        new BinarySum(
-                                          p,
-                                          new BinaryProduct(p, FF2[0][1], FF1[1][0]),
-                                          new BinaryProduct(p, FF2[1][0], FF1[0][1])))));
-                                          */
+  // ------------------------------------------------------------------------
+  // Compute the initial medial atoms and radii for non-edge atoms
+  // ------------------------------------------------------------------------
 
-    // Compute the simple bending objective
-    BigSum *Xj[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
-    EdgeWalkAroundVertex walk(bmesh, it.GetIndex());
-    walk.Valence();
-
-    for(; !walk.IsAtEnd(); ++walk)
+  for(int i = 0; i < nm; i++)
+    {
+    int k = mtbIndex[i].size();
+    if(k > 1)
       {
-      int k = walk.MovingVertexId();
+      // For atoms that are bi-tangent or greater, we find R and M that
+      // minimize the expression Sum_j ||Xj - r Nj - M)||^2, i.e, the radius
+      // such that the medial atoms computed for each boundary atom idependently
+      // are as close together as possible. The r is found as
+      // r = (Sum_{ij} (Xi-Xj)^t N_i) / (k^2 - Sum_{ij} Nj^t N_i)
+      double numerator = 0.0, denominator = k*k;
+      SMLVec3d sumX(0.0, 0.0, 0.0), sumN(0.0, 0.0, 0.0);
+      for(int q = 0; q < k; q++)
+        {
+        int iq = mtbIndex[i][q];
+        SMLVec3d Xq = VectorEvaluate(X[iq]), Nq = VectorEvaluate(N[iq]);
+        for(int p = 0; p < k; p++)
+          {
+          int ip = mtbIndex[i][p];
+          SMLVec3d Xp = VectorEvaluate(X[ip]), Np = VectorEvaluate(N[ip]);
+
+          numerator += dot_product(Xq - Xp, Nq);
+          denominator -= dot_product(Np, Nq);
+          }
+
+        sumX += Xq; sumN += Nq;
+        }
+
+      // Compute the best fit r and m
+      double v_r = numerator / denominator;
+      SMLVec3d v_m = (sumX - sumN * v_r) / ((double) k);
+
+      // Store those values
+      sprintf(buffer, "R[%d]", i);
+      R[i] = p->AddVariable(buffer, v_r, 0.1);
+
+      // Initialize the medial axis position
       for(int j = 0; j < 3; j++)
         {
-        Xj[j]->AddSummand(X[k][j]);
+        sprintf(buffer, "M[%d,%d]", i, j);
+        M[i][j] = p->AddVariable(buffer, v_m[j]);
         }
       }
-
-    double scale = 1.0 / walk.Valence();
-    objSimpleBending->AddSummand(new TernarySum(p,
-                                   new Square(
-                                     p, new BinaryDifference(
-                                       p,
-                                       new ScalarProduct(p, Xj[0], scale),
-                                       X[i][0])),
-                                   new Square(
-                                     p, new BinaryDifference(
-                                       p,
-                                       new ScalarProduct(p, Xj[1], scale),
-                                       X[i][1])),
-                                   new Square(
-                                     p, new BinaryDifference(
-                                       p,
-                                       new ScalarProduct(p, Xj[2], scale),
-                                       X[i][2]))));
     }
+
+  // ------------------------------------------------------------------------
+  // Export the medial atom mesh for debugging purposes.
+  // ------------------------------------------------------------------------
+  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, M, R);
 
   // ------------------------------------------------------------------------
   // Add the actual medial constraints
   // ------------------------------------------------------------------------
 
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int iBnd = 0; iBnd < nb; iBnd++)
     {
-    int iBnd = it.GetIndex();
-    int iAtom = it.GetAtomIndex();
+    int iAtom = mIndex[iBnd];
 
     // Code up X - r * N - M = 0
     for(int j = 0; j < 3; j++)
@@ -1306,18 +1369,49 @@ int main(int argc, char *argv[])
     }
 
 
+
+  // ------------------------------------------------------------------------
+  // Configure the boundary and medial triangle area variables
+  // ------------------------------------------------------------------------
+
+  // Compute boundary triangle edges, normals, and areas
+  ComputeTriangleAndEdgeProperties(
+        p, bmesh,
+        X, NT_X, taX, 0.1, true, TEL_X);
+
+  // Create a medial mesh that duplicates the boundary mesh
+  TriangleMesh* mmesh = new TriangleMesh(*bmesh);
+
+  // Change the triangle vertices to use m_index
+  for(int i = 0; i < mmesh->triangles.size(); i++)
+    {
+    for(int j = 0; j < 3; j++)
+      {
+      mmesh->triangles[i].vertices[j] = mIndex[bmesh->triangles[i].vertices[j]];
+      }
+    }
+
+  // Compute medial triangle edges, normals, and areas.
+  // TODO: this is redundant, as it computes two sets of equal normals and
+  // areas for each medial triangle, one facing each boundary triangle. We
+  // could avoid this by checking for opposite triangles.
+  ComputeTriangleAndEdgeProperties(
+        p, mmesh,
+        M, NT_M, taM, 0.1);
+
+
+
   // ------------------------------------------------------------------------
   // Define the objective on the basis
   // ------------------------------------------------------------------------
 
   // Define a basis for the surface
   int nBasis = 20;
-  MeshBasisCoefficientMapping basismap_X(
-        model->GetIterationContext()->GetBoundaryMesh(), nBasis, 3);
+  MeshBasisCoefficientMapping basismap_X(bmesh, nBasis, 3);
 
   // Define a basis for the medial axis
-  MeshBasisCoefficientMapping basismap_M(
-        model->GetIterationContext()->GetMedialMesh(), nBasis, 4);
+  // TODO: to what extent is this a valid basis - we need to visualize!
+  MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
 
   // Create the coefficient variables
   VarVecArray XC(nBasis, VarVec(3, NULL));
@@ -1336,11 +1430,9 @@ int main(int argc, char *argv[])
 
   // Define the objective on the basis
   BigSum *objBasisResidual = new BigSum(p);
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int iBnd = 0; iBnd < nb; iBnd++)
     {
-    int iBnd = it.GetIndex();
-    SMLVec3d Xfixed = GetBoundaryPoint(it, model->GetAtomArray()).X;
+    SMLVec3d Xfixed = xInput[iBnd];
 
     for(int j = 0; j < 3; j++)
       {
@@ -1359,6 +1451,11 @@ int main(int argc, char *argv[])
       }
     }
 
+  // TODO: for the time being, I took out the medial residual computation,
+  // because it is unreasonable to compute it as a difference from the initial
+  // state, since the initial state is likely to be bogus. Need to revive this
+  // later
+  /*
   for(MedialAtomIterator it = model->GetAtomIterator();
       !it.IsAtEnd(); ++it)
     {
@@ -1385,7 +1482,7 @@ int main(int argc, char *argv[])
             new Square(p, new BinaryDifference(p, xfit, xdata)));
       }
     }
-
+  */
 
   // ------------------------------------------------------------------------
   // Create a total volume objective -
@@ -1393,31 +1490,30 @@ int main(int argc, char *argv[])
   BigSum *objVolume = new BigSum(p);
 
   // Measure the wedge volume for each boundary triangle
-  VarVec wedgeVol(model->GetNumberOfBoundaryTriangles(), NULL);
+  VarVec wedgeVol(bmesh->triangles.size(), NULL);
 
   // Add the Jacobian constraints - all tetrahedra must have positive volume
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
+  for(int i = 0; i < bmesh->triangles.size(); i++)
     {
+    Triangle &T = bmesh->triangles[i];
+
     // Get the boundary vertices
-    VarVec x[] = { X[trit.GetBoundaryIndex(0)],
-                   X[trit.GetBoundaryIndex(1)],
-                   X[trit.GetBoundaryIndex(2)] };
+    VarVec x[] = { X[T.vertices[0]], X[T.vertices[1]], X[T.vertices[2]] };
 
     // And the medial vertices
-    VarVec m[] = { M[trit.GetAtomIndex(0)],
-                   M[trit.GetAtomIndex(1)],
-                   M[trit.GetAtomIndex(2)] };
+    VarVec m[] = { M[mIndex[T.vertices[0]]],
+                   M[mIndex[T.vertices[1]]],
+                   M[mIndex[T.vertices[2]]] };
 
     // There are several ways to cut a wedge into tetras, we choose one
-    Expression *c1 = TetraHedronVolume(p, model, m[2], x[0], x[1], x[2]);
-    Expression *c2 = TetraHedronVolume(p, model, m[1], x[0], x[1], m[2]);
-    Expression *c3 = TetraHedronVolume(p, model, m[2], x[0], m[0], m[1]);
+    Expression *c1 = TetraHedronVolume(p, m[2], x[0], x[1], x[2]);
+    Expression *c2 = TetraHedronVolume(p, m[1], x[0], x[1], m[2]);
+    Expression *c3 = TetraHedronVolume(p, m[2], x[0], m[0], m[1]);
 
     // printf("Tetra Vols: %f, %f, %f\n", c1->Evaluate(), c2->Evaluate(), c3->Evaluate());
 
     // Save the total wedge volume for use in integration
-    wedgeVol[trit.GetIndex()] = new TernarySum(p, c1, c2, c3);
+    wedgeVol[i] = new TernarySum(p, c1, c2, c3);
 
     // Each tetra should have positive volume
     /*
@@ -1427,7 +1523,7 @@ int main(int argc, char *argv[])
     */
 
     // Total volume integral
-    objVolume->AddSummand(wedgeVol[trit.GetIndex()]);
+    objVolume->AddSummand(wedgeVol[i]);
     }
 
 
@@ -1435,27 +1531,19 @@ int main(int argc, char *argv[])
   // Create the medial/boundary Jacobian constraint (normals point in same direction)
   // ------------------------------------------------------------------------
   double constJacFact = 0.1;
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
+  for(int i = 0; i < bmesh->triangles.size(); i++)
     {
     // For this constraint, we just want the medial triangle normal and
     // the boundary triangle normal to point in the same direction!
-    Expression *dp =
-        DotProduct(p, NT_X[trit.GetIndex()], NT_M[trit.GetMedialTriangleIndex()]);
+    Expression *dp = DotProduct(p, NT_X[i], NT_M[i]);
 
     // Depending on the side, constrain up or down
-    if(trit.GetBoundarySide() == 1)
-      {
-      if(dp->Evaluate() < constJacFact)
-        std::cout << "Wrong: " << dp->Evaluate() << std::endl;
-      p->AddConstraint(dp, "Jac", constJacFact, ConstrainedNonLinearProblem::UBINF);
-      }
-    else
-      {
-      if(dp->Evaluate() > -constJacFact)
-        std::cout << "Wrong: " << dp->Evaluate() << std::endl;
-      p->AddConstraint(dp, "Jac", ConstrainedNonLinearProblem::LBINF, -constJacFact);
-      }
+    if(dp->Evaluate() < constJacFact)
+      std::cout << "Bad Jacobian constraint: " << dp->Evaluate()
+                << " in triangle " << i << std::endl;
+
+    // Add the constraint
+    p->AddConstraint(dp, "Jac", constJacFact, ConstrainedNonLinearProblem::UBINF);
     }
 
 
@@ -1508,14 +1596,11 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Create the MIB constraint
   // ------------------------------------------------------------------------
-  TriangleMesh *mesh = model->GetIterationContext()->GetBoundaryMesh();
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int iBnd = 0; iBnd < nb; iBnd++)
     {
-    int iBnd = it.GetIndex();
-    int iAtom = it.GetAtomIndex();
+    int iAtom = mIndex[iBnd];
 
-    for(EdgeWalkAroundVertex walk(mesh, iBnd); !walk.IsAtEnd(); ++walk)
+    for(EdgeWalkAroundVertex walk(bmesh, iBnd); !walk.IsAtEnd(); ++walk)
       {
       int k = walk.MovingVertexId();
       Expression *distsq = DistanceSqr(p, M[iAtom], X[k]);
@@ -1526,53 +1611,16 @@ int main(int argc, char *argv[])
     }
 
 
-  // ------------------------------------------------------------------------
-  // Construct the first part of the objective function
-  // ------------------------------------------------------------------------
-  BigSum *objSqDist = new BigSum(p);
-  for(int i = 0; i < X.size(); i++)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      objSqDist->AddSummand(
-            new Square(p,
-                       new BinaryDifference(p, X[i][j],
-                                            new Constant(p, targetPoint[i][j]))));
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Construct an opposite objective: distance from a selected set of points
-  // to the closest point on the medial mesh
-  // ------------------------------------------------------------------------
-  std::vector<PointMatch> meshToModel =
-      find_closest_to_mesh(target, model, model->GetNumberOfBoundaryPoints());
-  BigSum *objRecipSqDist = new BigSum(p);
-  for(int i = 0; i < meshToModel.size(); i++)
-    {
-    SMLVec3d xMesh = meshToModel[i].second;
-    int iModel = meshToModel[i].first;
-    for(int j = 0; j < 3; j++)
-      {
-      objRecipSqDist->AddSummand(
-            new Square(p,
-                       new BinaryDifference(p, X[iModel][j],
-                                            new Constant(p, xMesh[j]))));
-      }
-    }
 
   // ------------------------------------------------------------------------
   // Construct the total surface area objective
   // ------------------------------------------------------------------------
   BigSum *objSurfArea = new BigSum(p);
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
+  for(int i = 0; i < bmesh->triangles.size(); i++)
     {
     // Add the area to the objective
-    objSurfArea->AddSummand(taX[trit.GetIndex()]);
+    objSurfArea->AddSummand(taX[i]);
     }
-
-
 
   // ------------------------------------------------------------------------
   // Solve for the circumcenter and circumradius of each boundary triangle
@@ -1813,10 +1861,8 @@ int main(int argc, char *argv[])
   double min_angle = vnl_math::pi * 12 / 180;
   double max_csc = 1.0 / sin(min_angle);
 
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
+  for(int k = 0; k < bmesh->triangles.size(); k++)
     {
-    int k = trit.GetIndex();
     for(int d = 0; d < 3; d++)
       {
       Expression *l1 = TEL_X[k][(d + 1) % 3];
@@ -1940,12 +1986,12 @@ int main(int argc, char *argv[])
 
 #endif // USE_DICE
 
-  // As an initial objective, we just want to resolve all the constraints
+  // This simple objective is the displacement from the input boundary points.
+  // It allows us to resolve all the constraints without fitting to new data.
+  // It's a good sanity check to make sure the model is valid
   BigSum *objDisplacement = new BigSum(p);
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  for(int i = 0; i < nb; i++)
     {
-    int i = it.GetIndex();
     objDisplacement->AddSummand(
           new TernaryGradientMagnitudeSqr(
             p,
@@ -1957,8 +2003,7 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Derive the final objective
   // ------------------------------------------------------------------------
-  double scaleRecip = 1.0;
-  BigSum *obj = new BigSum(p);
+
   // obj->AddSummand(objSqDist);
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, scaleRecip), objRecipSqDist));
   // obj->AddSummand(new BinaryProduct(p, new Constant(p, 20), objImageMatch));
@@ -1977,11 +2022,6 @@ int main(int argc, char *argv[])
   obj->AddSummand(new ScalarProduct(p, objDice, 4 * (nb + nm)));
   obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
   */
-
-  // ICP-style
-  obj->AddSummand(objSqDist);
-  obj->AddSummand(new BinaryProduct(p, new Constant(p, scaleRecip), objRecipSqDist));
-  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
 
 
   // ------------------------------------------------------------------------
@@ -2035,18 +2075,9 @@ int main(int argc, char *argv[])
   */
 
   // Save the true objective
-  SaveGradient(p, model, X, obj, "grad_obj_before.vtk");
+  // SaveGradient(p, model, X, obj, "grad_obj_before.vtk");
 
 
-  // Evaluate the objective
-  std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-  std::cout << "MSD to model: " << scaleRecip * objRecipSqDist->Evaluate() << std::endl;
-  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Bending energy: " << objBending->Evaluate() << std::endl;
-  std::cout << "Simple bending energy: " << objSimpleBending->Evaluate() << std::endl;
-  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
 
 #ifdef USE_DICE
   std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
@@ -2063,26 +2094,8 @@ int main(int argc, char *argv[])
 #endif
 
 
-  // Configure the problem
-  p->SetObjective(obj);
-  p->SetupProblem(true);
-  p->ClearDerivativeCaches();
-
   // Test some derivatives;
   // DerivativeTest(p, 1000);
-
-  // Stats on how many expressions we have
-  const Problem::ExpressionSet &expr = p->GetChildExpressions();
-  int nConst = 0;
-  for(Problem::ExpressionSet::const_iterator it = expr.begin(); it != expr.end(); ++it)
-    {
-    Expression *e = (*it);
-    if(dynamic_cast<Constant *>(e))
-      nConst++;
-    }
-
-  printf("Expressions: %d, constants: %d\n", (int) expr.size(), nConst);
-
 
   // Solve the problem
   SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(p);
@@ -2117,15 +2130,92 @@ int main(int argc, char *argv[])
     return (int) status;
     }
 
+  // Try just fitting the boundary data
+  BigSum *obj;
+  obj = new BigSum(p);
+  obj->AddSummand(new ScalarProduct(p, objDisplacement, 1));
+  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+
+  // Configure the problem
+  p->SetObjective(obj);
+  p->SetupProblem(true);
+
+  // Evaluate the objective
+  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+  std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
+  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
+  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
   // Ask Ipopt to solve the problem
   status = app->OptimizeTNLP(GetRawPtr(ip));
 
-  std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-  std::cout << "MSD to model: " << scaleRecip * objRecipSqDist->Evaluate() << std::endl;
+  // Evaluate the objective
+  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+  std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
   std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
   std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Bending energy: " << objBending->Evaluate() << std::endl;
-  std::cout << "Simple bending energy: " << objSimpleBending->Evaluate() << std::endl;
+  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+  // Save the current state
+  SaveBoundaryMesh("fittoinput_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
+  SaveMedialMesh("fittoinput_med.vtk", p, bmesh, mIndex, M, R);
+
+  // Create the closest point finder
+  ClosestPointMatcher cpmatcher(target, X.size());
+
+  // Repeat this several times
+  Expression *objSqDist, *objRecipSqDist;
+  for(int i = 0; i < 5; i++)
+    {
+    // ------------------------------------------------------------------------
+    // Construct the first part of the objective function
+    // ------------------------------------------------------------------------
+    objSqDist = ComputeDistanceToMeshObjective(p, &cpmatcher, X);
+
+    // ------------------------------------------------------------------------
+    // Construct an opposite objective: distance from a selected set of points
+    // to the closest point on the medial mesh
+    // ------------------------------------------------------------------------
+    objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, X);
+
+    // ICP-style
+    obj = new BigSum(p);
+    obj->AddSummand(objSqDist);
+    obj->AddSummand(new ScalarProduct(p, objRecipSqDist, 1));
+    obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+
+    // Configure the problem
+    p->SetObjective(obj);
+    p->SetupProblem(true);
+
+    // Evaluate the objective
+    std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
+    std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
+    std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+    std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
+    std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+    std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
+    std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+    // Ask Ipopt to solve the problem
+    status = app->OptimizeTNLP(GetRawPtr(ip));
+
+    // Evaluate the objective
+    std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
+    std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
+    std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+    std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
+    std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+    std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
+    std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+    }
+
+  std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
+  std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
+  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
   std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
   std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
   std::cout << "Total objective: " << obj->Evaluate() << std::endl;
@@ -2148,108 +2238,21 @@ int main(int argc, char *argv[])
   // Test some derivatives;
   // DerivativeTest(p, 1000);
 
-  // Save the mesh for output
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      int i = it.GetIndex();
-      BoundaryAtom &B = GetBoundaryPoint(it, model->GetAtomArray());
-      B.X[j] = X[i][j]->Evaluate();
-      B.N[j] = N[i][j]->Evaluate();
-      B.curv_mean = curv_mean[i]->Evaluate();
-      B.curv_gauss = curv_gauss[i]->Evaluate();
-      }
-    }
+  // Save the result as a boundary mesh
+  SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
+  SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
 
-  // Configure the medial axis variables
-  for(MedialAtomIterator it = model->GetAtomIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int i = it.GetIndex();
-    MedialAtom &a = model->GetAtomArray()[i];
-    for(int j = 0; j < 3; j++)
-      {
-      a.X[j] = M[i][j]->Evaluate();
-      }
-    a.R = R[i]->Evaluate();
-    }
-
-  // Save the resulting meshes
-  ExportMedialMeshToVTK(model, NULL, "test.med.vtk");
-  ExportBoundaryMeshToVTK(model, NULL, "test.bnd.vtk");
-
-  SaveGradient(p, model, X, obj, "grad_obj_after.vtk");
+  SaveGradient(p, X, obj, "grad_obj_after.vtk");
 
 #ifdef USE_DICE
   // Save the sample and image values at samples
   SaveSamples(sampleX, sampleF, "samples_after.vtk");
 
   // Plot the gradient of the problem
-  SaveGradient(p, model, X, objDice, "grad_obj_dice_after.vtk");
-  SaveGradient(p, model, X, objBasisResidual, "grad_obj_residual_after.vtk");
+  SaveGradient(p, X, objDice, "grad_obj_dice_after.vtk");
+  SaveGradient(p, X, objBasisResidual, "grad_obj_residual_after.vtk");
 #endif
 
-  vtkPoints *out_pts = vtkPoints::New();
-  out_pts->Allocate(model->GetNumberOfBoundaryPoints());
-  vtkPolyData *out_poly = vtkPolyData::New();
-  out_poly->Allocate(model->GetNumberOfBoundaryTriangles());
-  out_poly->SetPoints(out_pts);
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int i = it.GetIndex();
-    out_pts->InsertNextPoint(
-          X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
-    }
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    vtkIdType ids[] = {trit.GetBoundaryIndex(0),
-                       trit.GetBoundaryIndex(1),
-                       trit.GetBoundaryIndex(2)};
-
-    out_poly->InsertNextCell(VTK_TRIANGLE, 3, ids);
-    }
-
-  out_poly->BuildCells();
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(out_poly);
-  writer->SetFileName("testout.vtk");
-  writer->Update();
-
-
-  // Save the mesh for output
-  vtkPoints *out_mpts = vtkPoints::New();
-  out_mpts->Allocate(model->GetNumberOfAtoms());
-  vtkPolyData *out_mpoly = vtkPolyData::New();
-  out_mpoly->Allocate(model->GetNumberOfTriangles());
-  out_mpoly->SetPoints(out_mpts);
-  for(MedialAtomIterator it = model->GetAtomIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int i = it.GetIndex();
-    out_mpts->InsertNextPoint(
-          M[i][0]->Evaluate(), M[i][1]->Evaluate(), M[i][2]->Evaluate());
-    }
-
-  for(MedialTriangleIterator trit = model->GetMedialTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    vtkIdType ids[] = {trit.GetAtomIndex(0),
-                       trit.GetAtomIndex(1),
-                       trit.GetAtomIndex(2)};
-
-    out_mpoly->InsertNextCell(VTK_TRIANGLE, 3, ids);
-    }
-
-  out_mpoly->BuildCells();
-  vtkPolyDataWriter *mwriter = vtkPolyDataWriter::New();
-  mwriter->SetInput(out_mpoly);
-  mwriter->SetFileName("testmout.vtk");
-  mwriter->Update();
 
 #ifdef CIRCUMCENTER
   SaveCircumcenterMesh(CC, CR, CCBC);

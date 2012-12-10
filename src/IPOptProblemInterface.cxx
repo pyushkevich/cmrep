@@ -119,14 +119,12 @@ bool IPOptProblemInterface::eval_g(
     }
 
   // Print the categories
-  /*
   std::cout << "#CV#";
   for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
     {
     std::cout << " " << it->first << " " << it->second;
     }
   std::cout << std::endl;
-  */
 
   return true;
 }
