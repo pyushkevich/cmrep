@@ -14,6 +14,7 @@
 #include "IpIpoptApplication.hpp"
 #include "MedialAtomGrid.h"
 #include "vtkPolyDataWriter.h"
+#include "vtkPolyDataReader.h"
 #include "tetgen.h"
 
 #include "vtkPolyData.h"
@@ -925,42 +926,346 @@ void SaveMedialMesh(const char *file,
 }
 
 
-int main(int argc, char *argv[])
+/**
+ * Data extracted from the input VTK file
+ */
+class BCMTemplate
 {
-  // We want to load a triangular mesh in which each point is associated with
-  // a tag (corresponding medial atom).
+public:
 
-  // The first parameter is the cm-rep to start from
-  char *cmrepfile = argv[1];
+  SubdivisionSurface::MeshLevel bmesh;
+  std::vector<SMLVec3d> x;
+  std::vector<int> mIndex;
 
-  // The second is the VTK mesh for ICP
-  char *targetmesh = argv[2];
+  void Load(const char *file);
+  void Save(const char *file);
 
-  // The image to fit to
-  // char *targetimage = argv[3];
+  void Subdivide();
+  void ImportFromCMRep(const char *file);
 
+};
+
+void BCMTemplate::Load(const char *file)
+{
+  // Load the input mesh
+  vtkSmartPointer<vtkPolyDataReader> reader = vtkSmartPointer<vtkPolyDataReader>::New();
+  reader->SetFileName(file);
+  reader->Update();
+  vtkSmartPointer<vtkPolyData> pd = reader->GetOutput();
+
+  // Generate the mesh object
+  TriangleMeshGenerator gen(&bmesh, pd->GetNumberOfPoints());
+  for(int i = 0; i < pd->GetNumberOfCells(); i++)
+    {
+    vtkCell *c = pd->GetCell(i);
+    if(c->GetNumberOfPoints() != 3)
+      throw MedialModelException("Bad cell in input");
+    gen.AddTriangle(c->GetPointId(0), c->GetPointId(1), c->GetPointId(2));
+    }
+  gen.GenerateMesh();
+
+  vtkSmartPointer<vtkDataArray> mix = pd->GetPointData()->GetArray("MedialIndex");
+  if(!mix)
+    throw MedialModelException("Missing a medial index in input mesh");
+
+  // Get the coordinates and the medial index
+  x.resize(pd->GetNumberOfPoints());
+  mIndex.resize(pd->GetNumberOfPoints());
+  for(int i = 0; i < pd->GetNumberOfPoints(); i++)
+    {
+    x[i].set(pd->GetPoint(i));
+    mIndex[i] = floor(0.5 + mix->GetTuple1(i));
+    }
+}
+
+void BCMTemplate::Save(const char *file)
+{
+  // Save as a VTK mesh
+  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+  pts->Allocate(bmesh.nVertices);
+
+  vtkSmartPointer<vtkIntArray> mix = vtkSmartPointer<vtkIntArray>::New();
+  mix->SetNumberOfComponents(1);
+  mix->Allocate(bmesh.nVertices);
+  mix->SetName("MedialIndex");
+
+  for(int i = 0; i < bmesh.nVertices; i++)
+    {
+    pts->InsertNextPoint(x[i].data_block());
+    mix->InsertNextTuple1(mIndex[i]);
+    }
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->Allocate(bmesh.triangles.size());
+  pd->SetPoints(pts);
+  pd->GetPointData()->AddArray(mix);
+
+  for(int i = 0; i < bmesh.triangles.size(); i++)
+    {
+    vtkIdType vtx[3];
+    for(int j = 0; j < 3; j++)
+      vtx[j] = bmesh.triangles[i].vertices[j];
+    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+    }
+
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+  writer->SetInput(pd);
+  writer->SetFileName(file);
+  writer->Update();
+}
+
+struct Edge : public std::pair<int, int>
+{
+  Edge(int a, int b) :
+    std::pair<int, int>()
+  {
+    this->first = std::min(a, b);
+    this->second = std::max(a, b);
+  }
+};
+
+void BCMTemplate::Subdivide()
+{
+  // Make a copy of the boundary mesh
+  bmesh.SetAsRoot();
+  SubdivisionSurface::MeshLevel src = bmesh;
+
+  // Subdivide into the current mesh
+  SubdivisionSurface::Subdivide(&src, &bmesh);
+
+  // Get the subdivision matrix
+  typedef ImmutableSparseMatrix<double> SMat;
+  SMat &W = bmesh.weights;
+
+  // Find all unique edges
+  int iNext = *std::max_element(mIndex.begin(), mIndex.end()) + 1;
+  typedef std::map<Edge, int> EdgeIndex;
+  EdgeIndex edgeIndex;
+
+  // Assign a new mIndex to every unique edge in every triangle
+  for(int t = 0; t < src.triangles.size(); t++)
+    {
+    size_t *v = src.triangles[t].vertices;
+    for(int j = 0; j < 3; j++)
+      {
+      Edge e(mIndex[v[(j+1) % 3]], mIndex[v[(j+2) % 3]]);
+      std::pair<EdgeIndex::iterator, bool> ret = edgeIndex.insert(std::make_pair(e, 0));
+      if(ret.second)
+        {
+        ret.first->second = iNext++;
+        std::cout << "Edge " << e.first << "," << e.second << " to " << iNext << std::endl;
+        }
+      else
+        std::cout << "Already found " << e.first << "," << e.second << std::endl;
+      }
+    }
+
+  // Apply the subdivision to the mesh coordinates
+  std::vector<SMLVec3d> xsrc = x;
+  x.clear();
+
+  for(int i = 0; i < bmesh.nVertices; i++)
+    {
+    SMLVec3d xi(0.0, 0.0, 0.0);
+    for(SMat::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
+      {
+      xi += xsrc[it.Column()] * it.Value();
+      }
+    x.push_back(xi);
+    }
+
+  // Compute the m-indices
+  mIndex.resize(bmesh.nVertices, -1);
+  for(int t = 0; t < src.triangles.size(); t++)
+    {
+    // The new vertices inserted into this triangle
+    size_t *vnew = bmesh.triangles[4 * t + 3].vertices;
+    size_t *vold = src.triangles[t].vertices;
+
+    // Find the edge for each triangle
+    for(int j = 0; j < 3; j++)
+      {
+      if(mIndex[vnew[j]] == -1)
+        {
+        // Find the index assigned to this edge
+        Edge e(mIndex[vold[(j+1) % 3]], mIndex[vold[(j+2) % 3]]);
+        mIndex[vnew[j]] = edgeIndex[e];
+        std::cout << "Vertex " << vnew[j] << " MIndex " << mIndex[vnew[j]] << std::endl;
+        }
+      }
+    }
+
+  // Set the current level as root
+  bmesh.SetAsRoot();
+}
+
+void BCMTemplate::ImportFromCMRep(const char *file)
+{
   // Load and process the mrep (TODO: remove)
-  MedialPDE mrep(cmrepfile);
+  MedialPDE mrep(file);
   SubdivisionMedialModel *tmpmodel =
       dynamic_cast<SubdivisionMedialModel *>(mrep.GetMedialModel());
 
   // We will restrict our operations to a boundary triangle mesh and a set of medial
   // atom indices for each point on the triangle mesh
-  TriangleMesh *bmesh = tmpmodel->GetIterationContext()->GetBoundaryMesh();
+  TriangleMesh *tm = tmpmodel->GetIterationContext()->GetBoundaryMesh();
+  TriangleMesh *mytm = (TriangleMesh *) (&bmesh);
+  *mytm = *tm;
+
+  // Initialize the data we are extracting from the boundary mesh
+  mIndex.resize(bmesh.nVertices);
+  x.resize(bmesh.nVertices);
+  for(MedialBoundaryPointIterator it = tmpmodel->GetBoundaryPointIterator();
+      !it.IsAtEnd(); ++it)
+    {
+    mIndex[it.GetIndex()] = it.GetAtomIndex();
+    x[it.GetIndex()] = GetBoundaryPoint(it, tmpmodel->GetAtomArray()).X;
+    }
+}
+
+
+int ConvertCMRepToBoundaryRepresentation(std::string fnInput, std::string fnOutput)
+{
+  // We want to load a triangular mesh in which each point is associated with
+  // a tag (corresponding medial atom).
+  BCMTemplate tmpl;
+  tmpl.ImportFromCMRep(fnInput.c_str());
+  tmpl.Save(fnOutput.c_str());
+  return 0;
+}
+
+
+int SubdivideBoundaryRepresentation(
+    std::string fnTemplate,
+    int subdivisionLevel,
+    std::string fnOutput)
+{
+  // Load the template!
+  BCMTemplate tmpl;
+  tmpl.Load(fnTemplate.c_str());
+
+  // Create the output template
+  for(int i = 0; i < subdivisionLevel; i++)
+    tmpl.Subdivide();
+
+  // Save the mesh
+  tmpl.Save(fnOutput.c_str());
+
+  return 0;
+}
+
+enum ProgramAction {
+  ACTION_FIT_TARGET,
+  ACTION_FIT_SELF,
+  ACTION_SUBDIVIDE,
+  ACTION_CONVERT_CMREP,
+  ACTION_NONE
+};
+
+int usage()
+{
+  const char *usage =
+      "bcmrep - Boundary-constrained medial representation utility\n"
+      "usage:\n"
+      "  bcmrep [options]\n"
+      "options that select an action (use one):\n"
+      "  -icp template.vtk target.vtk           : fit template mesh to target mesh\n"
+      "  -lsq template.vtk target.vtk           : least squares fit to target mesh\n"
+      "  -sub template.vtk factor               : subdivide template by a factor\n"
+      "  -cmr input.cmrep                       : import a cm-rep template\n"
+      "other required options:\n"
+      "  -o output.vtk                          : mesh to save the result\n"
+      "optional parameters:\n"
+      "  -reg-dof NxNxN                         : number of basis functions at each\n"
+      "                                           iteration (default = 20)\n"
+      "  -reg-weight NxNxN                      : weight of the regularization term\n"
+      "                                           at each iteration\n";
+  std::cout << usage;
+  return -1;
+}
+
+int main(int argc, char *argv[])
+{
+  // Usage help
+  if(argc < 2) return usage();
+
+  // The action specified for the program
+  ProgramAction action = ACTION_NONE;
+  std::string fnTemplate, fnTarget, fnOutput, fnImportSource;
+  int subdivisionLevel = 0;
+
+  for(int p = 1; p < argc; p++)
+    {
+    std::string cmd = argv[p];
+    if(cmd == "-icp")
+      {
+      action = ACTION_FIT_TARGET;
+      fnTemplate = argv[++p];
+      fnTarget = argv[++p];
+      }
+    else if(cmd == "-lsq")
+      {
+      action = ACTION_FIT_SELF;
+      fnTemplate = argv[++p];
+      fnTarget = argv[++p];
+      }
+    else if(cmd == "-sub")
+      {
+      action = ACTION_SUBDIVIDE;
+      fnTemplate = argv[++p];
+      subdivisionLevel = atoi(argv[++p]);
+      }
+    else if(cmd == "-cmr")
+      {
+      action = ACTION_CONVERT_CMREP;
+      fnImportSource = argv[++p];
+      }
+    else if(cmd == "-o")
+      {
+      fnOutput = argv[++p];
+      }
+    else if(cmd == "-o")
+      {
+      return usage();
+      }
+    else
+      {
+      std::cerr << "Unknown command " << cmd << std::endl;
+      return -1;
+      }
+    }
+
+  // Decide what to do based on the action!
+  if(action == ACTION_CONVERT_CMREP)
+    {
+    return ConvertCMRepToBoundaryRepresentation(fnImportSource, fnOutput);
+    }
+
+  else if(action == ACTION_SUBDIVIDE)
+    {
+    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, fnOutput);
+    }
+
+  else if(action == ACTION_NONE)
+    {
+    std::cerr << "No action specified" << std::endl;
+    return -1;
+    }
+
+  // Load the template
+  BCMTemplate tmpl;
+  tmpl.Load(fnTemplate.c_str());
+
+  // We will restrict our operations to a boundary triangle mesh and a set of medial
+  // atom indices for each point on the triangle mesh
+  TriangleMesh *bmesh = &tmpl.bmesh;
 
   // Get the number of boundary points
   int nb = bmesh->nVertices;
 
   // Initialize the data we are extracting from the boundary mesh
-  std::vector<int> mIndex(nb);
-  std::vector<SMLVec3d> xInput(nb), nInput(nb);
-  std::vector<double> rInput(nb);
-  for(MedialBoundaryPointIterator it = tmpmodel->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    mIndex[it.GetIndex()] = it.GetAtomIndex();
-    xInput[it.GetIndex()] = GetBoundaryPoint(it, tmpmodel->GetAtomArray()).X;
-    }
+  std::vector<int> &mIndex = tmpl.mIndex;
+  std::vector<SMLVec3d> &xInput = tmpl.x;
 
   // At this point, we are only working with bMesh and mIndex and xInput
 
@@ -979,7 +1284,7 @@ int main(int argc, char *argv[])
 
 
   // Load the target mesh
-  vtkPolyData *target = ReadVTKMesh(targetmesh);
+  vtkPolyData *target = ReadVTKMesh(fnTarget.c_str());
 
   // Load the target image
   /*
@@ -1395,10 +1700,11 @@ int main(int argc, char *argv[])
   // TODO: this is redundant, as it computes two sets of equal normals and
   // areas for each medial triangle, one facing each boundary triangle. We
   // could avoid this by checking for opposite triangles.
+  /*
   ComputeTriangleAndEdgeProperties(
         p, mmesh,
         M, NT_M, taM, 0.1);
-
+  */
 
 
   // ------------------------------------------------------------------------
@@ -1530,6 +1836,7 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Create the medial/boundary Jacobian constraint (normals point in same direction)
   // ------------------------------------------------------------------------
+  /*
   double constJacFact = 0.1;
   for(int i = 0; i < bmesh->triangles.size(); i++)
     {
@@ -1545,6 +1852,7 @@ int main(int argc, char *argv[])
     // Add the constraint
     p->AddConstraint(dp, "Jac", constJacFact, ConstrainedNonLinearProblem::UBINF);
     }
+    */
 
 
 #ifdef OLD_CODE
@@ -2134,7 +2442,7 @@ int main(int argc, char *argv[])
   BigSum *obj;
   obj = new BigSum(p);
   obj->AddSummand(new ScalarProduct(p, objDisplacement, 1));
-  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 4));
 
   // Configure the problem
   p->SetObjective(obj);
@@ -2161,35 +2469,60 @@ int main(int argc, char *argv[])
   SaveBoundaryMesh("fittoinput_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
   SaveMedialMesh("fittoinput_med.vtk", p, bmesh, mIndex, M, R);
 
-  // Create the closest point finder
-  ClosestPointMatcher cpmatcher(target, X.size());
-
-  // Repeat this several times
-  Expression *objSqDist, *objRecipSqDist;
-  for(int i = 0; i < 5; i++)
+  // Continue if in ICP mode
+  if(action == ACTION_FIT_TARGET)
     {
-    // ------------------------------------------------------------------------
-    // Construct the first part of the objective function
-    // ------------------------------------------------------------------------
-    objSqDist = ComputeDistanceToMeshObjective(p, &cpmatcher, X);
+    // Create the closest point finder
+    ClosestPointMatcher cpmatcher(target, X.size());
 
-    // ------------------------------------------------------------------------
-    // Construct an opposite objective: distance from a selected set of points
-    // to the closest point on the medial mesh
-    // ------------------------------------------------------------------------
-    objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, X);
+    // Repeat this several times
+    Expression *objSqDist, *objRecipSqDist;
+    for(int i = 0; i < 5; i++)
+      {
+      // ------------------------------------------------------------------------
+      // Construct the first part of the objective function
+      // ------------------------------------------------------------------------
+      objSqDist = ComputeDistanceToMeshObjective(p, &cpmatcher, X);
 
-    // ICP-style
-    obj = new BigSum(p);
-    obj->AddSummand(objSqDist);
-    obj->AddSummand(new ScalarProduct(p, objRecipSqDist, 1));
-    obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
+      // ------------------------------------------------------------------------
+      // Construct an opposite objective: distance from a selected set of points
+      // to the closest point on the medial mesh
+      // ------------------------------------------------------------------------
+      objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, X);
 
-    // Configure the problem
-    p->SetObjective(obj);
-    p->SetupProblem(true);
+      // ICP-style
+      obj = new BigSum(p);
+      obj->AddSummand(objSqDist);
+      obj->AddSummand(new ScalarProduct(p, objRecipSqDist, 1));
+      obj->AddSummand(new ScalarProduct(p, objBasisResidual, 4));
 
-    // Evaluate the objective
+      // Configure the problem
+      p->SetObjective(obj);
+      p->SetupProblem(true);
+
+      // Evaluate the objective
+      std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
+      std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
+      std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+      std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
+      std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+      std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
+      std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+      // Ask Ipopt to solve the problem
+      status = app->OptimizeTNLP(GetRawPtr(ip));
+
+      // Evaluate the objective
+      std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
+      std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
+      std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
+      std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
+      std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
+      std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
+      std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+
+      }
+
     std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
     std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
     std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
@@ -2198,51 +2531,30 @@ int main(int argc, char *argv[])
     std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
     std::cout << "Total objective: " << obj->Evaluate() << std::endl;
 
-    // Ask Ipopt to solve the problem
-    status = app->OptimizeTNLP(GetRawPtr(ip));
 
-    // Evaluate the objective
-    std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-    std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
-    std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-    std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-    std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-    std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-    std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+  #ifdef USE_DICE
+    std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
+    std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
+    std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
+    std::cout << "Target volume: " << volTarget << std::endl;
+  #endif
 
+    if (status == Solve_Succeeded) {
+      printf("\n\n*** The problem solved!\n");
+      }
+    else {
+      printf("\n\n*** The problem FAILED!\n");
+      }
+
+    // Test some derivatives;
+    // DerivativeTest(p, 1000);
+
+    // Save the result as a boundary mesh
+    SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
+    SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
+
+    SaveGradient(p, X, obj, "grad_obj_after.vtk");
     }
-
-  std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-  std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
-  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-  std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
-
-
-#ifdef USE_DICE
-  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
-  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
-  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
-  std::cout << "Target volume: " << volTarget << std::endl;
-#endif
-
-  if (status == Solve_Succeeded) {
-    printf("\n\n*** The problem solved!\n");
-    }
-  else {
-    printf("\n\n*** The problem FAILED!\n");
-    }
-
-  // Test some derivatives;
-  // DerivativeTest(p, 1000);
-
-  // Save the result as a boundary mesh
-  SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
-  SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
-
-  SaveGradient(p, X, obj, "grad_obj_after.vtk");
 
 #ifdef USE_DICE
   // Save the sample and image values at samples
