@@ -15,6 +15,10 @@
 #include "MedialAtomGrid.h"
 #include "vtkPolyDataWriter.h"
 #include "vtkPolyDataReader.h"
+#include "vtkFloatArray.h"
+#include "vtkPointData.h"
+
+
 #include "tetgen.h"
 
 #include "vtkPolyData.h"
@@ -61,13 +65,27 @@ typedef itk::Image<float, 3> ImageType;
 class ClosestPointMatcher
 {
 public:
-  typedef std::pair<int, SMLVec3d> PointMatch;
 
-  ClosestPointMatcher(vtkPolyData *target, int nSamples);
+  struct MatchLocation
+  {
+    // The point on the target mesh
+    SMLVec3d xTarget;
+
+    // The triangle that is closest to the point on the target mesh
+    int iTriangle;
+
+    // The barycentric coordinates of the closest point on the triangle
+    SMLVec3d xBary;
+  };
+
+  // A pair consisting of a
+  typedef std::pair<MatchLocation, SMLVec3d> PointMatch;
+
+  ClosestPointMatcher(vtkPolyData *target, int nClusterDivisions = 32);
 
   std::vector<SMLVec3d> FindClosestToTarget(VarVecArray &X);
 
-  std::vector<PointMatch> FindClosestToSource(VarVecArray &X);
+  std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, VarVecArray &X);
 
   int GetNumberOfTargetPointsUsed()
   { return m_ReducedTarget->GetNumberOfPoints(); }
@@ -81,7 +99,7 @@ protected:
 #include <vtkQuadricClustering.h>
 
 ClosestPointMatcher
-::ClosestPointMatcher(vtkPolyData *target, int nSamples)
+::ClosestPointMatcher(vtkPolyData *target, int nClusterDivisions)
 {
   // Store the target
   m_Target = target;
@@ -100,26 +118,14 @@ ClosestPointMatcher
       vtkSmartPointer<vtkQuadricClustering>::New();
   clu->SetInput(target);
   clu->SetDivisionOrigin(target->GetCenter());
-  clu->SetDivisionSpacing(
-        target->GetLength() / 32,
-        target->GetLength() / 32,
-        target->GetLength() / 32);
+  double spacing = target->GetLength() / nClusterDivisions;
+  clu->SetDivisionSpacing(spacing, spacing, spacing);
   clu->Update();
 
   // Get the reduced target
   m_ReducedTarget = clu->GetOutput()->GetPoints();
 
-  // Create a set of samples from the target
-  // TODO: reimplement using quadric clustering!
-  /*
-  m_ReducedTarget = vtkSmartPointer<vtkPoints>::New();
-  m_ReducedTarget->Allocate(nSamples);
-  for(int i = 0; i < nSamples; i++)
-    {
-    int q = rand() % m_Target->GetNumberOfPoints();
-    m_ReducedTarget->InsertNextPoint(m_Target->GetPoint(q));
-    }
-    */
+  // Save the samples
   vtkSmartPointer<vtkPolyDataWriter> wr =
       vtkSmartPointer<vtkPolyDataWriter>::New();
   wr->SetInput(clu->GetOutput());
@@ -150,8 +156,8 @@ ClosestPointMatcher::FindClosestToTarget(VarVecArray &X)
   return cp;
 }
 
-std::vector<ClosestPointMatcher::PointMatch>
-ClosestPointMatcher::FindClosestToSource(VarVecArray &X)
+std::vector<ClosestPointMatcher::MatchLocation>
+ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
 {
   // Create a VTK points object
   vtkSmartPointer<vtkPoints> out_pts = vtkSmartPointer<vtkPoints>::New();
@@ -163,22 +169,84 @@ ClosestPointMatcher::FindClosestToSource(VarVecArray &X)
           X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
     }
 
+  // Create the polydata
   vtkSmartPointer<vtkPolyData> poly = vtkSmartPointer<vtkPolyData>::New();
   poly->SetPoints(out_pts);
+  poly->Allocate(mesh->triangles.size());
+
+  for(int i = 0; i < mesh->triangles.size(); i++)
+    {
+    Triangle &t = mesh->triangles[i];
+    vtkIdType v[] = {t.vertices[0], t.vertices[1], t.vertices[2]};
+    poly->InsertNextCell(VTK_TRIANGLE, 3, v);
+    }
+
+  // Build everything
+  poly->BuildCells();
 
   // Create locator for finding closest points
-  vtkSmartPointer<vtkPointLocator> loc = vtkSmartPointer<vtkPointLocator>::New();
-  loc->SetDataSet(poly);
-  loc->BuildLocator();
+  vtkSmartPointer<vtkCellLocator> locator = vtkSmartPointer<vtkCellLocator>::New();
+  locator->SetDataSet(poly);
+  locator->BuildLocator();
+
+  // Create a point set for debugging
+  vtkSmartPointer<vtkFloatArray> vMatch = vtkSmartPointer<vtkFloatArray>::New();
+  vMatch->SetNumberOfComponents(3);
+  vMatch->Allocate(3 * m_ReducedTarget->GetNumberOfPoints());
+  vMatch->SetName("ClosestPoint");
 
   // Sample points from the target mesh
-  std::vector<PointMatch> result;
+  std::vector<MatchLocation> result;
   for(int i = 0; i < m_ReducedTarget->GetNumberOfPoints(); i++)
     {
-    SMLVec3d xTarget(m_ReducedTarget->GetPoint(i));
-    vtkIdType id = loc->FindClosestPoint(xTarget.data_block());
-    result.push_back(std::make_pair((int) id, xTarget));
+    MatchLocation loc;
+    loc.xTarget.set(m_ReducedTarget->GetPoint(i));
+
+    double xs[3], d2, d;
+    int subid;
+    vtkIdType cellid;
+
+    // Find the closest point
+    locator->FindClosestPoint(loc.xTarget.data_block(), xs, cellid, subid, d2);
+
+    // Solve a system for the barycentric coordinates
+    Triangle &T = mesh->triangles[cellid];
+    SMLVec3d A = VectorEvaluate(X[T.vertices[0]]);
+    SMLVec3d B = VectorEvaluate(X[T.vertices[1]]);
+    SMLVec3d C = VectorEvaluate(X[T.vertices[2]]);
+
+    vnl_matrix<double> W(3, 2);
+    W.set_column(0, B-A);
+    W.set_column(1, C-A);
+    SMLVec3d v = SMLVec3d(xs) - A;
+
+    vnl_matrix<double> WtW = W.transpose() * W;
+    vnl_vector<double> Wtv = W.transpose() * v;
+    vnl_vector<double> q = vnl_inverse(WtW) * Wtv;
+
+    // The barycentric coordinates are (1-q1-q2, q1, q2)
+    loc.iTriangle = cellid;
+    loc.xBary[0] = 1 - (q[0] + q[1]);
+    loc.xBary[1] = q[0];
+    loc.xBary[2] = q[1];
+
+    result.push_back(loc);
+
+    SMLVec3d xss = loc.xBary[0] * A + loc.xBary[1] * B + loc.xBary[2] * C - loc.xTarget;
+    vMatch->InsertNextTuple3(xss[0], xss[1], xss[2]);
     }
+
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->SetPoints(m_ReducedTarget);
+  pd->GetPointData()->AddArray(vMatch);
+
+  // Save the samples
+  vtkSmartPointer<vtkPolyDataWriter> wr =
+      vtkSmartPointer<vtkPolyDataWriter>::New();
+  wr->SetInput(pd);
+  wr->SetFileName("pointmatch.vtk");
+  wr->Update();
 
   return result;
 }
@@ -360,9 +428,6 @@ void DerivativeTest(ConstrainedNonLinearProblem *p, int nTests)
 
 
 
-
-#include "vtkFloatArray.h"
-#include "vtkPointData.h"
 
 void SaveSamples(std::vector<std::vector<Expression *> > sampleX,
                   std::vector<Expression *> sampleF,
@@ -830,21 +895,29 @@ Expression *ComputeDistanceToMeshObjective(
 Expression *ComputeDistanceToModelObjective(
     ConstrainedNonLinearProblem *p,
     ClosestPointMatcher *cpm,
+    TriangleMesh *mesh,
     VarVecArray &X)
 {
-  std::vector<ClosestPointMatcher::PointMatch> meshToModel = cpm->FindClosestToSource(X);
+  std::vector<ClosestPointMatcher::MatchLocation> meshToModel
+      = cpm->FindClosestToSource(mesh, X);
+
   BigSum *objRecipSqDist = new BigSum(p);
   for(int i = 0; i < meshToModel.size(); i++)
     {
-    SMLVec3d xMesh = meshToModel[i].second;
-    int iModel = meshToModel[i].first;
-    for(int j = 0; j < 3; j++)
+    ClosestPointMatcher::MatchLocation loc = meshToModel[i];
+    size_t *v = mesh->triangles[loc.iTriangle].vertices;
+
+    // The closest point based on the current barycentric coordinates
+    for(int d = 0; d < 3; d++)
       {
-      objRecipSqDist->AddSummand(
-            new Square(p,
-                       new BinaryDifference(p, X[iModel][j],
-                                            new Constant(p, xMesh[j]))));
+      WeightedSumGenerator wsg(p);
+      for(int j = 0; j < 3; j++)
+        wsg.AddTerm(X[v[j]][d], loc.xBary[j]);
+
+      wsg.AddConstant(-loc.xTarget[d]);
+      objRecipSqDist->AddSummand(new Square(p, wsg.GenerateSum()));
       }
+
     }
 
   return objRecipSqDist;
@@ -1599,6 +1672,53 @@ struct RegularizationOptions
       Weight(4.0), Mode(SPECTRAL),
       EdgeLengthWeight(0.0) {}
 };
+
+class ObjectiveCombiner
+{
+public:
+  void AddObjectiveTerm(Expression *obj, std::string name, double weight)
+  {
+    m_Generator.AddTerm(obj, weight);
+    m_ObjectiveInfo[name] = make_pair(obj, weight);
+  }
+
+  Expression *GetTotalObjective()
+  {
+    if(m_TotalObjective == NULL)
+      m_TotalObjective = m_Generator.GenerateSum();
+    return m_TotalObjective;
+  }
+
+  void PrintReport()
+  {
+    printf("%30s   %10s   %10s        %10s\n", "TERM", "RawValue", "Weight", "WgtValue");
+    for(InfoMap::iterator it = m_ObjectiveInfo.begin(); it != m_ObjectiveInfo.end(); ++it)
+      {
+      double val = it->second.first->Evaluate();
+      printf("%30s   %10.4f   %10.4f        %10.4f\n",
+             it->first.c_str(),
+             val, it->second.second, val * it->second.second);
+      }
+    double totVal = m_TotalObjective->Evaluate();
+    printf("%30s   %10.4s   %10.4s        %10.4f\n",
+           "TOTAL OBJECTIVE", "", "", totVal);
+  }
+
+  ObjectiveCombiner(ConstrainedNonLinearProblem *p)
+    : m_Generator(p)
+  {
+    m_Problem = p;
+    m_TotalObjective = NULL;
+  }
+
+protected:
+  WeightedSumGenerator m_Generator;
+  ConstrainedNonLinearProblem *m_Problem;
+  Expression *m_TotalObjective;
+  typedef std::map<std::string, std::pair<Expression *, double> > InfoMap;
+  InfoMap m_ObjectiveInfo;
+};
+
 
 int main(int argc, char *argv[])
 {
@@ -3004,31 +3124,24 @@ int main(int argc, char *argv[])
   Expression *objRegCombined = wsgObj.GenerateSum();
 
   // Try just fitting the boundary data
-  BigSum *obj;
-  obj = new BigSum(p);
-  obj->AddSummand(new ScalarProduct(p, objDisplacement, 1));
-  obj->AddSummand(objRegCombined);
+  ObjectiveCombiner ocfit(p);
+  ocfit.AddObjectiveTerm(objBasisResidual, "Penalty (Basis Fit)", regOpts.Weight);
+  ocfit.AddObjectiveTerm(objEdgeLength, "Penalty (Edge Length)", regOpts.EdgeLengthWeight);
+  ocfit.AddObjectiveTerm(objDisplacement, "Displacement Objective", 1);
+  Expression *obj = ocfit.GetTotalObjective();
 
   // Configure the problem
   p->SetObjective(obj);
   p->SetupProblem(true);
 
   // Evaluate the objective
-  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-  std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+  ocfit.PrintReport();
 
   // Ask Ipopt to solve the problem
   status = app->OptimizeTNLP(GetRawPtr(ip));
 
   // Evaluate the objective
-  std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-  std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-  std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-  std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-  std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+  ocfit.PrintReport();
 
   // Remove the extension fromthe filename
   std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutput);
@@ -3044,7 +3157,7 @@ int main(int argc, char *argv[])
   if(action == ACTION_FIT_TARGET)
     {
     // Create the closest point finder
-    ClosestPointMatcher cpmatcher(target, 4 * X.size());
+    ClosestPointMatcher cpmatcher(target, 32);
 
     // The scale between the two distance functions
     double recip_scale = nb * 1.0 / cpmatcher.GetNumberOfTargetPointsUsed();
@@ -3063,38 +3176,28 @@ int main(int argc, char *argv[])
       // Construct an opposite objective: distance from a selected set of points
       // to the closest point on the medial mesh
       // ------------------------------------------------------------------------
-      objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, X);
+      objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, bmesh, X);
 
       // ICP-style
-      obj = new BigSum(p);
-      obj->AddSummand(objSqDist);
-      obj->AddSummand(new ScalarProduct(p, objRecipSqDist, recip_scale));
-      obj->AddSummand(objRegCombined);
+      ObjectiveCombiner ocicp(p);
+      ocicp.AddObjectiveTerm(objBasisResidual, "Penalty (Basis Fit)", regOpts.Weight);
+      ocicp.AddObjectiveTerm(objEdgeLength, "Penalty (Edge Length)", regOpts.EdgeLengthWeight);
+      ocicp.AddObjectiveTerm(objSqDist, "DistanceSqr to Target", 1);
+      ocicp.AddObjectiveTerm(objRecipSqDist, "DistanceSqr to Model", recip_scale);
+      obj = ocicp.GetTotalObjective();
 
       // Configure the problem
       p->SetObjective(obj);
       p->SetupProblem(true);
 
       // Evaluate the objective
-      std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-      std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
-      std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-      std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-      std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-      std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-      std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+      ocicp.PrintReport();
 
       // Ask Ipopt to solve the problem
       status = app->OptimizeTNLP(GetRawPtr(ip));
 
       // Evaluate the objective
-      std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-      std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
-      std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-      std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-      std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-      std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-      std::cout << "Total objective: " << obj->Evaluate() << std::endl;
+      ocicp.PrintReport();
 
       // Save the current state
       sprintf(buffer, "%s_icp_%02d_bnd.vtk", fnOutBase.c_str(), i);
@@ -3103,15 +3206,6 @@ int main(int argc, char *argv[])
       sprintf(buffer, "%s_icp_%02d_med.vtk", fnOutBase.c_str(), i);
       SaveMedialMesh(buffer, p, bmesh, mIndex, M, R);
       }
-
-    std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
-    std::cout << "MSD to model: " << objRecipSqDist->Evaluate() << std::endl;
-    std::cout << "Surface area: " << objSurfArea->Evaluate() << std::endl;
-    std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
-    std::cout << "Displacement objective: " << objDisplacement->Evaluate() << std::endl;
-    std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
-    std::cout << "Total objective: " << obj->Evaluate() << std::endl;
-
 
   #ifdef USE_DICE
     std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;

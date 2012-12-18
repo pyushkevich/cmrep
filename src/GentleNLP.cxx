@@ -990,7 +990,11 @@ WeightedSumGenerator::WeightedSumGenerator(Problem *p)
 {
   m_Problem = p;
   m_Constant = 0.0;
-  m_BuildValue = 0.0;
+}
+
+void WeightedSumGenerator::AddConstant(double value)
+{
+  m_Constant += value;
 }
 
 void WeightedSumGenerator::AddTerm(Expression *expr, double weight)
@@ -1000,10 +1004,6 @@ void WeightedSumGenerator::AddTerm(Expression *expr, double weight)
   if(expr->IsConstant())
     {
     m_Constant += expr->Evaluate() * weight;
-
-    // TODO: remove
-    m_BuildValue += expr->Evaluate() * weight;
-
     return;
     }
 
@@ -1060,9 +1060,6 @@ void WeightedSumGenerator::AddTerm(Expression *expr, double weight)
     return;
     }
 
-  // TODO: remove
-  m_BuildValue += expr->Evaluate() * weight;
-
   // Append the weight for this expression
   std::pair<WeightMap::iterator, bool> q =
       m_WeightMap.insert(std::pair<Expression *,double>(expr, weight));
@@ -1073,27 +1070,11 @@ void WeightedSumGenerator::AddTerm(Expression *expr, double weight)
 Expression *WeightedSumGenerator::GenerateSum()
 {
   Expression *ex = this->DoGenerateSum();
-  double testval = ex ? ex->Evaluate() : 0.0;
-  if(fabs(testval - m_BuildValue) > 1e-10)
-    {
-    std::cout << "FAILURE" << std::endl;
-    }
   return ex;
 }
 
 Expression *WeightedSumGenerator::DoGenerateSum()
 {
-  double midtest = m_Constant;
-  for(WeightMap::iterator it = m_WeightMap.begin(); it != m_WeightMap.end(); ++it)
-    {
-    midtest += it->first->Evaluate() * it->second;
-    }
-  if(fabs(midtest - m_BuildValue) > 1e-10)
-    {
-    std::cout << "FAILURE" << std::endl;
-    }
-
-
   // Check the constant
   if(m_Constant != 0.0)
     {

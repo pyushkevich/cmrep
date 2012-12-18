@@ -615,6 +615,7 @@ public:
   WeightedSumGenerator(Problem *p);
 
   void AddTerm(Expression *expr, double weight = 1.0);
+  void AddConstant(double value);
 
   Expression *GenerateSum();
 
@@ -627,7 +628,6 @@ protected:
   WeightMap m_WeightMap;
 
   double m_Constant;
-  double m_BuildValue;
 };
 
 
