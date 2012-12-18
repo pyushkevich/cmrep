@@ -11,8 +11,15 @@ using namespace Ipopt;
 
 IPOptProblemInterface::IPOptProblemInterface(
     gnlp::ConstrainedNonLinearProblem *p)
+
 {
   m_Problem = p;
+  m_ConstraintLogFile = NULL;
+}
+
+void IPOptProblemInterface::log_constraints(FILE *flog)
+{
+  m_ConstraintLogFile = flog;
 }
 
 bool IPOptProblemInterface::get_nlp_info(
@@ -119,14 +126,24 @@ bool IPOptProblemInterface::eval_g(
     }
 
   // Print the categories
-  /*
-  std::cout << "#CV#";
-  for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
+  if(m_ConstraintLogFile)
     {
-    std::cout << " " << it->first << " " << it->second;
+    static int iter = 0;
+    if(iter % 10 == 0)
+      {
+      for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
+        {
+        fprintf(m_ConstraintLogFile, "%12s ", it->first.c_str());
+        }
+      fprintf(m_ConstraintLogFile, "\n");
+      }
+    for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
+      {
+      fprintf(m_ConstraintLogFile, "%12.8f ", it->second);
+      }
+    fprintf(m_ConstraintLogFile, "\n");
+    iter++;
     }
-  std::cout << std::endl;
-  */
 
   return true;
 }

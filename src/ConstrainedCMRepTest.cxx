@@ -28,6 +28,7 @@
 #include "itk_to_nifti_xform.h"
 
 #include "ConstrainedCMRepObjectives.h"
+#include "itksys/SystemTools.hxx"
 
 void ExportMedialMeshToVTK(
     GenericMedialModel *xModel, ITKImageWrapper<float> *xImage, const char *file);
@@ -68,11 +69,16 @@ public:
 
   std::vector<PointMatch> FindClosestToSource(VarVecArray &X);
 
+  int GetNumberOfTargetPointsUsed()
+  { return m_ReducedTarget->GetNumberOfPoints(); }
+
 protected:
   vtkSmartPointer<vtkPolyData> m_Target;
   vtkSmartPointer<vtkCellLocator> m_TargetLocator;
   vtkSmartPointer<vtkPoints> m_ReducedTarget;
 };
+
+#include <vtkQuadricClustering.h>
 
 ClosestPointMatcher
 ::ClosestPointMatcher(vtkPolyData *target, int nSamples)
@@ -86,8 +92,26 @@ ClosestPointMatcher
   m_TargetLocator->CacheCellBoundsOn();
   m_TargetLocator->BuildLocator();
 
+  // Need the bounds on the target
+  target->ComputeBounds();
+
+  // Set up the clustering
+  vtkSmartPointer<vtkQuadricClustering> clu =
+      vtkSmartPointer<vtkQuadricClustering>::New();
+  clu->SetInput(target);
+  clu->SetDivisionOrigin(target->GetCenter());
+  clu->SetDivisionSpacing(
+        target->GetLength() / 32,
+        target->GetLength() / 32,
+        target->GetLength() / 32);
+  clu->Update();
+
+  // Get the reduced target
+  m_ReducedTarget = clu->GetOutput()->GetPoints();
+
   // Create a set of samples from the target
   // TODO: reimplement using quadric clustering!
+  /*
   m_ReducedTarget = vtkSmartPointer<vtkPoints>::New();
   m_ReducedTarget->Allocate(nSamples);
   for(int i = 0; i < nSamples; i++)
@@ -95,6 +119,12 @@ ClosestPointMatcher
     int q = rand() % m_Target->GetNumberOfPoints();
     m_ReducedTarget->InsertNextPoint(m_Target->GetPoint(q));
     }
+    */
+  vtkSmartPointer<vtkPolyDataWriter> wr =
+      vtkSmartPointer<vtkPolyDataWriter>::New();
+  wr->SetInput(clu->GetOutput());
+  wr->SetFileName("clusty.vtk");
+  wr->Update();
 }
 
 std::vector<SMLVec3d>
@@ -1099,6 +1129,35 @@ void BCMTemplate::Subdivide()
   bmesh.SetAsRoot();
 }
 
+int MatchToOppositeTriangle(int index, int level)
+{
+  // Build a list of index modulo 4 at each level
+  std::vector<int> offset;
+  int q = index;
+  for(int i = 0; i < level; i++)
+    {
+    offset.push_back(q % 4);
+    q = q / 4;
+    }
+
+  // Swap offsets 0 and 2
+  for(int i = 0; i < level; i++)
+    {
+    if(offset[i] == 0)
+      offset[i] = 2;
+    else if(offset[i] == 2)
+      offset[i] = 0;
+    }
+
+  // Rebuild the index
+  for(int i = level-1; i >= 0; i--)
+    {
+    q = q * 4 + offset[i];
+    }
+
+  return q;
+}
+
 void BCMTemplate::ImportFromCMRep(const char *file)
 {
   // Load and process the mrep (TODO: remove)
@@ -1106,21 +1165,96 @@ void BCMTemplate::ImportFromCMRep(const char *file)
   SubdivisionMedialModel *tmpmodel =
       dynamic_cast<SubdivisionMedialModel *>(mrep.GetMedialModel());
 
-  // We will restrict our operations to a boundary triangle mesh and a set of medial
-  // atom indices for each point on the triangle mesh
-  TriangleMesh *tm = tmpmodel->GetIterationContext()->GetBoundaryMesh();
-  TriangleMesh *mytm = (TriangleMesh *) (&bmesh);
-  *mytm = *tm;
+  // Get the coefficient medial mesh - we will subdivide this mesh
+  const SubdivisionSurface::MeshLevel *mc = tmpmodel->GetCoefficientMesh();
+  const SubdivisionSurface::MeshLevel *ma = tmpmodel->GetAtomMesh();
 
-  // Initialize the data we are extracting from the boundary mesh
-  mIndex.resize(bmesh.nVertices);
-  x.resize(bmesh.nVertices);
-  for(MedialBoundaryPointIterator it = tmpmodel->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
+  // Subdivision level is log_4(ma/mc)
+  int tratio = ma->triangles.size() / mc->triangles.size();
+  int level = 0;
+  while(tratio > (1 << (level * 2)))
+    level++;
+
+  // Create a coarse-level boundary mesh
+  SubdivisionSurface::MeshLevel *bc = new SubdivisionSurface::MeshLevel();
+
+  // Create a mapping from atom vertices to boundary vertices that is monotonic
+  typedef vnl_vector_fixed<int, 2> IntPair;
+  std::vector<IntPair> mtobVertexMap;
+  int boundaryVertexIndex = 0;
+  for(int i = 0; i < mc->nVertices; i++)
     {
-    mIndex[it.GetIndex()] = it.GetAtomIndex();
-    x[it.GetIndex()] = GetBoundaryPoint(it, tmpmodel->GetAtomArray()).X;
+    EdgeWalkAroundVertex walk(mc, i);
+    IntPair b;
+    b[0] = boundaryVertexIndex++;
+    b[1] = walk.IsOpen() ? b[0] : boundaryVertexIndex++;
+    mtobVertexMap.push_back(b);
     }
+
+  // We will use a generator to create the boundary mesh
+  TriangleMeshGenerator gen(bc, boundaryVertexIndex);
+
+  // Add boundary triangles in two passes
+  for(int d = 0; d < 2; d++)
+    {
+    for(int t = 0; t < mc->triangles.size(); t++)
+      {
+      const size_t *v = mc->triangles[t].vertices;
+      int b1 = mtobVertexMap[v[0]][d];
+      int b2 = mtobVertexMap[v[1]][d];
+      int b3 = mtobVertexMap[v[2]][d];
+      if(d == 0)
+        gen.AddTriangle(b3, b2, b1);
+      else
+        gen.AddTriangle(b1, b2, b3);
+      }
+    }
+
+  // Generate the coarse boundary mesh
+  gen.GenerateMesh();
+
+  // Subdivide the boundary mesh
+  SubdivisionSurface::MeshLevel *ba = new SubdivisionSurface::MeshLevel();
+  SubdivisionSurface::RecursiveSubdivide(bc, ba, level);
+
+  // At this point, we have the boundary mesh of proper topology, but we don't
+  // yet know which medial atoms the boundary atoms link to! We need to find a
+  // medial atom and side for each boundary atom
+  x.resize(ba->nVertices);
+  mIndex.resize(ba->nVertices, -1);
+
+  // Visit all vertices in all triangles
+  for(int t = 0; t < ba->triangles.size(); t++)
+    {
+    // What side of the medial axis we're on
+    int side = t / (ba->triangles.size() / 2);
+
+    // Get the corresponding medial triangle
+    int mt = (side == 0)
+        ? MatchToOppositeTriangle(t, level)
+        : t - (ba->triangles.size() / 2);
+
+    // Loop over all three vertices
+    for(int j = 0; j < 3; j++)
+      {
+      // Get the corresponding medial vertex
+      int mj = (side == 1) ? j : 2 - j;
+
+      // Find the information from the medial data
+      int vb = ba->triangles[t].vertices[j];
+      if(mIndex[vb] < 0)
+        {
+        mIndex[vb] = ma->triangles[mt].vertices[mj];
+        x[vb] = tmpmodel->GetAtomArray()[mIndex[vb]].xBnd[side].X;
+        }
+      }
+    }
+
+  // Store as the mesh
+  this->bmesh = *ba;
+
+  // Delete intermediates
+  delete bc; delete ba;
 }
 
 
@@ -1134,6 +1268,115 @@ int ConvertCMRepToBoundaryRepresentation(std::string fnInput, std::string fnOutp
   return 0;
 }
 
+void FixCmrepMedialMesh(std::string fnInput, std::string fnOutput)
+{
+  // Load the m-rep
+  vtkSmartPointer<vtkPolyDataReader> reader = vtkSmartPointer<vtkPolyDataReader>::New();
+  reader->SetFileName(fnInput.c_str());
+  reader->Update();
+
+  // Convert it into a triangle mesh
+  vtkSmartPointer<vtkPolyData> pd = reader->GetOutput();
+  SubdivisionSurface::MeshLevel mesh;
+  SubdivisionSurface::ImportLevelFromVTK(pd, mesh);
+
+  vtkSmartPointer<vtkDataArray> ar = pd->GetPointData()->GetArray("Radius");
+
+  // Get the points and the radii
+  std::vector<SMLVec3d> x;
+  std::vector<double> r;
+  for(int i = 0; i < mesh.nVertices; i++)
+    {
+    x.push_back(SMLVec3d(pd->GetPoint(i)));
+    r.push_back(ar->GetTuple1(i));
+    }
+
+  // Search for triangles to split
+  std::set<int> splits;
+  int iLast = mesh.nVertices;
+
+  SubdivisionSurface::MeshLevel mfix;
+
+  // Create a mesh generator
+  TriangleMeshGenerator gen(&mfix, 0);
+
+  for(int i = 0; i < mesh.triangles.size(); i++)
+    {
+    // Triangles already split should be ignored
+    if(splits.find(i) != splits.end())
+      continue;
+
+    bool isBad = false;
+    size_t *v = mesh.triangles[i].vertices;
+    for(int j = 0; j < 3; j++)
+      {
+      size_t v1 = v[(j+1) % 3];
+      size_t v2 = v[(j+2) % 3];
+      EdgeWalkAroundVertex w1(&mesh, v1);
+      EdgeWalkAroundVertex w2(&mesh, v2);
+      size_t nj = mesh.triangles[i].neighbors[j];
+      if(w1.IsOpen() && w2.IsOpen() && nj != NOID)
+        {
+        // This triangle is bad - we need to split it
+        std::cout << "Found bad edge " << v1 << ", " << v2 << std::endl;
+        isBad = true;
+
+        // Add the four new triangles
+        int vopp = mesh.triangles[nj].vertices[mesh.triangles[i].nedges[j]];
+        gen.AddTriangle(v[j], v1, iLast);
+        gen.AddTriangle(v[j], iLast, v2);
+        gen.AddTriangle(v1, vopp, iLast);
+        gen.AddTriangle(iLast, vopp, v2);
+
+        // Create a new point
+        x.push_back((x[v1] + x[v2]) * 0.5);
+        r.push_back((r[v[j]] + r[vopp]) * 0.5);
+        ++iLast;
+
+        // Mark the opposite triangle to be ignored
+        splits.insert(nj);
+        }
+      }
+
+    if(!isBad)
+      {
+      gen.AddTriangle(v[0], v[1], v[2]);
+      }
+    }
+
+  mfix.nVertices = iLast;
+  gen.GenerateMesh();
+
+
+
+  // Save the new mesh
+  vtkSmartPointer<vtkFloatArray> ar_new = vtkSmartPointer<vtkFloatArray>::New();
+  ar_new->SetNumberOfComponents(1);
+  ar_new->Allocate(mfix.nVertices);
+  ar_new->SetName("Radius");
+
+  vtkSmartPointer<vtkPoints> p_new = vtkSmartPointer<vtkPoints>::New();
+  p_new->Allocate(mfix.nVertices);
+
+
+  for(int i = 0; i < mfix.nVertices; i++)
+    {
+    p_new->InsertNextPoint(x[i].data_block());
+    ar_new->InsertNextTuple1(r[i]);
+    }
+
+  vtkSmartPointer<vtkPolyData> pd_new = vtkSmartPointer<vtkPolyData>::New();
+  pd_new->SetPoints(p_new);
+  pd_new->GetPointData()->AddArray(ar_new);
+
+  SubdivisionSurface::ExportLevelToVTK(mfix, pd_new);
+
+  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
+  writer->SetInput(pd_new);
+  writer->SetFileName(fnOutput.c_str());
+  writer->Update();
+
+}
 
 int SubdivideBoundaryRepresentation(
     std::string fnTemplate,
@@ -1154,11 +1397,161 @@ int SubdivideBoundaryRepresentation(
   return 0;
 }
 
+#include <vnl/algo/vnl_svd.h>
+
+/**
+ * Un-subdivide a mesh by one level. This only computes the triangles and
+ * nVertices, nothing else.
+ */
+void UnSubdivide(
+    SubdivisionSurface::MeshLevel &mesh,
+    SubdivisionSurface::MeshLevel &parent)
+{
+  // Initialize the parent mesh
+  parent.triangles.clear();
+  parent.nVertices = 0;
+
+  // Create each of the parent triangles
+  for(int i = 0; i < mesh.triangles.size(); i+=4)
+    {
+    // Create the coarse triangle
+    Triangle tc;
+
+    // Repeat for each vertex
+    for(int j = 0; j < 3; j++)
+      {
+      // Configure the vertices using the subdivided triangles
+      tc.vertices[j] = mesh.triangles[i + j].vertices[j];
+
+      // Update the max vertex
+      parent.nVertices = std::max(tc.vertices[j]+1, parent.nVertices);
+
+      // Compute the neighbors
+      tc.neighbors[j] = mesh.triangles[i + ((j+1)%3)].neighbors[j] / 4;
+
+      // Compute the neighbor edge indexes
+      tc.nedges[j] = mesh.triangles[i + ((j+1)%3)].nedges[j];
+      }
+
+    // Add the triangle
+    parent.triangles.push_back(tc);
+    }
+}
+
+/**
+ * Reverse engineer a boundary mesh. For meshes that were generated by
+ * subdivision, this method will create a coarse-level mesh and fit its
+ * vertex values to the data in the current mesh
+ */
+bool ReverseEngineerSubdivisionMesh(
+    BCMTemplate &tChild, BCMTemplate &tParent, int level)
+{
+  // The number of triangles must be divisible by four^level
+  if(tChild.bmesh.triangles.size() % (1 << (2 * level)))
+    return false;
+
+  // For each level, produce a parent mesh
+  SubdivisionSurface::MeshLevel mlCurrent = tChild.bmesh;
+  SubdivisionSurface::MeshLevel mlParent;
+
+  for(int i = 0; i < level; i++)
+    {
+    UnSubdivide(mlCurrent, mlParent);
+    if(!SubdivisionSurface::CheckMeshLevel(&mlParent))
+      return false;
+    mlCurrent = mlParent;
+    }
+
+  // Finish initializing the parent
+  tParent.bmesh = mlParent;
+  tParent.bmesh.SetAsRoot();
+  tParent.bmesh.ComputeWalks();
+
+  // Check that the parent subdivides back into the child
+  SubdivisionSurface::MeshLevel cmp;
+  SubdivisionSurface::RecursiveSubdivide(&tParent.bmesh, &cmp, level);
+
+  if(tChild.bmesh.nVertices != cmp.nVertices)
+    {
+    printf("Vertex count mismatch %d vs %d\n", (int) tChild.bmesh.nVertices, (int) cmp.nVertices);
+    return false;
+    }
+
+  for(int i = 0; i < cmp.triangles.size(); i++)
+    {
+    Triangle t1 = cmp.triangles[i];
+    Triangle t2 = tChild.bmesh.triangles[i];
+    for(int j = 0; j < 3; j++)
+      {
+      if(t1.vertices[j] != t2.vertices[j])
+        {
+        printf("vertex mismatch %d:%d\n", i, j);
+        return false;
+        }
+      if(t1.neighbors[j] != t2.neighbors[j])
+        {
+        printf("neighbors mismatch %d:%d\n", i, j);
+        return false;
+        }
+      if(t1.nedges[j] != t2.nedges[j])
+        {
+        printf("nedges mismatch %d:%d\n", i, j);
+        return false;
+        }
+      }
+    }
+
+  // At this point, we just want to take the weight matrix from cmp and
+  // put it into mesh
+  tChild.bmesh.parent = cmp.parent;
+  tChild.bmesh.weights = cmp.weights;
+
+  // Find the coordinates for the parent mesh that best fit the coordinates
+  // in the child mesh. This involves solving the problem
+  vnl_matrix<double> W = tChild.bmesh.weights.GetDenseMatrix();
+
+  // TODO: lame!
+  vnl_svd<double> svd(W.transpose() * W);
+
+  // Compute the x, y, z coordinates
+  tParent.x.resize(tParent.bmesh.nVertices);
+  for(int j = 0; j < 3; j++)
+    {
+    vnl_vector<double> xi(tChild.x.size());
+    for(int k = 0; k < xi.size(); k++)
+      xi[k] = tChild.x[k][j];
+
+    vnl_vector<double> bi = tChild.bmesh.weights.MultiplyTransposeByVector(xi);
+
+    vnl_vector<double> yi = svd.solve(bi);
+    for(int k = 0; k < yi.size(); k++)
+      tParent.x[k][j] = yi[k];
+    }
+
+  // Just copy the mindex
+  tParent.mIndex.resize(tParent.bmesh.nVertices);
+  for(int i = 0; i < tParent.bmesh.nVertices; i++)
+    tParent.mIndex[i] = tChild.mIndex[i];
+
+  return true;
+}
+
+/**
+ * A function to save the current model as well as different gradients,
+ * and how a step in the gradient direction affects certain constraints
+ */
+void SaveConstraint()
+{
+
+
+}
+
 enum ProgramAction {
   ACTION_FIT_TARGET,
   ACTION_FIT_SELF,
   ACTION_SUBDIVIDE,
   ACTION_CONVERT_CMREP,
+  ACTION_FIX_CMREP,
   ACTION_NONE
 };
 
@@ -1173,16 +1566,39 @@ int usage()
       "  -lsq template.vtk target.vtk           : least squares fit to target mesh\n"
       "  -sub template.vtk factor               : subdivide template by a factor\n"
       "  -cmr input.cmrep                       : import a cm-rep template\n"
+      "  -cfx input.cmrep                       : fix a cm-rep template with bad triangles\n"
       "other required options:\n"
       "  -o output.vtk                          : mesh to save the result\n"
       "optional parameters:\n"
-      "  -reg-dof NxNxN                         : number of basis functions at each\n"
-      "                                           iteration (default = 20)\n"
+      "  -reg-lb NxNxN                          : use Laplace basis regularization \n"
+      "                                           with N basis functions at each \n"
+      "                                           iteration. (default, with N=20)\n"
+      "  -reg-ss L                              : use subdivision surface-based \n"
+      "                                           regularlization with L levels of \n"
+      "                                           subdivision. \n"
       "  -reg-weight NxNxN                      : weight of the regularization term\n"
-      "                                           at each iteration\n";
+      "                                           at each iteration\n"
+      "  -reg-el W                              : penalize the length of the crest\n"
+      "                                           curve with weight specified\n";
   std::cout << usage;
   return -1;
 }
+
+struct RegularizationOptions
+{
+  enum RegularizationMode { SUBDIVISION, SPECTRAL };
+
+  int SubdivisionLevel, BasisSize;
+  double Weight;
+  RegularizationMode Mode;
+
+  double EdgeLengthWeight;
+
+  RegularizationOptions()
+    : SubdivisionLevel(0), BasisSize(20),
+      Weight(4.0), Mode(SPECTRAL),
+      EdgeLengthWeight(0.0) {}
+};
 
 int main(int argc, char *argv[])
 {
@@ -1193,6 +1609,8 @@ int main(int argc, char *argv[])
   ProgramAction action = ACTION_NONE;
   std::string fnTemplate, fnTarget, fnOutput, fnImportSource;
   int subdivisionLevel = 0;
+
+  RegularizationOptions regOpts;
 
   for(int p = 1; p < argc; p++)
     {
@@ -1220,6 +1638,11 @@ int main(int argc, char *argv[])
       action = ACTION_CONVERT_CMREP;
       fnImportSource = argv[++p];
       }
+    else if(cmd == "-cfx")
+      {
+      action = ACTION_FIX_CMREP;
+      fnImportSource = argv[++p];
+      }
     else if(cmd == "-o")
       {
       fnOutput = argv[++p];
@@ -1227,6 +1650,24 @@ int main(int argc, char *argv[])
     else if(cmd == "-o")
       {
       return usage();
+      }
+    else if(cmd == "-reg-lb")
+      {
+      regOpts.Mode = RegularizationOptions::SPECTRAL;
+      regOpts.BasisSize = atoi(argv[++p]);
+      }
+    else if(cmd == "-reg-ss")
+      {
+      regOpts.Mode = RegularizationOptions::SUBDIVISION;
+      regOpts.SubdivisionLevel = atoi(argv[++p]);
+      }
+    else if(cmd == "-reg-weight")
+      {
+      regOpts.Weight = atof(argv[++p]);
+      }
+    else if(cmd == "-reg-el")
+      {
+      regOpts.EdgeLengthWeight = atof(argv[++p]);
       }
     else
       {
@@ -1239,6 +1680,12 @@ int main(int argc, char *argv[])
   if(action == ACTION_CONVERT_CMREP)
     {
     return ConvertCMRepToBoundaryRepresentation(fnImportSource, fnOutput);
+    }
+
+  else if(action == ACTION_FIX_CMREP)
+    {
+    FixCmrepMedialMesh(fnImportSource, fnOutput);
+    return 0;
     }
 
   else if(action == ACTION_SUBDIVIDE)
@@ -1268,7 +1715,6 @@ int main(int argc, char *argv[])
   std::vector<SMLVec3d> &xInput = tmpl.x;
 
   // At this point, we are only working with bMesh and mIndex and xInput
-
 
   // Get the number of medial points. TODO: we need to make sure that every
   // index between 0 and nm is represented.
@@ -1706,89 +2152,149 @@ int main(int argc, char *argv[])
         M, NT_M, taM, 0.1);
   */
 
-
   // ------------------------------------------------------------------------
-  // Define the objective on the basis
+  // Common code for the regularization terms
   // ------------------------------------------------------------------------
-
-  // Define a basis for the surface
-  int nBasis = 20;
-  MeshBasisCoefficientMapping basismap_X(bmesh, nBasis, 3);
-
-  // Define a basis for the medial axis
-  // TODO: to what extent is this a valid basis - we need to visualize!
-  MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
-
-  // Create the coefficient variables
-  VarVecArray XC(nBasis, VarVec(3, NULL));
-  VarVecArray MC(nBasis, VarVec(4, NULL));
-  for(int i = 0; i < nBasis; i++)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      XC[i][j] = p->AddVariable("XC", 0.0);
-      }
-    for(int j = 0; j < 4; j++)
-      {
-      MC[i][j] = p->AddVariable("MC", 0.0);
-      }
-    }
-
-  // Define the objective on the basis
   BigSum *objBasisResidual = new BigSum(p);
-  for(int iBnd = 0; iBnd < nb; iBnd++)
+
+  // ------------------------------------------------------------------------
+  // Define the subdivision basis regularization objective
+  // ------------------------------------------------------------------------
+  if(regOpts.Mode == RegularizationOptions::SUBDIVISION)
     {
-    SMLVec3d Xfixed = xInput[iBnd];
-
-    for(int j = 0; j < 3; j++)
+    // Try to obtain a parent mesh
+    BCMTemplate tmplParent;
+    if(!ReverseEngineerSubdivisionMesh(tmpl, tmplParent, regOpts.SubdivisionLevel))
       {
-      BigSum *xfit = new BigSum(p);
+      cerr << "Unable to deduce coarse-level mesh by reversing subdivision!" << endl;
+      delete p;
+      return -1;
+      }
 
-      xfit->AddSummand(new Constant(p, Xfixed[j]));
-      for(int i = 0; i < nBasis; i++)
+    // Save the parent-level mesh
+    tmplParent.Save("reverse_eng.vtk");
+
+    // TODO - do we want to regularize R as well???
+
+    // Define the basis variables
+    SubdivisionSurface::MeshLevel &pmesh = tmplParent.bmesh;
+    VarVecArray XC(pmesh.nVertices, VarVec(3, NULL));
+    for(int i = 0; i <  pmesh.nVertices; i++)
+      {
+      for(int j = 0; j < 3; j++)
         {
-        xfit->AddSummand(new ScalarProduct(p, XC[i][j],
-                                           basismap_X.GetBasisComponent(i, iBnd)));
+        sprintf(buffer, "XC[%d][%d]", i, j);
+        XC[i][j] = p->AddVariable(buffer, tmplParent.x[i][j]);
         }
+      }
 
-      // Xfit is the approximation of X using the basis
-      objBasisResidual->AddSummand(
-            new Square(p, new BinaryDifference(p, xfit, X[iBnd][j])));
+    // Apply the weight matrix to compute the residual
+    ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
+
+    // Define the residual objective
+    for(int i = 0; i < nb; i++)
+      {
+      for(int j = 0; j < 3; j++)
+        {
+        // Use the sum generator for each child vertex
+        WeightedSumGenerator wsg(p);
+        wsg.AddTerm(X[i][j], -1.0);
+
+        // Use the weighted matrix iterator
+        for(ImmutableSparseMatrix<double>::RowIterator it = W.Row(i);
+            !it.IsAtEnd(); ++it)
+          {
+          wsg.AddTerm(XC[it.Column()][j], it.Value());
+          }
+
+        // Add the square of this residual term to the residual objective
+        objBasisResidual->AddSummand(new Square(p, wsg.GenerateSum()));
+        }
       }
     }
 
-  // TODO: for the time being, I took out the medial residual computation,
-  // because it is unreasonable to compute it as a difference from the initial
-  // state, since the initial state is likely to be bogus. Need to revive this
-  // later
-  /*
-  for(MedialAtomIterator it = model->GetAtomIterator();
-      !it.IsAtEnd(); ++it)
+  // ------------------------------------------------------------------------
+  // Define the Laplace basis regularization objective
+  // ------------------------------------------------------------------------
+  if(regOpts.Mode == RegularizationOptions::SPECTRAL)
     {
-    int iatm = it.GetIndex();
+    // Define a basis for the surface
+    MeshBasisCoefficientMapping basismap_X(bmesh, regOpts.BasisSize, 3);
 
-    MedialAtom &a = model->GetAtomArray()[iatm];
+    // Define a basis for the medial axis
+    // TODO: to what extent is this a valid basis - we need to visualize!
+    // MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
 
-    for(int j = 0; j < 4; j++)
+    // Create the coefficient variables
+    VarVecArray XC(regOpts.BasisSize, VarVec(3, NULL));
+    // VarVecArray MC(nBasis, VarVec(4, NULL));
+    for(int i = 0; i < regOpts.BasisSize; i++)
       {
-      double xfixed = (j < 3) ? a.X[j] : a.R;
-      Expression *xdata = (j < 3) ? M[iatm][j] : R[iatm];
-
-      BigSum *xfit = new BigSum(p);
-
-      xfit->AddSummand(new Constant(p, xfixed));
-      for(int i = 0; i < nBasis; i++)
+      for(int j = 0; j < 3; j++)
         {
-        xfit->AddSummand(new ScalarProduct(p, MC[i][j],
-                                           basismap_M.GetBasisComponent(i, iatm)));
+        XC[i][j] = p->AddVariable("XC", 0.0);
         }
-
-      // Xfit is the approximation of X using the basis
-      objBasisResidual->AddSummand(
-            new Square(p, new BinaryDifference(p, xfit, xdata)));
+      // for(int j = 0; j < 4; j++)
+      //   {
+      //   MC[i][j] = p->AddVariable("MC", 0.0);
+      //   }
       }
+
+    // Define the objective on the basis
+    for(int iBnd = 0; iBnd < nb; iBnd++)
+      {
+      SMLVec3d Xfixed = xInput[iBnd];
+
+      for(int j = 0; j < 3; j++)
+        {
+        BigSum *xfit = new BigSum(p);
+
+        xfit->AddSummand(new Constant(p, Xfixed[j]));
+        for(int i = 0; i < regOpts.BasisSize; i++)
+          {
+          xfit->AddSummand(new ScalarProduct(p, XC[i][j],
+                                             basismap_X.GetBasisComponent(i, iBnd)));
+          }
+
+        // Xfit is the approximation of X using the basis
+        objBasisResidual->AddSummand(
+              new Square(p, new BinaryDifference(p, xfit, X[iBnd][j])));
+        }
+      }
+
+    // TODO: for the time being, I took out the medial residual computation,
+    // because it is unreasonable to compute it as a difference from the initial
+    // state, since the initial state is likely to be bogus. Need to revive this
+    // later
+    /*
+    for(MedialAtomIterator it = model->GetAtomIterator();
+        !it.IsAtEnd(); ++it)
+      {
+      int iatm = it.GetIndex();
+
+      MedialAtom &a = model->GetAtomArray()[iatm];
+
+      for(int j = 0; j < 4; j++)
+        {
+        double xfixed = (j < 3) ? a.X[j] : a.R;
+        Expression *xdata = (j < 3) ? M[iatm][j] : R[iatm];
+
+        BigSum *xfit = new BigSum(p);
+
+        xfit->AddSummand(new Constant(p, xfixed));
+        for(int i = 0; i < nBasis; i++)
+          {
+          xfit->AddSummand(new ScalarProduct(p, MC[i][j],
+                                             basismap_M.GetBasisComponent(i, iatm)));
+          }
+
+        // Xfit is the approximation of X using the basis
+        objBasisResidual->AddSummand(
+              new Square(p, new BinaryDifference(p, xfit, xdata)));
+        }
+      }
+    */
     }
-  */
 
   // ------------------------------------------------------------------------
   // Create a total volume objective -
@@ -2195,6 +2701,55 @@ int main(int argc, char *argv[])
       }
     }
 
+  // ------------------------------------------------------------------------
+  // Minimize the edge length
+  // ------------------------------------------------------------------------
+  BigSum *objEdgeLength = new BigSum(p);
+  if(regOpts.EdgeLengthWeight > 0.0)
+    {
+    // Add all the crest edges
+    for(int k = 0; k < bmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        int v1 = bmesh->triangles[k].vertices[(d + 1) % 3];
+        int v2 = bmesh->triangles[k].vertices[(d + 2) % 3];
+        if(v1 < v2)
+          {
+          // Are these edge vertices?
+          if(mtbIndex[mIndex[v1]].size() == 1 && mtbIndex[mIndex[v2]].size() == 1)
+            {
+            objEdgeLength->AddSummand(TEL_X[k][d]);
+            }
+          }
+        }
+      }
+    }
+
+  // ------------------------------------------------------------------------
+  // Constrain the dihedral angle
+  // ------------------------------------------------------------------------
+  for(int k = 0; k < bmesh->triangles.size(); k++)
+    {
+    for(int d = 0; d < 3; d++)
+      {
+      int kopp = bmesh->triangles[k].neighbors[d];
+      // One side only!
+      if(kopp != NOID && k < kopp)
+        {
+        // Is this a boundary edge?
+        int v1 = bmesh->triangles[k].vertices[(d+1)%3];
+        int v2 = bmesh->triangles[k].vertices[(d+2)%3];
+        bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
+
+        Expression *da = DotProduct(p, NT_X[k], NT_X[kopp]);
+        p->AddConstraint(da, "DA", isBnd ? -0.9 : 0.5, ConstrainedNonLinearProblem::UBINF);
+
+        }
+      }
+    }
+
+
   /*
   double constEdgeRatio = 0.1;
   for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
@@ -2408,6 +2963,10 @@ int main(int argc, char *argv[])
   // Solve the problem
   SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(p);
 
+  // Create a file for dumping the constraint info
+  FILE *fnConstraintDump = fopen("constraint_dump.txt", "wt");
+  ip->log_constraints(fnConstraintDump);
+
   // Set up the IPopt problem
   // Create a new instance of IpoptApplication
   //  (use a SmartPtr, not raw)
@@ -2438,11 +2997,17 @@ int main(int argc, char *argv[])
     return (int) status;
     }
 
+  // Combine the regularization objectives
+  WeightedSumGenerator wsgObj(p);
+  wsgObj.AddTerm(objBasisResidual, regOpts.Weight);
+  wsgObj.AddTerm(objEdgeLength, regOpts.EdgeLengthWeight);
+  Expression *objRegCombined = wsgObj.GenerateSum();
+
   // Try just fitting the boundary data
   BigSum *obj;
   obj = new BigSum(p);
   obj->AddSummand(new ScalarProduct(p, objDisplacement, 1));
-  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 4));
+  obj->AddSummand(objRegCombined);
 
   // Configure the problem
   p->SetObjective(obj);
@@ -2465,15 +3030,25 @@ int main(int argc, char *argv[])
   std::cout << "Model volume: " << objVolume->Evaluate() / 6 << std::endl;
   std::cout << "Total objective: " << obj->Evaluate() << std::endl;
 
+  // Remove the extension fromthe filename
+  std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutput);
+
   // Save the current state
-  SaveBoundaryMesh("fittoinput_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
-  SaveMedialMesh("fittoinput_med.vtk", p, bmesh, mIndex, M, R);
+  sprintf(buffer, "%s_fit2tmp_bnd.vtk", fnOutBase.c_str());
+  SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
+
+  sprintf(buffer, "%s_fit2tmp_med.vtk", fnOutBase.c_str());
+  SaveMedialMesh(buffer, p, bmesh, mIndex, M, R);
 
   // Continue if in ICP mode
   if(action == ACTION_FIT_TARGET)
     {
     // Create the closest point finder
-    ClosestPointMatcher cpmatcher(target, X.size());
+    ClosestPointMatcher cpmatcher(target, 4 * X.size());
+
+    // The scale between the two distance functions
+    double recip_scale = nb * 1.0 / cpmatcher.GetNumberOfTargetPointsUsed();
+
 
     // Repeat this several times
     Expression *objSqDist, *objRecipSqDist;
@@ -2493,8 +3068,8 @@ int main(int argc, char *argv[])
       // ICP-style
       obj = new BigSum(p);
       obj->AddSummand(objSqDist);
-      obj->AddSummand(new ScalarProduct(p, objRecipSqDist, 1));
-      obj->AddSummand(new ScalarProduct(p, objBasisResidual, 4));
+      obj->AddSummand(new ScalarProduct(p, objRecipSqDist, recip_scale));
+      obj->AddSummand(objRegCombined);
 
       // Configure the problem
       p->SetObjective(obj);
@@ -2521,6 +3096,12 @@ int main(int argc, char *argv[])
       std::cout << "Residual objective: " << objBasisResidual->Evaluate() << std::endl;
       std::cout << "Total objective: " << obj->Evaluate() << std::endl;
 
+      // Save the current state
+      sprintf(buffer, "%s_icp_%02d_bnd.vtk", fnOutBase.c_str(), i);
+      SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
+
+      sprintf(buffer, "%s_icp_%02d_med.vtk", fnOutBase.c_str(), i);
+      SaveMedialMesh(buffer, p, bmesh, mIndex, M, R);
       }
 
     std::cout << "MSD to target: " << objSqDist->Evaluate() << std::endl;
@@ -2550,10 +3131,14 @@ int main(int argc, char *argv[])
     // DerivativeTest(p, 1000);
 
     // Save the result as a boundary mesh
-    SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
-    SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
+    // SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
+    // SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
 
     SaveGradient(p, X, obj, "grad_obj_after.vtk");
+    SaveGradient(p, X, objSqDist, "grad_obj_sqdist_after.vtk");
+    SaveGradient(p, X, new ScalarProduct(p, objRecipSqDist, recip_scale), "grad_obj_recipsqdist_after.vtk");
+    SaveGradient(p, X, new ScalarProduct(p, objBasisResidual, regOpts.Weight), "grad_obj_residual_after.vtk");
+
     }
 
 #ifdef USE_DICE
@@ -2575,5 +3160,6 @@ int main(int argc, char *argv[])
   // be deleted.
   delete p;
 
+  fclose(fnConstraintDump);
   return (int) status;
 }

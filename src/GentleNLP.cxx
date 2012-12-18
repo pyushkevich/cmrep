@@ -68,6 +68,21 @@ void Problem::ClearDerivativeCaches()
   m_Partials.clear();
 }
 
+void Problem::PrintMemoryStatistics()
+{
+  // Print the size of all expressions
+
+  // Total size of all dependencies
+  unsigned long dep_size;
+  for(DependencyMap::iterator jt = m_DependencyMap.begin();
+      jt != m_DependencyMap.end(); jt++)
+    {
+    dep_size += jt->second.size();
+    }
+
+
+}
+
 Problem::~Problem()
 {
   for(ExpressionSet::iterator it = m_ChildExpressions.begin();

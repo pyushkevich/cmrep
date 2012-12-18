@@ -11,6 +11,9 @@ class IPOptProblemInterface : public Ipopt::TNLP
 public:
   IPOptProblemInterface(gnlp::ConstrainedNonLinearProblem *p);
 
+  /** Set whether the problem logs constraint values at each iteration */
+  virtual void log_constraints(FILE *flog);
+
   /** Method to return some info about the nlp */
   virtual bool get_nlp_info(Index& n, Index& m, Index& nnz_jac_g,
                             Index& nnz_h_lag, IndexStyleEnum& index_style);
@@ -63,7 +66,7 @@ public:
 
 private:
   gnlp::ConstrainedNonLinearProblem *m_Problem;
-
+  FILE *m_ConstraintLogFile;
 };
 
 #endif // IPOPTPROBLEMINTERFACE_H

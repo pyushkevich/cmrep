@@ -59,6 +59,8 @@ public:
     on different datasets */
   void ClearDerivativeCaches();
 
+  void PrintMemoryStatistics();
+
 protected:
 
   // List of known expressions
