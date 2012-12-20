@@ -34,6 +34,14 @@
 #include "ConstrainedCMRepObjectives.h"
 #include "itksys/SystemTools.hxx"
 
+/**
+  ---------
+  TODO LIST
+  ---------
+
+  * Add a constraint on the dihedral angle of medial triangles
+
+*/
 void ExportMedialMeshToVTK(
     GenericMedialModel *xModel, ITKImageWrapper<float> *xImage, const char *file);
 
@@ -1652,7 +1660,9 @@ int usage()
       "  -reg-weight NxNxN                      : weight of the regularization term\n"
       "                                           at each iteration\n"
       "  -reg-el W                              : penalize the length of the crest\n"
-      "                                           curve with weight specified\n";
+      "                                           curve with weight specified\n"
+      "  -solver NAME                           : select which solver to use (see \n"
+      "                                           IPOpt options. Def: ma86\n";
   std::cout << usage;
   return -1;
 }
@@ -1664,44 +1674,60 @@ struct RegularizationOptions
   int SubdivisionLevel, BasisSize;
   double Weight;
   RegularizationMode Mode;
+  std::string Solver;
 
   double EdgeLengthWeight;
 
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
-      Weight(4.0), Mode(SPECTRAL),
+      Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
       EdgeLengthWeight(0.0) {}
 };
 
 class ObjectiveCombiner
 {
 public:
+  struct Entry {
+    Expression *exp;
+    double weight;
+    double initValue;
+  };
+
   void AddObjectiveTerm(Expression *obj, std::string name, double weight)
   {
+    Entry ent;
+    ent.exp = obj;
+    ent.weight = weight;
+    ent.initValue = obj->Evaluate();
     m_Generator.AddTerm(obj, weight);
-    m_ObjectiveInfo[name] = make_pair(obj, weight);
+    m_ObjectiveInfo[name] = ent;
   }
 
   Expression *GetTotalObjective()
   {
     if(m_TotalObjective == NULL)
+      {
       m_TotalObjective = m_Generator.GenerateSum();
+      m_InitTotalValue = m_TotalObjective->Evaluate();
+      }
     return m_TotalObjective;
   }
 
   void PrintReport()
   {
-    printf("%30s   %10s   %10s        %10s\n", "TERM", "RawValue", "Weight", "WgtValue");
+    printf("%30s   %10s %10s   %10s   %10s\n", "TERM", "RawValue", "Weight", "WgtValue", "Delta");
     for(InfoMap::iterator it = m_ObjectiveInfo.begin(); it != m_ObjectiveInfo.end(); ++it)
       {
-      double val = it->second.first->Evaluate();
-      printf("%30s   %10.4f   %10.4f        %10.4f\n",
+      double val = it->second.exp->Evaluate();
+      printf("%30s   %10.4f %10.4f   %10.4f   %10.4f\n",
              it->first.c_str(),
-             val, it->second.second, val * it->second.second);
+             val, it->second.weight,
+             val * it->second.weight,
+             val * it->second.weight - it->second.initValue * it->second.weight);
       }
     double totVal = m_TotalObjective->Evaluate();
-    printf("%30s   %10.4s   %10.4s        %10.4f\n",
-           "TOTAL OBJECTIVE", "", "", totVal);
+    printf("%30s   %10.4s %10.4s   %10.4f   %10.4f\n",
+           "TOTAL OBJECTIVE", "", "", totVal, totVal - m_InitTotalValue);
   }
 
   ObjectiveCombiner(ConstrainedNonLinearProblem *p)
@@ -1715,7 +1741,8 @@ protected:
   WeightedSumGenerator m_Generator;
   ConstrainedNonLinearProblem *m_Problem;
   Expression *m_TotalObjective;
-  typedef std::map<std::string, std::pair<Expression *, double> > InfoMap;
+  double m_InitTotalValue;
+  typedef std::map<std::string, Entry> InfoMap;
   InfoMap m_ObjectiveInfo;
 };
 
@@ -1788,6 +1815,10 @@ int main(int argc, char *argv[])
     else if(cmd == "-reg-el")
       {
       regOpts.EdgeLengthWeight = atof(argv[++p]);
+      }
+    else if(cmd == "-solver")
+      {
+      regOpts.Solver = argv[++p];
       }
     else
       {
@@ -3098,7 +3129,7 @@ int main(int argc, char *argv[])
   // Note: The following choices are only examples, they might not be
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
-  app->Options()->SetStringValue("linear_solver", "ma86");
+  app->Options()->SetStringValue("linear_solver", regOpts.Solver);
   // app->Options()->SetNumericValue("mu_init", 1e-3);
   // app->Options()->SetNumericValue("mu_target", 1e-5);
   // app->Options()->SetStringValue("mu_strategy", "adaptive");
