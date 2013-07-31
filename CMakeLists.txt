@@ -257,8 +257,8 @@ IF(USE_IPOPT)
                  src/IPOptProblemInterface.cxx
                  src/ConstrainedCMRepObjectives.cxx
                  src/ConstrainedCMRepTest.cxx)
-  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS} ${PARDISO_LIB})
-  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS} ${PARDISO_LIB})
+  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS})
 ENDIF(USE_IPOPT)
 
 # Add installation targets

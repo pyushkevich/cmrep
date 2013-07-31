@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
   cnlp.AddConstraint(c2, 40, 40);
 
   // Initialize the problem
-  cnlp.SetupProblem();
+  cnlp.SetupProblem(true);
 
   // Create the IPopt wrapper
   SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(&cnlp);

@@ -68,6 +68,7 @@ void ImageJetInterpolator::SetInputImage(ImageType *image, float outside_value)
 
   vnl_matrix_fixed<double, 4, 4> world_to_voxel = vnl_inverse(voxel_to_world);
   m_A = world_to_voxel.extract(3, 3, 0, 0);
+  m_At = m_A.transpose();
   m_b = world_to_voxel.get_column(3).extract(3, 0);
 }
 
@@ -80,8 +81,8 @@ void ImageJetInterpolator::EvaluateAtPhysicalPoint(
 
   this->EvaluateAtContinuousIndex(xv, f, Gv, Hv);
 
-  G = Gv * m_A;
-  H = m_A.transpose() * Hv * m_A;
+  G = m_At * Gv;
+  H = m_At * Hv * m_A;
 }
 
 // Interpolate image, gradient and Hessian using uniform B-spline interpolation

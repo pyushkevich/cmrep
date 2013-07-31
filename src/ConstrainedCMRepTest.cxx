@@ -3283,7 +3283,7 @@ int main(int argc, char *argv[])
   // As the SmartPtrs go out of scope, the reference count
   // will be decremented and the objects will automatically
   // be deleted.
-  delete p;
+  // delete p;
 
   fclose(fnConstraintDump);
   return (int) status;

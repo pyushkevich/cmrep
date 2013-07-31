@@ -54,7 +54,7 @@ protected:
   CoeffFilter::Pointer m_CoeffFilter;
 
   // Transformation from physical coords to voxel coords
-  Mat3 m_A;
+  Mat3 m_A, m_At;
   Vec3 m_b;
 
 };
