@@ -27,6 +27,7 @@
 #include "vnl/vnl_file_matrix.h"
 #include "vnl/vnl_vector_fixed.h"
 #include "vnl/vnl_rank.h"
+#include "vnl/vnl_math.h"
 #include "vnl/algo/vnl_matrix_inverse.h"
 
 #include <string>
@@ -1130,7 +1131,8 @@ class GeneralLinearModel
 {
 public:
   GeneralLinearModel(
-    vtkDataArray *data, vtkDataArray *contrast, vtkDataArray *tstat, vtkDataArray *pval,
+    vtkDataArray *data, vtkDataArray *contrast, 
+    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector);
 
@@ -1140,7 +1142,7 @@ public:
 
 private:
   // Pointers to the data arrays
-  vtkDataArray *data, *contrast, *tstat, *pval;
+  vtkDataArray *data, *contrast, *tstat, *pval, *beta;
 
   // Copies of the matrix, other data
   vnl_matrix<double> X, Y, Xperm, cv;
@@ -1148,7 +1150,8 @@ private:
 };
 
 GeneralLinearModel::GeneralLinearModel(
-    vtkDataArray *data, vtkDataArray *contrast, vtkDataArray *tstat, vtkDataArray *pval,
+    vtkDataArray *data, vtkDataArray *contrast, 
+    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector)
 {
@@ -1157,6 +1160,7 @@ GeneralLinearModel::GeneralLinearModel(
   this->contrast = contrast;
   this->tstat = tstat;
   this->pval = pval;
+  this->beta = beta;
   this->X = design_matrix;
   this->cv = contrast_vector;
 
@@ -1187,10 +1191,15 @@ GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool ne
   vnl_matrix<double> A = vnl_matrix_inverse<double>(Xperm.transpose() * Xperm).pinverse(rank);
   vnl_matrix<double> bhat = (A * Xperm.transpose()) * Y;
   
-  // Compute the contrast and copy to VTK vector
+  // Compute the contrast
   vnl_matrix<double> res = cv * bhat;
+
+  // Copy the betas and the contrast to the output vector
   for (int j = 0; j < nelt; j++)
+    {
     contrast->SetTuple1(j, res(0,j));
+    beta->SetTuple(j, bhat.get_column(j).data_block());
+    }
 
   // The rest only if we need the t-stat
   if(need_t)
@@ -1476,7 +1485,6 @@ void ConvertToMeshType(vtkUnstructuredGrid *src, vtkSmartPointer<vtkUnstructured
   trg = src;
 }
 
-
 template <class TMeshType>
 int meshcluster(Parameters &p, bool isPolyData)
 {
@@ -1501,6 +1509,34 @@ int meshcluster(Parameters &p, bool isPolyData)
     throw MCException("Error reading contrast vector from %s", p.glm_contrast.c_str());
     }
 
+  // Check the design matrix for missing values. Currently, we simply throw out the 
+  // rows with missing (NaN) values. In the future, we should implement a GLM with 
+  // missing data, or just move the whole package to R.
+  std::vector<int> rows_kept;
+  int n_rows_before_cleanup = mat.rows();
+  for(int i = 0; i < mat.rows(); i++)
+    {
+    bool keeprow = true;
+    for(int j = 0; j < mat.cols(); j++)
+      {
+      if(vnl_math_isnan(mat(i,j)))
+        {
+        std::cout << "Discarding row " << i << " due to missing data" << std::endl;
+        keeprow = false;
+        }
+      }
+    rows_kept.push_back(i);
+    }
+
+  // Now trim the design matrix
+  if(rows_kept.size() < mat.rows())
+    {
+    vnl_matrix<double> mat_keep(rows_kept.size(), mat.cols());
+    for(int i = 0; i < rows_kept.size(); i++)
+      mat_keep.set_row(i, mat.get_row(rows_kept[i]));
+    mat = mat_keep;
+    }
+
   // Make sure matrices are compatible
   if(con.columns() != mat.columns())
     throw MCException("Matrix and contrast vector must have same number of columns");
@@ -1521,6 +1557,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Names for the statistics arrays
   string an_contrast = "Contrast", an_tstat = "T-statistic";
   string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
+  string an_beta = "Beta";
 
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
@@ -1538,10 +1575,28 @@ int meshcluster(Parameters &p, bool isPolyData)
     if(!data)
       throw MCException("Array %s is missing in mesh %s", 
         p.array_name.c_str(), p.fn_mesh_input[i].c_str());
-    if(data->GetNumberOfComponents() != (int) mat.rows())
+    if(data->GetNumberOfComponents() != n_rows_before_cleanup)
       throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
         data->GetNumberOfComponents(), p.array_name.c_str(), 
         p.fn_mesh_input[i].c_str(), mat.rows()); 
+
+    // Clean the data if necessary
+    if(rows_kept.size() < n_rows_before_cleanup)
+      {
+      vtkDataArray *rawData = data;
+      char newName[1024];
+      sprintf(newName,"MissingRows_%s", p.array_name.c_str());
+      rawData->SetName(newName);
+
+      data = AddArrayToMesh(mesh[i], p.dom, p.array_name, rows_kept.size(), 0, false);
+      for(int i = 0; i < data->GetNumberOfTuples(); i++)
+        {
+        for(int j = 0; j < data->GetNumberOfComponents(); j++)
+          {
+          data->SetComponent(i, j, rawData->GetComponent(i, rows_kept[j]));
+          }
+        }
+      }
 
     // Do diffusion if needed
     if(p.diffusion > 0)
@@ -1557,9 +1612,10 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * contrast = AddArrayToMesh(mesh[i], p.dom, an_contrast, 1, 0, p.ttype == CONTRAST);
     vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, p.ttype != CONTRAST);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
+    vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
 
     // Create new GLM
-    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, mat, con));
+    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, mat, con));
     }
     
   // If the threshold is on the p-value, convert it to a threshold on T-statistic

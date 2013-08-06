@@ -717,24 +717,24 @@ int main(int argc, char *argv[])
     loc->BuildLocator();
 
     // Compute thickness values
-    for(size_t i = 0; i < (size_t) bndRaw->GetNumberOfPoints(); i++)
+    for(size_t i = 0; i < (size_t) bndraw->GetNumberOfPoints(); i++)
       {
       double xs[3], d2, d;
       int subid;
       vtkIdType cellid;
 
       loc->FindClosestPoint(
-        bndRaw->GetPoint(i), xs, cellid, subid, d2);
+        bndraw->GetPoint(i), xs, cellid, subid, d2);
 
       d = sqrt(d2);
       daRad->InsertNextTuple(&d);
       }
 
     // Add array to boundary data
-    bndRaw->GetPointData()->AddArray(daRad);
+    bndraw->GetPointData()->AddArray(daRad);
 
     // Write thickness map
-    WriteVTKData(bndRaw, fnOutThickness);
+    WriteVTKData(bndraw, fnOutThickness);
     } 
 
   if(fnImgRef.length() && fnImgThick.length())
