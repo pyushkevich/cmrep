@@ -1000,8 +1000,10 @@ void SaveMedialMesh(const char *file,
                     ConstrainedNonLinearProblem *p,
                     TriangleMesh *bmesh,
                     std::vector<int> &mIndex,
+                    std::vector<std::vector<int> > &mtbIndex,
                     const VarVecArray &M,
-                    const VarVec &R)
+                    const VarVec &R,
+                    const VarVecArray &X)
 {
   vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
   pts->Allocate(M.size());
@@ -1009,18 +1011,56 @@ void SaveMedialMesh(const char *file,
   vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
   rad->SetNumberOfComponents(1);
   rad->Allocate(M.size());
-  rad->SetName("Radius");
+  rad->SetName("Radius Function");
+
+  vtkSmartPointer<vtkFloatArray> spoke[3];
+ 
+  spoke[0] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[0]->SetNumberOfComponents(3);
+  spoke[0]->Allocate(M.size());
+  spoke[0]->SetName("Spoke1");
+
+  spoke[1] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[1]->SetNumberOfComponents(3);
+  spoke[1]->Allocate(M.size());
+  spoke[1]->SetName("Spoke2");
+
+  spoke[2] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[2]->SetNumberOfComponents(3);
+  spoke[2]->Allocate(M.size());
+  spoke[2]->SetName("Spoke3");
 
   for(int i = 0; i < M.size(); i++)
     {
-    pts->InsertNextPoint(M[i][0]->Evaluate(), M[i][1]->Evaluate(), M[i][2]->Evaluate());
+    vnl_vector_fixed<double, 3> xm;
+    for(int j = 0; j < 3; j++)
+      xm[j] = M[i][j]->Evaluate();
+
+    pts->InsertNextPoint(xm[0], xm[1], xm[2]);
     rad->InsertNextTuple1(R[i]->Evaluate());
+    
+    std::vector<int> &ix = mtbIndex[i];
+
+    vnl_vector_fixed<double, 3> xs;
+    for(int k = 0; k < std::min((int) ix.size(), 3); k++)
+      {
+      for(int j = 0; j < 3; j++)
+        xs[j] = X[ix[k]][j]->Evaluate() - xm[j];
+      spoke[k]->InsertNextTuple3(xs[0], xs[1], xs[2]);
+      }
+    for(int q = ix.size(); q < 3; q++)
+      {
+      spoke[q]->InsertNextTuple3(xs[0], xs[1], xs[2]);
+      }
     }
 
   vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
   pd->Allocate(bmesh->triangles.size());
   pd->SetPoints(pts);
   pd->GetPointData()->SetScalars(rad);
+  pd->GetPointData()->AddArray(spoke[0]);
+  pd->GetPointData()->AddArray(spoke[1]);
+  pd->GetPointData()->AddArray(spoke[2]);
 
   for(int i = 0; i < bmesh->triangles.size(); i++)
     {
@@ -2245,7 +2285,7 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Export the medial atom mesh for debugging purposes.
   // ------------------------------------------------------------------------
-  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, M, R);
+  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, mtbIndex, M, R, X);
 
   // ------------------------------------------------------------------------
   // Add the actual medial constraints
@@ -3182,7 +3222,7 @@ int main(int argc, char *argv[])
   SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
   sprintf(buffer, "%s_fit2tmp_med.vtk", fnOutBase.c_str());
-  SaveMedialMesh(buffer, p, bmesh, mIndex, M, R);
+  SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X);
 
   // Continue if in ICP mode
   if(action == ACTION_FIT_TARGET)
@@ -3235,7 +3275,7 @@ int main(int argc, char *argv[])
       SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
       sprintf(buffer, "%s_icp_%02d_med.vtk", fnOutBase.c_str(), i);
-      SaveMedialMesh(buffer, p, bmesh, mIndex, M, R);
+      SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X);
       }
 
   #ifdef USE_DICE

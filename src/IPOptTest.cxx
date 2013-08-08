@@ -29,14 +29,14 @@ int main(int argc, char *argv[])
   Expression *c1 = new BinaryProduct(&cnlp,
                                      new BinaryProduct(&cnlp, x1, x2),
                                      new BinaryProduct(&cnlp, x3, x4));
-  cnlp.AddConstraint(c1, 25, ConstrainedNonLinearProblem::UBINF);
+  cnlp.AddConstraint(c1, "TEST1", 25, ConstrainedNonLinearProblem::UBINF);
 
   BigSum *c2 = new BigSum(&cnlp);
   c2->AddSummand(new Square(&cnlp, x1));
   c2->AddSummand(new Square(&cnlp, x2));
   c2->AddSummand(new Square(&cnlp, x3));
   c2->AddSummand(new Square(&cnlp, x4));
-  cnlp.AddConstraint(c2, 40, 40);
+  cnlp.AddConstraint(c2, "TEST2", 40, 40);
 
   // Initialize the problem
   cnlp.SetupProblem(true);
