@@ -6,6 +6,10 @@
 #include <iostream>
 #include <vnl/algo/vnl_svd.h>
 #include <vnl/vnl_random.h>
+#include <vtkCellLocator.h>
+#include <vtkPolyData.h>
+#include <vtkQuadricClustering.h>
+#include <vtkCell.h>
 
 using namespace std;
 
@@ -481,6 +485,297 @@ BoundaryImageMatchTerm::~BoundaryImageMatchTerm()
   // Clean up
   delete xGradI;
   delete xImageVal;
+}
+
+/*********************************************************************************
+ * Iterative Closest Point style term
+ ********************************************************************************/
+
+// TODO: put this into some header file
+extern vtkSmartPointer<vtkPolyData> GenerateContour(FloatImage *image);
+#include <vtkPolyDataWriter.h>
+
+SymmetricClosestPointMatchTerm
+::SymmetricClosestPointMatchTerm(
+  GenericMedialModel *model, FloatImage *image, int nClusterDivisions)
+{
+  xIterCount = 0;
+
+  nClusterDivisions = 96;
+  // Make a copy of the image
+  this->xImage = image;
+  this->xModel = model;
+
+  // Use the VTK contour code to extract a surface mesh from the image
+  xMesh = GenerateContour(image);
+
+  // Create a locator
+  xTargetLocator = vtkSmartPointer<vtkCellLocator>::New();
+  xTargetLocator->SetDataSet(xMesh.GetPointer());
+  xTargetLocator->CacheCellBoundsOn();
+  xTargetLocator->BuildLocator();
+
+  // Need the bounds on the target
+  xMesh->ComputeBounds();
+
+  // Set up the clustering
+  vtkSmartPointer<vtkQuadricClustering> clu =
+      vtkSmartPointer<vtkQuadricClustering>::New();
+  clu->SetInput(xMesh);
+  clu->SetDivisionOrigin(xMesh->GetCenter());
+  double spacing = xMesh->GetLength() / nClusterDivisions;
+  clu->SetDivisionSpacing(spacing, spacing, spacing);
+  clu->Update();
+
+  // Save the samples
+  vtkSmartPointer<vtkPolyDataWriter> wr =
+      vtkSmartPointer<vtkPolyDataWriter>::New();
+  wr->SetInput(clu->GetOutput());
+  wr->SetFileName("clusty.vtk");
+  wr->Update();
+
+  // Get the reduced target
+  xMeshReduced = clu->GetOutput()->GetPoints();
+  // xMeshReduced = xMesh->GetPoints();
+
+  // Perform the closest point computation
+  this->FindClosestPoints();
+}
+
+void 
+SymmetricClosestPointMatchTerm
+::FindClosestPoints()
+{
+  MedialIterationContext *context = xModel->GetIterationContext();
+
+  // Perform the closest to model computation
+
+  // Output vector
+  xClosestToModel.resize(xModel->GetNumberOfBoundaryPoints());
+
+  // Create a VTK points object used for target-model location
+  vtkSmartPointer<vtkPoints> out_pts = vtkSmartPointer<vtkPoints>::New();
+  out_pts->Allocate(xModel->GetNumberOfBoundaryPoints());
+
+  for(MedialBoundaryPointIterator bip(context); !bip.IsAtEnd(); ++bip)
+    {
+    // Get the boundary point
+    SMLVec3d xBnd = GetBoundaryPoint(bip, xModel->GetAtomArray()).X;
+
+    // Find the closest point on the other mesh
+    double xs[3], d2, d;
+    int subid;
+    vtkIdType cellid;
+
+    xTargetLocator->FindClosestPoint(xBnd.data_block(), xs, cellid, subid, d2);
+    xClosestToModel[bip.GetIndex()] = SMLVec3d(xs);
+
+    // Store the point 
+    out_pts->InsertNextPoint(xBnd[0], xBnd[1], xBnd[2]);
+    }
+
+  // Perform the closest to target computation
+
+  // Output vector
+  xClosestToTarget.resize(xMeshReduced->GetNumberOfPoints());
+
+  // Create the polydata rep of the boundary
+  vtkSmartPointer<vtkPolyData> poly = vtkSmartPointer<vtkPolyData>::New();
+  poly->SetPoints(out_pts);
+  poly->Allocate(xModel->GetNumberOfBoundaryTriangles());
+
+  for(MedialBoundaryTriangleIterator bt(context); !bt.IsAtEnd(); ++bt)
+    {
+    vtkIdType v[] = {bt.GetBoundaryIndex(0), bt.GetBoundaryIndex(1), bt.GetBoundaryIndex(2) } ;
+    poly->InsertNextCell(VTK_TRIANGLE, 3, v);
+    }
+
+  // Build everything
+  poly->BuildCells();
+
+  // Create locator for finding closest points
+  vtkSmartPointer<vtkCellLocator> locator = vtkSmartPointer<vtkCellLocator>::New();
+  locator->SetDataSet(poly);
+  locator->BuildLocator();
+
+  // Sample points from the target mesh
+  for(int i = 0; i < xMeshReduced->GetNumberOfPoints(); i++)
+    {
+    MatchLocation loc;
+    loc.xTarget.set(xMeshReduced->GetPoint(i));
+
+    double xs[3], d2, d;
+    int subid;
+    vtkIdType cellid;
+
+    // Find the closest point
+    locator->FindClosestPoint(loc.xTarget.data_block(), xs, cellid, subid, d2);
+
+    // Solve a system for the barycentric coordinates
+    vtkCell *c = poly->GetCell(cellid);
+    if(c->GetNumberOfPoints() != 3)
+      throw MedialModelException("Bad cell in input");
+
+    SMLVec3d A = SMLVec3d(poly->GetPoint(c->GetPointId(0)));
+    SMLVec3d B = SMLVec3d(poly->GetPoint(c->GetPointId(1)));
+    SMLVec3d C = SMLVec3d(poly->GetPoint(c->GetPointId(2)));
+
+    vnl_matrix<double> W(3, 2);
+    W.set_column(0, B-A);
+    W.set_column(1, C-A);
+    SMLVec3d v = SMLVec3d(xs) - A;
+
+    vnl_matrix<double> WtW = W.transpose() * W;
+    vnl_vector<double> Wtv = W.transpose() * v;
+    vnl_vector<double> q = vnl_inverse(WtW) * Wtv;
+
+    // The barycentric coordinates are (1-q1-q2, q1, q2)
+    loc.iAtom[0] = context->GetBoundaryPointAtomIndex(c->GetPointId(0));
+    loc.iAtom[1] = context->GetBoundaryPointAtomIndex(c->GetPointId(1));
+    loc.iAtom[2] = context->GetBoundaryPointAtomIndex(c->GetPointId(2));
+    loc.iSide[0] = context->GetBoundaryPointSide(c->GetPointId(0));
+    loc.iSide[1] = context->GetBoundaryPointSide(c->GetPointId(1));
+    loc.iSide[2] = context->GetBoundaryPointSide(c->GetPointId(2));
+    loc.xBary[0] = 1 - (q[0] + q[1]);
+    loc.xBary[1] = q[0];
+    loc.xBary[2] = q[1];
+
+    xClosestToTarget.push_back(loc);
+    }
+}
+
+
+double
+SymmetricClosestPointMatchTerm
+::UnifiedComputeEnergy(SolutionData *S, bool gradient)
+{
+  xIterCount++;
+  if(xIterCount % 10 == 0)
+    FindClosestPoints();
+
+  saDistSqToTarget.Reset();
+  saDistSqToModel.Reset();
+
+  double a = 0, b = 0;
+
+  // Compute the distance from the model to the target
+  for(MedialBoundaryPointIterator bip(S->xAtomGrid); !bip.IsAtEnd(); ++bip)
+    {
+    // Compute the distance to closest point
+    // Get the medial atom in question
+    SMLVec3d &X = GetBoundaryPoint(bip, S->xAtoms).X;
+
+    // Compute the distance squared
+    const SMLVec3d &Y = xClosestToModel[bip.GetIndex()];
+
+    // Compute the distance squared
+    double d2 = (X-Y).squared_magnitude();
+    a += d2;
+
+    // Update the distance squared
+    saDistSqToTarget.Update(d2);
+
+    // TODO: scale by BoundaryWeight
+    }
+
+  // Compute the distance from the target to the model
+  for(int j = 0; j < xClosestToTarget.size(); j++)
+    {
+    // Compute the weighted point on the triangle
+    const MatchLocation &match = xClosestToTarget[j];
+
+    // Atom and side for each locatoin
+    const SMLVec3d &X0 = S->xAtoms[match.iAtom[0]].xBnd[match.iSide[0]].X;
+    const SMLVec3d &X1 = S->xAtoms[match.iAtom[1]].xBnd[match.iSide[1]].X;
+    const SMLVec3d &X2 = S->xAtoms[match.iAtom[2]].xBnd[match.iSide[2]].X;
+    SMLVec3d Xw = X0 * match.xBary[0] + X1 * match.xBary[1] + X2 * match.xBary[2];
+
+    // Compute the distance
+    double d2 = (Xw - match.xTarget).squared_magnitude();
+    b += d2;
+
+    // Update the distance squared
+    saDistSqToModel.Update(d2);
+    }
+
+  // TODO: modulate properly
+  // return saDistSqToTarget.GetMean() + saDistSqToTarget.GetMean();
+  //
+  return a / xModel->GetNumberOfBoundaryPoints() + 0.1 * b / xClosestToTarget.size();
+}
+
+
+double 
+SymmetricClosestPointMatchTerm
+::ComputePartialDerivative(SolutionData *S, PartialDerivativeSolutionData *dS)
+{
+  StatisticsAccumulator saDistSqToTargetDeriv, saDistSqToModelDeriv;
+  double da, db;
+
+  // Compute the distance from the model to the target
+  for(MedialBoundaryPointIterator bip(xModel->GetIterationContext()); !bip.IsAtEnd(); ++bip)
+    {
+    // Compute the distance to closest point
+    // Get the medial atom in question
+    SMLVec3d &X = GetBoundaryPoint(bip, S->xAtoms).X;
+    SMLVec3d &dX = GetBoundaryPoint(bip, dS->xAtoms).X;
+
+    // Compute the distance squared
+    const SMLVec3d &Y = xClosestToModel[bip.GetIndex()];
+
+    // Compute the distance squared
+    // diff: double d2 = (X-Y).squared_magnitude();
+    double d_d2 = 2 * dot_product(X-Y, dX);
+
+    // Update the distance squared
+    saDistSqToTargetDeriv.Update(d_d2);
+
+    // TODO: scale by BoundaryWeight
+    da += d_d2;
+    }
+
+  // Compute the distance from the target to the model
+  for(int j = 0; j < xClosestToTarget.size(); j++)
+    {
+    // Compute the weighted point on the triangle
+    const MatchLocation &match = xClosestToTarget[j];
+
+    // Atom and side for each locatoin
+    const SMLVec3d &X0 = S->xAtoms[match.iAtom[0]].xBnd[match.iSide[0]].X;
+    const SMLVec3d &X1 = S->xAtoms[match.iAtom[1]].xBnd[match.iSide[1]].X;
+    const SMLVec3d &X2 = S->xAtoms[match.iAtom[2]].xBnd[match.iSide[2]].X;
+    const SMLVec3d &dX0 = dS->xAtoms[match.iAtom[0]].xBnd[match.iSide[0]].X;
+    const SMLVec3d &dX1 = dS->xAtoms[match.iAtom[1]].xBnd[match.iSide[1]].X;
+    const SMLVec3d &dX2 = dS->xAtoms[match.iAtom[2]].xBnd[match.iSide[2]].X;
+    SMLVec3d Xw = X0 * match.xBary[0] + X1 * match.xBary[1] + X2 * match.xBary[2];
+    SMLVec3d dXw = dX0 * match.xBary[0] + dX1 * match.xBary[1] + dX2 * match.xBary[2];
+
+    // Compute the distance
+    // diff: double d2 = (Xw - match.xTarget).squared_magnitude();
+    double d_d2 = 2 * dot_product(Xw - match.xTarget, dXw);
+
+    // Update the distance squared
+    saDistSqToModelDeriv.Update(d_d2);
+    db+=d_d2;
+    }
+
+  return da / xModel->GetNumberOfBoundaryPoints() + 0.1 * db / xClosestToTarget.size();
+  // return saDistSqToTargetDeriv.GetMean() + saDistSqToModelDeriv.GetMean();
+}
+
+void
+SymmetricClosestPointMatchTerm
+::PrintReport(ostream &sout)
+{
+  sout << " Symmetric Closest Point Match term " << endl;
+  sout << "    total penalty  : " << saDistSqToModel.GetMean() + saDistSqToTarget.GetMean() << endl;
+  sout << "    RMS dist model to target: " << sqrt(saDistSqToTarget.GetMean()) << endl;  
+  sout << "    RMS dist target to model: " << sqrt(saDistSqToModel.GetMean()) << endl;  
+}
+
+SymmetricClosestPointMatchTerm
+::~SymmetricClosestPointMatchTerm()
+{
 }
 
 /*********************************************************************************

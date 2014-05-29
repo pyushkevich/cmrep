@@ -239,7 +239,8 @@ public:
       {
       double detA = vnl_det(A);
       scale = exp(log(fabs(detA)) / 3);
-      dscale = scale * vnl_trace(vnl_inverse(A) * dA) / 3.0;
+      if(scale > 0)
+        dscale = scale * vnl_trace(vnl_inverse(A) * dA) / 3.0;
       }
 
     // Apply the variation in the rest of the coefficients

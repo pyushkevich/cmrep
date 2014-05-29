@@ -38,6 +38,7 @@ OptimizationParameters
   xPenaltyTermRegMap.AddPair(BND_JACOBIAN_DISTORTION, "BoundaryJacobianDistortionPenaltyTerm");
   xPenaltyTermRegMap.AddPair(MED_JACOBIAN_DISTORTION, "MedialJacobianDistortionPenaltyTerm");
   xPenaltyTermRegMap.AddPair(BND_ELASTICITY, "BoundaryElasticityPrior");
+  xPenaltyTermRegMap.AddPair(CLOSEST_POINT, "SymmetricClosestPoint");
 
   xCTFSettingsRegMap.AddPair(COSINE_BASIS_PDE, "CosineBasisPDE");
   xCTFSettingsRegMap.AddPair(LOOP_SUBDIVISION_PDE, "LoopSubdivisionPDE");
@@ -60,6 +61,7 @@ OptimizationParameters
   xTermDefaultWeights[BND_JACOBIAN_DISTORTION] = 0.0;
   xTermDefaultWeights[MED_JACOBIAN_DISTORTION] = 0.0;
   xTermDefaultWeights[BND_ELASTICITY] = 0.0;
+  xTermDefaultWeights[CLOSEST_POINT] = 0.0;
 
   // Clear the settings pointer
   xCTFSettings = NULL;

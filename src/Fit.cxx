@@ -41,99 +41,17 @@ int usage()
   return -1;
 }
 
-
-
 // Generate contour and save to file
 void GenerateContour(FloatImage *image, string file)
 {
-  typedef itk::OrientedRASImage<float,3> ImageType;
-  typedef itk::VTKImageExport<ImageType> VTKExportType;
-  typedef itk::SmartPointer<VTKExportType> VTKExportPointer;
-  typedef ImageType::TransformMatrixType TransformMatrixType; 
-  VTKExportPointer m_VTKExporter;
-  vtkImageImport *m_VTKImporter;
-  vtkMarchingCubes *     m_MarchingCubesFilter;
-  vtkTransformPolyDataFilter *m_TransformFilter;
-  vtkTransform *m_Transform;
-
-  // Initialize the VTK Exporter
-  m_VTKExporter = VTKExportType::New();
-  m_VTKExporter->ReleaseDataFlagOn();
-  m_VTKExporter->SetInput(image->GetInternalImage()->GetInternalImage());
-  
-  // Initialize the VTK Importer
-  m_VTKImporter = vtkImageImport::New();
-  m_VTKImporter->ReleaseDataFlagOn();
-
-  // Pipe the importer into the exporter (that's a lot of code)
-  m_VTKImporter->SetUpdateInformationCallback(
-    m_VTKExporter->GetUpdateInformationCallback());
-  m_VTKImporter->SetPipelineModifiedCallback(
-    m_VTKExporter->GetPipelineModifiedCallback());
-  m_VTKImporter->SetWholeExtentCallback(
-    m_VTKExporter->GetWholeExtentCallback());
-  m_VTKImporter->SetSpacingCallback(
-    m_VTKExporter->GetSpacingCallback());
-  m_VTKImporter->SetOriginCallback(
-    m_VTKExporter->GetOriginCallback());
-  m_VTKImporter->SetScalarTypeCallback(
-    m_VTKExporter->GetScalarTypeCallback());
-  m_VTKImporter->SetNumberOfComponentsCallback(
-    m_VTKExporter->GetNumberOfComponentsCallback());
-  m_VTKImporter->SetPropagateUpdateExtentCallback(
-    m_VTKExporter->GetPropagateUpdateExtentCallback());
-  m_VTKImporter->SetUpdateDataCallback(
-    m_VTKExporter->GetUpdateDataCallback());
-  m_VTKImporter->SetDataExtentCallback(
-    m_VTKExporter->GetDataExtentCallback());
-  m_VTKImporter->SetBufferPointerCallback(
-    m_VTKExporter->GetBufferPointerCallback());  
-  m_VTKImporter->SetCallbackUserData(
-    m_VTKExporter->GetCallbackUserData());
-
-  // Create and configure the marching cubes filter
-  m_MarchingCubesFilter = vtkMarchingCubes::New();
-  m_MarchingCubesFilter->ReleaseDataFlagOn();
-  m_MarchingCubesFilter->ComputeScalarsOff();
-  m_MarchingCubesFilter->ComputeGradientsOff();
-  m_MarchingCubesFilter->SetNumberOfContours(1);
-  m_MarchingCubesFilter->SetValue(0,0.0f);
-  m_MarchingCubesFilter->SetInput(m_VTKImporter->GetOutput());
-
-  // Create a transform into RAS coordinates
-  vnl_matrix_fixed<double, 4, 4> vtk2nii =
-    ConstructVTKtoNiftiTransform(
-      image->GetInternalImage()->GetInternalImage()->GetDirection().GetVnlMatrix(),
-      image->GetInternalImage()->GetInternalImage()->GetOrigin().GetVnlVector(),
-      image->GetInternalImage()->GetInternalImage()->GetSpacing().GetVnlVector());          
-
-  m_Transform = vtkTransform::New();
-  m_Transform->SetMatrix(vtk2nii.data_block());
-
-  m_TransformFilter = vtkTransformPolyDataFilter::New();
-  m_TransformFilter->SetTransform(m_Transform);
-  m_TransformFilter->SetInput(m_MarchingCubesFilter->GetOutput());
-  m_TransformFilter->Update();
-
-  cout << "Transform: " << m_Transform << endl;
-  cout << "VOX2RAS: " << image->GetInternalImage()->GetInternalImage()->
-    GetVoxelSpaceToRASPhysicalSpaceMatrix() << endl;
-
-  cout << "SOS2RAS: " << image->GetInternalImage()->GetInternalImage()->
-    GetSpacingOriginPhysicalSpaceToRASPhysicalSpaceMatrix() << endl;
+  // Get the contour
+  vtkSmartPointer<vtkPolyData> mesh = GenerateContour(image);
 
   // Create a writer
-  vtkPolyDataWriter *m_Writer = vtkPolyDataWriter::New();
+  vtkSmartPointer<vtkPolyDataWriter> m_Writer = vtkSmartPointer<vtkPolyDataWriter>::New();
   m_Writer->SetFileName(file.c_str());
-  m_Writer->SetInput(m_TransformFilter->GetOutput());
+  m_Writer->SetInput(mesh);
   m_Writer->Update();
-
-  // Destroy the filters
-  m_VTKImporter->Delete();
-  m_MarchingCubesFilter->Delete();
-  m_TransformFilter->Delete();
-  m_Transform->Delete();
-  m_Writer->Delete();
 }
 
 // Data fitting modes

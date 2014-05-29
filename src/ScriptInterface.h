@@ -5,6 +5,7 @@
 #include <vector>
 #include <stdexcept>
 #include <smlmath.h>
+#include <vtkSmartPointer.h>
 
 class GenericMedialModel;
 class CartesianMedialModel;
@@ -14,6 +15,7 @@ class IMedialCoefficientMask;
 class PrincipalComponents;
 class PCACoefficientMask;
 class Registry;
+class vtkPolyData;
 template <typename TPixel> class ITKImageWrapper;
 
 void TestTriangleAreaPartialDerivative();
@@ -118,6 +120,9 @@ private:
   friend class CartesianMPDE;
   friend class MedialPCA;
 };
+
+/** Mesh extraction from FloatImage */
+vtkSmartPointer<vtkPolyData> GenerateContour(FloatImage *image);
 
 /** This is a binary image representation. */
 class BinaryImage

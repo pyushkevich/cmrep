@@ -1512,6 +1512,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Check the design matrix for missing values. Currently, we simply throw out the 
   // rows with missing (NaN) values. In the future, we should implement a GLM with 
   // missing data, or just move the whole package to R.
+  // Note: this actually does not work!!
   std::vector<int> rows_kept;
   int n_rows_before_cleanup = mat.rows();
   for(int i = 0; i < mat.rows(); i++)

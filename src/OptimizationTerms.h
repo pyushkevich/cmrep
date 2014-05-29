@@ -10,6 +10,10 @@
 #include "SmoothedImageSampler.h"
 #include "MedialAtomGrid.h"
 #include "Registry.h"
+#include "vtkSmartPointer.h"
+
+class vtkCellLocator;
+class vtkPoints;
 
 /******************************************************************
  * THIS EUCLIDEAN FUNCTION JUNK SHOULD GO SOMEWHERE ELSE
@@ -338,6 +342,81 @@ private:
   SMLVec3d *xGradI;
   double *xImageVal;
 };
+
+class SymmetricClosestPointMatchTerm : public EnergyTerm
+{
+public:
+  // Constructor
+  SymmetricClosestPointMatchTerm(
+    GenericMedialModel *model, 
+    FloatImage *image,
+    int nClusterDivisions);
+
+  virtual ~SymmetricClosestPointMatchTerm();
+
+  // Compute the image match
+  double ComputeEnergy(SolutionData *data)
+    { return UnifiedComputeEnergy(data, false); }
+
+  // Initialize gradient computation and return the value of the solution
+  // at the current state
+  double BeginGradientComputation(SolutionData *data)
+    { return UnifiedComputeEnergy(data, true); }
+  
+  // Compute the partial derivative (must be called in the middle of Begin and
+  // End of GradientComputation.
+  double ComputePartialDerivative(
+    SolutionData *S, PartialDerivativeSolutionData *dS);
+
+  // Print a verbose report
+  void PrintReport(ostream &sout);
+
+  // Print a short name
+  string GetShortName() { return string("CPOINT"); }
+
+private:
+
+  // Match location
+  struct MatchLocation
+    {
+    SMLVec3d xTarget;
+    int iAtom[3];
+    int iSide[3];
+    double xBary[3];
+    };
+
+  // A copy of the mesh
+  FloatImage *xImage;
+
+  // A copy of the model
+  GenericMedialModel *xModel;
+
+  // A mesh extracted from the image
+  vtkSmartPointer<vtkPolyData> xMesh;
+  vtkSmartPointer<vtkPoints> xMeshReduced;
+
+  // Locator
+  vtkSmartPointer<vtkCellLocator> xTargetLocator;
+
+  // Closest points to each of the boundary atom x's
+  std::vector<SMLVec3d> xClosestToModel;
+
+  // Closest points to each of the target points
+  std::vector<MatchLocation> xClosestToTarget;
+
+  StatisticsAccumulator saDistSqToTarget, saDistSqToModel;
+
+  int xIterCount;
+
+  // Common energy function
+  double UnifiedComputeEnergy(SolutionData *, bool);
+
+  // This function finds the closest points from target to mesh and from mesh
+  // to target
+  void FindClosestPoints();
+ 
+};
+  
 
 class LocalDistanceDifferenceEnergyTerm : public EnergyTerm
 {

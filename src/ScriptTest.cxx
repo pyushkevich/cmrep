@@ -821,6 +821,10 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
     }
   // Push the other terms
   vt.push_back(TermInfo(
+      "", new BoundaryImageMatchTerm(model, img), 0.1));
+  vt.push_back(TermInfo(
+      "", new SymmetricClosestPointMatchTerm(model, img, 32), 0.1));
+  vt.push_back(TermInfo(
       "", new BoundaryGradRPenaltyTerm(), 0.1));
   vt.push_back(TermInfo(
       "", new LoopTangentSchemeValidityPenaltyTerm(model), 1.0e-4));
@@ -836,8 +840,6 @@ int TestDerivativesWithImage(const char *fnMPDE, FloatImage *img, const char *pa
       "", new RadiusPenaltyTerm(0.01, 4, 100, 10), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryCurvaturePenalty(model), 0.1));
-  vt.push_back(TermInfo(
-      "", new BoundaryImageMatchTerm(model, img), 0.1));
   vt.push_back(TermInfo(
       "", new BoundaryJacobianEnergyTerm(), 1.0e-4));
   vt.push_back(TermInfo(
