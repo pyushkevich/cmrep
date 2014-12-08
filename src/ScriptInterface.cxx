@@ -697,6 +697,10 @@ void MedialPDE::ConfigureEnergyTerms(
       }
       break;
 
+    case OptimizationParameters::CLOSEST_POINT:
+      xTermImage = new SymmetricClosestPointMatchTerm(xMedialModel, image, 32);
+      break;
+
     default:
       throw MedialModelException("Unknown energy term specified");
     }
