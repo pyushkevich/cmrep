@@ -21,7 +21,6 @@ OptimizationParameters
   xImageMatchRegMap.AddPair(PROBABILITY_INTEGRAL, "ProbabilityIntegral");
   xImageMatchRegMap.AddPair(BOUNDARY, "BoundaryIntegral");
   xImageMatchRegMap.AddPair(RADIUS_VALUES, "CurrentRadius");
-  xImageMatchRegMap.AddPair(CLOSEST_POINT, "SymmetricClosestPoint");
 
   xPenaltyTermRegMap.AddPair(BOUNDARY_JACOBIAN, "BoundaryJacobianEnergyTerm");
   xPenaltyTermRegMap.AddPair(BOUNDARY_GRAD_R, "BoundaryGradRPenaltyTerm");
