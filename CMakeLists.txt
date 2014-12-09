@@ -98,8 +98,38 @@ IF(USE_MKL)
   ENDIF(MKL_LIBRARIES)
 ENDIF(USE_MKL)
 
+INCLUDE(ExternalProject)
+
 OPTION(USE_IPOPT "Use the IpOpt Solver" OFF)
 IF(USE_IPOPT)
+
+  # Flags for compiling IPOPT and HSL
+  IF(COMMENT_THIS_OUT_FOR_FUTURE)
+    IF(APPLE)
+      SET(IPOPT_FFLAGS "-fexceptions -m64 -fbackslash")
+      SET(IPOPT_CFLAGS "-fno-common -no-cpp-precomp -fexceptions -arch x86_64 -m64 -Wno-sign-conversion")
+
+    ENDIF(APPLE)
+   
+
+    ExternalProject_Add(project_ipopt 
+      SVN_REPOSITORY "https://projects.coin-or.org/svn/Ipopt/releases/3.10.2"
+      PREFIX "${CMAKE_CURRENT_BINARY_DIR}/ipopt-3.10.2"
+      CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=${CMAKE_CURRENT_BINARY_DIR}/ipopt-3.10.2
+        FFLAGS=${IPOPT_CFLAGS} CFLAGS=${IPOPT_CFLAGS} CXXFLAGS=${IPOPT_CFLAGS}
+      BUILD_COMMAND make
+      INSTALL_COMMAND make install)
+
+    ExternalProject_Get_Property(project_ipopt install_dir)
+    SET(ipopt_install_dir ${install_dir})
+
+    add_library(ipopt STATIC IMPORTED)
+    set_property(TARGET ipopt PROPERTY IMPORTED_LOCATION ${ipopt_install_dir}/lib/libipopt.a)
+    add_dependencies(ipopt project_ipopt)
+
+    INCLUDE_DIRECTORIES(${ipopt_install_dir})
+  ENDIF(COMMENT_THIS_OUT_FOR_FUTURE)
+
   FIND_PACKAGE(IpOpt REQUIRED)
   INCLUDE_DIRECTORIES(${IPOPT_INCLUDE_DIR})
   LINK_LIBRARIES(${IPOPT_LIBRARIES})
@@ -152,7 +182,13 @@ ENDIF(GLUT_FOUND)
 # Include subdirectories
 SUBDIRS(extras/toms611)
 SUBDIRS(testing)
-SUBDIRS(src/util)
+
+
+OPTION(BUILD_UTILS "Build some cm-rep utilities" ON)
+
+IF(BUILD_UTILS)
+  SUBDIRS(src/util)
+ENDIF(BUILD_UTILS)
 
 # Platform-specifics
 IF(WIN32)
@@ -259,15 +295,36 @@ IF(USE_IPOPT)
                  src/ConstrainedCMRepTest.cxx)
   TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
   TARGET_LINK_LIBRARIES(contest ${PDE_LIBS})
+
+  INSTALL(TARGETS contest 
+     BUNDLE DESTINATION . COMPONENT Runtime
+     RUNTIME DESTINATION bin COMPONENT RUNTIME)
+
 ENDIF(USE_IPOPT)
 
 # Add installation targets
-INSTALL_TARGETS("/bin" cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
+INSTALL(TARGETS cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
   cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp
-  cmrep_vskel cmrep_warpimage)
+  cmrep_vskel cmrep_warpimage 
+     BUNDLE DESTINATION . COMPONENT Runtime
+     RUNTIME DESTINATION bin COMPONENT RUNTIME)
 
 INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
   "share/cmrep/")
+
+INCLUDE(BundleUtilities)
+
+# Fixup bundle on MACOS
+IF(APPLE)
+  SET(APPS "\${CMAKE_INSTALL_PREFIX}/bin/cmrep_fit")
+  INSTALL(CODE "
+     function(gp_item_default_embedded_path_override item path) 
+       set(path @executable_path PARENT_SCOPE) 
+     endfunction() 
+     include(BundleUtilities)
+     fixup_bundle(\"${APPS}\"   \"\"   \"\")
+     " COMPONENT Runtime)
+ENDIF(APPLE)
 
 # Add package support
 INCLUDE(CMake/Package.cmake)
