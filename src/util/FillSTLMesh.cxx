@@ -64,7 +64,7 @@ int usage()
 void drawPolyData(vtkPolyData *poly)
 {
   vtkPolyDataMapper *mapper = vtkPolyDataMapper::New();
-  mapper->SetInput(poly);
+  mapper->SetInputData(poly);
 
   vtkLODActor *actor = vtkLODActor::New();
   actor->SetMapper(mapper);
@@ -304,7 +304,7 @@ int main(int argc, char **argv)
 
   // Convert the model to triangles
   vtkTriangleFilter *tri = vtkTriangleFilter::New();
-  tri->SetInput(polyInput);
+  tri->SetInputData(polyInput);
   cout << "Converting to triangles ..." << endl;
   tri->Update();
   vtkPolyData *pd = tri->GetOutput();

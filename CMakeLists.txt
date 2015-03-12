@@ -186,10 +186,6 @@ SUBDIRS(testing)
 
 OPTION(BUILD_UTILS "Build some cm-rep utilities" ON)
 
-IF(BUILD_UTILS)
-  SUBDIRS(src/util)
-ENDIF(BUILD_UTILS)
-
 # Platform-specifics
 IF(WIN32)
   ADD_DEFINITIONS(-D_SCL_SECURE_NO_DEPRECATE)
@@ -246,37 +242,51 @@ ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 
 # Define the VTK libraries
 SET(VTK_LIBRARIES
-  vtkIO vtkHybrid vtkRendering vtkImaging vtkGraphics vtkFiltering vtkCommon)
-
+  vtkChartsCore
+  vtkCommonCore
+  vtkRenderingCore
+  vtkRenderingFreeType
+  vtkRenderingFreeTypeOpenGL
+  vtkRenderingLOD
+  vtkRenderingOpenGL
+  vtkRenderingVolume
+  vtkRenderingVolumeOpenGL
+  vtkFiltersCore
+  vtkImagingCore
+  vtkViewsCore
+  vtkViewsContext2D
+  vtkIOCore
+  vtkIOExport
+  vtkIOGeometry
+  vtkIOLegacy)
 
 # Set the list of required libraries
 LINK_LIBRARIES(
   cmrep
-  toms611
   ${ITK_LIBRARIES}
   ${VTK_LIBRARIES})
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
-TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
-TARGET_LINK_LIBRARIES(cmrep_fit ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_fit ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
-TARGET_LINK_LIBRARIES(cmrep_getmesh ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_getmesh ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
-TARGET_LINK_LIBRARIES(cmrep_subdivide ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_subdivide ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
-TARGET_LINK_LIBRARIES(cmrep_remesh ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_remesh ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
-TARGET_LINK_LIBRARIES(cmrep_meanmodel ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_meanmodel ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_pca_generate src/ComputePCA.cxx)
-TARGET_LINK_LIBRARIES(cmrep_pca_generate ${PDE_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_pca_generate ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_fillmesh src/CMRepMeshToImage.cxx)
 ADD_EXECUTABLE(cmrep_genwarp src/CMRepToWarp.cxx)
@@ -294,7 +304,7 @@ IF(USE_IPOPT)
                  src/ConstrainedCMRepObjectives.cxx
                  src/ConstrainedCMRepTest.cxx)
   TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
-  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS} toms611)
 
   INSTALL(TARGETS contest 
      BUNDLE DESTINATION . COMPONENT Runtime
@@ -311,6 +321,10 @@ INSTALL(TARGETS cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
 
 INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
   "share/cmrep/")
+
+IF(BUILD_UTILS)
+  SUBDIRS(src/util)
+ENDIF(BUILD_UTILS)
 
 INCLUDE(BundleUtilities)
 

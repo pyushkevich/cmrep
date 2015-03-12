@@ -50,7 +50,7 @@ void GenerateContour(FloatImage *image, string file)
   // Create a writer
   vtkSmartPointer<vtkPolyDataWriter> m_Writer = vtkSmartPointer<vtkPolyDataWriter>::New();
   m_Writer->SetFileName(file.c_str());
-  m_Writer->SetInput(mesh);
+  m_Writer->SetInputData(mesh);
   m_Writer->Update();
 }
 

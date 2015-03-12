@@ -19,7 +19,7 @@
 #include "vtkClipPolyData.h"
 #include "vtkThresholdPoints.h"
 #include "vtkPolyDataConnectivityFilter.h"
-#include "vtkUnstructuredGridToPolyDataFilter.h"
+// #include "vtkUnstructuredGridToPolyDataFilter.h"
 #include "vtkMergeCells.h"
 #include "vtkGeometryFilter.h"
 #include "vtkTriangle.h"
@@ -178,7 +178,7 @@ void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
-  writer->SetInput(mesh);
+  writer->SetInputData(mesh);
   writer->Update();
 }
 
@@ -187,7 +187,7 @@ void WriteMesh<>(vtkPolyData *mesh, const char *fname)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
-  writer->SetInput(mesh);
+  writer->SetInputData(mesh);
   writer->Update();
 }
 
@@ -607,7 +607,7 @@ ClusterComputer
   if (dom == POINT)
     {
     fClip = vtkClipDataSet::New();
-    fClip->SetInput(mesh);
+    fClip->SetInputData(mesh);
     fClip->SetInputArrayToProcess(0, 0, 0, 
       vtkDataObject::FIELD_ASSOCIATION_POINTS, vtkDataSetAttributes::SCALARS); 
     fClip->SetValue(thresh);
@@ -616,14 +616,14 @@ ClusterComputer
   else
     {  
     fThresh = vtkThreshold::New();
-    fThresh->SetInput(mesh);
+    fThresh->SetInputData(mesh);
     fThresh->SetInputArrayToProcess(0, 0, 0, 
       vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
     fThresh->ThresholdByUpper(thresh);
     fConnect->SetInputConnection(fThresh->GetOutputPort());
 
     fThreshInv = vtkThreshold::New();
-    fThreshInv->SetInput(mesh);
+    fThreshInv->SetInputData(mesh);
     fThreshInv->SetInputArrayToProcess(0, 0, 0, 
       vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
     fThreshInv->ThresholdByLower(thresh - 1.e-6);
@@ -842,7 +842,7 @@ ClusterArray ComputeClusters(
     vtkSmartPointer<vtkClipPolyData> fContour = vtkClipPolyData::New();
 
     // Clip the data field at the threshold
-    fContour->SetInput(mesh);
+    fContour->SetInputData(mesh);
     fContour->SetValue(thresh);
 
     // Generate the background too 
@@ -862,7 +862,7 @@ ClusterArray ComputeClusters(
     vtkSmartPointer<vtkThreshold> fThresh = vtkThreshold::New();
 
     // Threshold the cell data field
-    fThresh->SetInput(mesh);
+    fThresh->SetInputData(mesh);
     fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
     fThresh->ThresholdByUpper(thresh);
     fThresh->Update();
@@ -871,14 +871,14 @@ ClusterArray ComputeClusters(
 
   // Get the connected components
   vtkSmartPointer<vtkConnectivityFilter> fConnect = vtkConnectivityFilter::New();
-  fConnect->SetInput(fin);
+  fConnect->SetInputData(fin);
   fConnect->SetExtractionModeToAllRegions();
   fConnect->ColorRegionsOn();
   fConnect->Update();
 
   // Convert the result to polydata (why?)
   vtkSmartPointer<vtkGeometryFilter> geo = vtkGeometryFilter::New();
-  geo->SetInput(fConnect->GetOutput());
+  geo->SetInputData(fConnect->GetOutput());
   geo->Update();
   
   vtkSmartPointer<vtkPolyData> p = geo->GetOutput();
@@ -970,7 +970,7 @@ ClusterArray ComputeClusters(
       vtkThreshold *fThreshInv = vtkThreshold::New();
 
       // Threshold the cell data field
-      fThreshInv->SetInput(mesh);
+      fThreshInv->SetInputData(mesh);
       fThreshInv->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
       fThreshInv->ThresholdByLower(thresh - 1.e-6);
       fThreshInv->Update();
@@ -1008,7 +1008,7 @@ ClusterArray ComputeClusters(
     fContour = vtkClipDataSet::New();
 
     // Clip the data field at the threshold
-    fContour->SetInput(mesh);
+    fContour->SetInputData(mesh);
     fContour->SetValue(thresh);
     fContour->Update();
     f = fContour->GetOutput();
@@ -1020,7 +1020,7 @@ ClusterArray ComputeClusters(
 
      // Threshold the cell data field
      fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-     fThresh->SetInput(mesh);
+     fThresh->SetInputData(mesh);
      fThresh->ThresholdByUpper(thresh);
      fThresh->Update();
      f = fThresh->GetOutput();
@@ -1032,7 +1032,7 @@ ClusterArray ComputeClusters(
 
   // Get the connected components
   vtkConnectivityFilter * fConnect = vtkConnectivityFilter::New();
-  fConnect->SetInput(f);
+  fConnect->SetInputData(f);
   fConnect->SetExtractionModeToAllRegions();
   fConnect->ColorRegionsOn();
   fConnect->Update();
@@ -1474,7 +1474,7 @@ template <>
 void ConvertToMeshType(vtkUnstructuredGrid *src, vtkSmartPointer<vtkPolyData> &trg)
 {
   vtkSmartPointer<vtkGeometryFilter> geo = vtkGeometryFilter::New();
-  geo->SetInput(src);
+  geo->SetInputData(src);
   geo->Update();
   trg = geo->GetOutput();
 }

@@ -341,7 +341,7 @@ CreateOverlapObjective(
   double hd = 0.5 * delta;
 
   // Compute the xi values associated with the samples
-  vector<double> tSamples(nSamplesPerAtom, NULL);
+  vector<double> tSamples(nSamplesPerAtom, 0.0);
   for(size_t i = 0; i < nSamplesPerAtom; i++)
     tSamples[i] = i / (nCuts + 1.0);
 

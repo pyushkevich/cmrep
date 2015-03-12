@@ -428,7 +428,7 @@ SubdivisionMedialModelIO
 
   // Save the model
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(poly);
+  writer->SetInputData(poly);
   writer->SetFileName(fn_full_mesh.c_str());
   writer->SetFileTypeToBinary();
   writer->Update();

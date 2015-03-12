@@ -71,7 +71,7 @@ void WriteVTKData(vtkPolyData *data, string fn)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fn.c_str());
-  writer->SetInput(data);
+  writer->SetInputData(data);
   writer->Update();
 }
 vtkPolyData *ReadVoronoiOutput(
@@ -368,9 +368,9 @@ int main(int argc, char *argv[])
 
   // The raw boundary must be triangulated and cleaned
   vtkTriangleFilter *fTriangle = vtkTriangleFilter::New();
-  fTriangle->SetInput(bndraw);
+  fTriangle->SetInputData(bndraw);
   vtkCleanPolyData *fClean = vtkCleanPolyData::New();
-  fClean->SetInput(fTriangle->GetOutput());
+  fClean->SetInputConnection(fTriangle->GetOutputPort());
   fClean->SetTolerance(1e-4);
   fClean->Update();
   vtkPolyData *bnd = fClean->GetOutput();
@@ -592,7 +592,7 @@ int main(int argc, char *argv[])
 
   // Drop the singleton points from the diagram (points not in any cell)
   vtkCleanPolyData *fltClean = vtkCleanPolyData::New();
-  fltClean->SetInput(skel);
+  fltClean->SetInputData(skel);
   fltClean->Update();
   cout << "Clean filter: trimmed " 
     << skel->GetNumberOfPoints() << " vertices to "
@@ -606,7 +606,7 @@ int main(int argc, char *argv[])
   if(nComp > 0)
     {
     vtkPolyDataConnectivityFilter *fltConnect = vtkPolyDataConnectivityFilter::New();
-    fltConnect->SetInput(fltClean->GetOutput());
+    fltConnect->SetInputConnection(fltClean->GetOutputPort());
 
     if(nComp == 1)
       fltConnect->SetExtractionModeToLargestRegion();
@@ -624,7 +624,7 @@ int main(int argc, char *argv[])
     // Don't see why this is necessary, but Connectivity filter does not remove points,
     // just faces. So we need another clear filter
     vtkCleanPolyData *fltWhy = vtkCleanPolyData::New();
-    fltWhy->SetInput(fltConnect->GetOutput());
+    fltWhy->SetInputConnection(fltConnect->GetOutputPort());
     fltWhy->Update();
 
     cout << "Connected component constraint pruned " 
@@ -635,7 +635,7 @@ int main(int argc, char *argv[])
 
   // Convert the cell data to point data
   vtkCellDataToPointData *c2p = vtkCellDataToPointData::New();
-  c2p->SetInput(polySave);
+  c2p->SetInputData(polySave);
   c2p->PassCellDataOn();
   c2p->Update();
   vtkPolyData *final = c2p->GetPolyDataOutput();
@@ -676,7 +676,7 @@ int main(int argc, char *argv[])
       ceil(fbb.GetLength(0) / binsize), 
       ceil(fbb.GetLength(1) / binsize),
       ceil(fbb.GetLength(2) / binsize));
-    fCluster->SetInput(c2p->GetPolyDataOutput());
+    fCluster->SetInputData(c2p->GetPolyDataOutput());
     fCluster->SetCopyCellData(1);
     fCluster->Update();
 
@@ -693,7 +693,7 @@ int main(int argc, char *argv[])
 
     // Convert cell data to point data again
     vtkCellDataToPointData *c2p = vtkCellDataToPointData::New();
-    c2p->SetInput(fCluster->GetOutput());
+    c2p->SetInputConnection(fCluster->GetOutputPort());
     c2p->PassCellDataOn();
     c2p->Update();
     skelfinal = c2p->GetPolyDataOutput();
@@ -831,11 +831,11 @@ int main(int argc, char *argv[])
     {
     // Convert the mesh to triangles
     vtkTriangleFilter *fltTri = vtkTriangleFilter::New();
-    fltTri->SetInput(skelfinal);
+    fltTri->SetInputData(skelfinal);
 
     // Clean the mesh
     vtkCleanPolyData *fltClean = vtkCleanPolyData::New();
-    fltClean->SetInput(fltTri->GetOutput());
+    fltClean->SetInputConnection(fltTri->GetOutputPort());
     fltClean->Update();
     vtkPolyData *xMesh = fltClean->GetOutput();
     xMesh->BuildCells();

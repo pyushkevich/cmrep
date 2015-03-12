@@ -247,12 +247,30 @@ int main(int argc, char *argv[])
   Vec X[10];
 
   // Get the spoke arrays, radius
-  vtkDataArray *spoke[2], *rad;
+  bool haveSpokes = false, haveCurvedSpokes = false;
+
+  vtkDataArray *spoke[2], *rad, *cspoke[2];
+
   spoke[0] = mesh->GetPointData()->GetArray("Spoke1");
   spoke[1] = mesh->GetPointData()->GetArray("Spoke2");
   rad = mesh->GetPointData()->GetArray("Radius Function");
 
-  if(spoke[0] == NULL || spoke[1] == NULL || rad == NULL)
+  if(spoke[0] != NULL && spoke[1] != NULL && rad != NULL)
+    {
+    haveSpokes = true;
+    }
+  else
+    {
+    // The new version of this code accepts curved spokes, which are a list of 
+    // points (streamline) for each vertex in the mesh
+    cspoke[0] = mesh->GetPointData()->GetArray("CurvedSpoke1");
+    cspoke[1] = mesh->GetPointData()->GetArray("CurvedSpoke2");
+
+    if(cspoke[0] != NULL && cspoke[1] != NULL)
+      haveCurvedSpokes = true;
+    }
+
+  if(!haveSpokes && !haveCurvedSpokes)
     {
     cerr << "Spoke/radius arrays missing in mesh" << endl;
     return -1;
@@ -278,29 +296,67 @@ int main(int argc, char *argv[])
   typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
   size_t itri = 0;
   size_t iwedge = 0;
+
+  // Generate an array of sample points for each vertex
+  typedef vnl_vector_fixed<double, 3> Vec3;
+  typedef std::vector<Vec> StreamLine;
+  typedef std::vector<StreamLine> StreamField;
+
+  // Interpolate the spokes into a list of streamlines - to unify with curved spokes
+  StreamField streams[2];
+  for(int side = 0; side < 2; side++)
+    {
+    for(int v = 0; v < mesh->GetNumberOfPoints(); v++)
+      {
+      // Streamline for this vertex for this side
+      StreamLine sl;
+
+      // Get the coordinate of the vertex itself
+      Vec x0; x0[0] = mesh->GetPoint(v)[0]; x0[1] = mesh->GetPoint(v)[1]; x0[2] = mesh->GetPoint(v)[2];
+      sl.push_back(x0);
+
+      // If spokes, interpolate spokes
+      if(haveSpokes)
+        {
+        Vec spk(spoke[side]->GetTuple(v));
+
+        // Sample along the spoke
+        for(double xi = 0; xi < xiMax; xi += xiStep)
+          {
+          Vec px = x0 + (xi + xiStep) * spk;
+          sl.push_back(px);
+          }
+        }
+      else if(haveCurvedSpokes)
+        {
+        double *spoke_coord = cspoke[side]->GetTuple(v);
+        for(int i = 0; i < cspoke[side]->GetNumberOfComponents(); i+=3)
+          {
+          Vec px;
+          px[0] = spoke_coord[i]; px[1] = spoke_coord[i+1]; px[2] = spoke_coord[i+2];
+          sl.push_back(px);
+          }
+        }
+
+        streams[side].push_back(sl);
+      }
+    }
+
   for(tri->InitTraversal(); tri->GetNextCell(npts,pts); itri++)
     {
     for(size_t side = 0; side < 2; side++)
       {
-      // Get the vertices
-      Vec xx[3], bb[3];
-      for(size_t i=0;i<3;i++)
-        {
-        xx[i] = Vec(mesh->GetPoint(pts[i]));
-        Vec spk(spoke[side]->GetTuple(pts[i]));
-        bb[i] = spk;
-        }
-
-      // Loop over the wedges
-      for(double xi = 0; xi < xiMax; xi += xiStep)
+      // Store pointers to three streamlines
+      StreamLine &sl0 = streams[side][pts[0]];
+      StreamLine &sl1 = streams[side][pts[1]];
+      StreamLine &sl2 = streams[side][pts[2]];
+      
+      // Loop over all the streamlines
+      for(int i = 0; i < sl0.size() - 1; i++)
         {
         Vec x[3], b[3];
-
-        for(size_t i=0;i<3;i++)
-          {
-          x[i] = xx[i] + xi * bb[i];
-          b[i] = xx[i] + (xi + xiStep) * bb[i];
-          }
+        x[0] = sl0[i];   x[1] = sl1[i];   x[2] = sl2[i];
+        b[0] = sl0[i+1]; b[1] = sl1[i+1]; b[2] = sl2[i+1];
 
         // Add the vertices to each of the wedge's quad faces
         Vec q[3];
@@ -328,6 +384,7 @@ int main(int argc, char *argv[])
           }
         else if(extractDepth)
           {
+          double xi = xiStep * i;
           val[0] = val[1] = val[2] = side ? -xi : xi;
           val[3] = val[4] = val[5] = side ? -(xi + xiStep) : (xi + xiStep);
           }

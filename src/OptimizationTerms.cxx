@@ -521,7 +521,7 @@ SymmetricClosestPointMatchTerm
   // Set up the clustering
   vtkSmartPointer<vtkQuadricClustering> clu =
       vtkSmartPointer<vtkQuadricClustering>::New();
-  clu->SetInput(xMesh);
+  clu->SetInputData(xMesh);
   clu->SetDivisionOrigin(xMesh->GetCenter());
   double spacing = xMesh->GetLength() / nClusterDivisions;
   clu->SetDivisionSpacing(spacing, spacing, spacing);
@@ -530,7 +530,7 @@ SymmetricClosestPointMatchTerm
   // Save the samples
   vtkSmartPointer<vtkPolyDataWriter> wr =
       vtkSmartPointer<vtkPolyDataWriter>::New();
-  wr->SetInput(clu->GetOutput());
+  wr->SetInputConnection(clu->GetOutputPort());
   wr->SetFileName("clusty.vtk");
   wr->Update();
 
@@ -3827,7 +3827,7 @@ void MedialOptimizationProblem::DumpGradientMesh()
     }
 
   vtkPolyDataWriter *write = vtkPolyDataWriter::New();
-  write->SetInput(poly);
+  write->SetInputData(poly);
   write->SetFileName(fnout);
   write->Update();
 

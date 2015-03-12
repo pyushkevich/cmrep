@@ -225,7 +225,7 @@ void ExportMedialMeshToVTK(
     }
 
   vtkPolyDataWriter *fltWriter = vtkPolyDataWriter::New();
-  fltWriter->SetInput(pMedial);
+  fltWriter->SetInputData(pMedial);
   fltWriter->SetFileName(file);
   fltWriter->SetFileTypeToBinary();
   fltWriter->Update();
@@ -444,7 +444,7 @@ void ExportBoundaryMeshToVTK(
     }
 
   vtkPolyDataWriter *fltWriter = vtkPolyDataWriter::New();
-  fltWriter->SetInput(pMedial);
+  fltWriter->SetInputData(pMedial);
   fltWriter->SetFileName(file);
   fltWriter->SetFileTypeToBinary();
   fltWriter->Update();

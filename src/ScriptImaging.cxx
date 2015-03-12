@@ -392,7 +392,7 @@ GenerateContour(FloatImage *image)
   m_MarchingCubesFilter->ComputeGradientsOff();
   m_MarchingCubesFilter->SetNumberOfContours(1);
   m_MarchingCubesFilter->SetValue(0,0.0f);
-  m_MarchingCubesFilter->SetInput(m_VTKImporter->GetOutput());
+  m_MarchingCubesFilter->SetInputConnection(m_VTKImporter->GetOutputPort());
 
   // Create a transform into RAS coordinates
   vnl_matrix_fixed<double, 4, 4> vtk2nii =
@@ -406,7 +406,7 @@ GenerateContour(FloatImage *image)
 
   m_TransformFilter = vtkTransformPolyDataFilter::New();
   m_TransformFilter->SetTransform(m_Transform);
-  m_TransformFilter->SetInput(m_MarchingCubesFilter->GetOutput());
+  m_TransformFilter->SetInputConnection(m_MarchingCubesFilter->GetOutputPort());
   m_TransformFilter->Update();
 
   cout << "Transform: " << m_Transform << endl;

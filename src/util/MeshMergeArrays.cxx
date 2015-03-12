@@ -54,7 +54,7 @@ void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
-  writer->SetInput(mesh);
+  writer->SetInputData(mesh);
   writer->Update();
 }
 
@@ -63,7 +63,7 @@ void WriteMesh<>(vtkPolyData *mesh, const char *fname)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
-  writer->SetInput(mesh);
+  writer->SetInputData(mesh);
   writer->Update();
 }
 

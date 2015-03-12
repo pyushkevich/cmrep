@@ -63,29 +63,29 @@ void WriteVTKData(vtkPolyData *data, string fn)
   if(fn.rfind(".byu") == fn.length() - 4)
     {
     vtkBYUWriter *writer = vtkBYUWriter::New();
-    writer->SetFileName(fn.c_str());
-    writer->SetInput(data);
+    writer->SetGeometryFileName(fn.c_str());
+    writer->SetInputData(data);
     writer->Update();
     }
   else if(fn.rfind(".stl") == fn.length() - 4)
     {
     vtkSTLWriter *writer = vtkSTLWriter::New();
     writer->SetFileName(fn.c_str());
-    writer->SetInput(data);
+    writer->SetInputData(data);
     writer->Update();
     }
   else if(fn.rfind(".vtk") == fn.length() - 4)
     {
     vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
     writer->SetFileName(fn.c_str());
-    writer->SetInput(data);
+    writer->SetInputData(data);
     writer->Update();
     }
   else if(fn.rfind(".obj") == fn.length() - 4)
     {
     vtkRenderer *renderer = vtkRenderer::New();
     vtkPolyDataMapper *myDataMapper = vtkPolyDataMapper::New();
-    myDataMapper->SetInput(data);
+    myDataMapper->SetInputData(data);
     vtkActor *myActor = vtkActor::New();
     myActor->SetMapper(myDataMapper);
     renderer->AddActor(myActor);
@@ -102,7 +102,7 @@ void WriteVTKData(vtkPolyData *data, string fn)
     {
     vtkRenderer *renderer = vtkRenderer::New();
     vtkPolyDataMapper *myDataMapper = vtkPolyDataMapper::New();
-    myDataMapper->SetInput(data);
+    myDataMapper->SetInputData(data);
     vtkActor *myActor = vtkActor::New();
     myActor->SetMapper(myDataMapper);
     renderer->AddActor(myActor);

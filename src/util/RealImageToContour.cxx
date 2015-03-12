@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
 
   // Run marching cubes on the input image
   vtkMarchingContourFilter *fltMarching = vtkMarchingContourFilter::New();
-  fltMarching->SetInput(fltImport->GetOutput());
+  fltMarching->SetInputConnection(fltImport->GetOutputPort());
   fltMarching->ComputeScalarsOff();
   fltMarching->ComputeGradientsOff();
   fltMarching->ComputeNormalsOn();
@@ -140,7 +140,7 @@ int main(int argc, char *argv[])
   
   // Create the transform filter
   vtkTransformPolyDataFilter *fltTransform = vtkTransformPolyDataFilter::New();
-  fltTransform->SetInput(fltMarching->GetOutput());
+  fltTransform->SetInputConnection(fltMarching->GetOutputPort());
  
   // Compute the transform from VTK coordinates to NIFTI/RAS coordinates
   vnl_matrix_fixed<double, 4, 4> vtk2nii = 

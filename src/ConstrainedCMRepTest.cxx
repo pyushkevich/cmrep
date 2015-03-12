@@ -124,7 +124,7 @@ ClosestPointMatcher
   // Set up the clustering
   vtkSmartPointer<vtkQuadricClustering> clu =
       vtkSmartPointer<vtkQuadricClustering>::New();
-  clu->SetInput(target);
+  clu->SetInputData(target);
   clu->SetDivisionOrigin(target->GetCenter());
   double spacing = target->GetLength() / nClusterDivisions;
   clu->SetDivisionSpacing(spacing, spacing, spacing);
@@ -136,7 +136,7 @@ ClosestPointMatcher
   // Save the samples
   vtkSmartPointer<vtkPolyDataWriter> wr =
       vtkSmartPointer<vtkPolyDataWriter>::New();
-  wr->SetInput(clu->GetOutput());
+  wr->SetInputConnection(clu->GetOutputPort());
   wr->SetFileName("clusty.vtk");
   wr->Update();
 }
@@ -252,7 +252,7 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
   // Save the samples
   vtkSmartPointer<vtkPolyDataWriter> wr =
       vtkSmartPointer<vtkPolyDataWriter>::New();
-  wr->SetInput(pd);
+  wr->SetInputData(pd);
   wr->SetFileName("pointmatch.vtk");
   wr->Update();
 
@@ -461,7 +461,7 @@ void SaveSamples(std::vector<std::vector<Expression *> > sampleX,
   poly->GetPointData()->SetScalars(arr);
 
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(poly);
+  writer->SetInputData(poly);
   writer->SetFileName(filename);
   writer->Update();
 
@@ -499,7 +499,7 @@ void SaveGradient(
   poly->GetPointData()->SetScalars(arr);
 
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(poly);
+  writer->SetInputData(poly);
   writer->SetFileName(filename);
   writer->Update();
 }
@@ -764,7 +764,7 @@ void SaveCircumcenterMesh(VarVecArray &CC, VarVec &CR, VarVecArray &CCBC)
   out_poly->GetPointData()->AddArray(arrBC);
 
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(out_poly);
+  writer->SetInputData(out_poly);
   writer->SetFileName("circumcenter.vtk");
   writer->Update();
 }
@@ -989,7 +989,7 @@ void SaveBoundaryMesh(const char *file,
     }
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
-  writer->SetInput(pd);
+  writer->SetInputData(pd);
   writer->SetFileName(file);
   writer->Update();
 }
@@ -1071,7 +1071,7 @@ void SaveMedialMesh(const char *file,
     }
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
-  writer->SetInput(pd);
+  writer->SetInputData(pd);
   writer->SetFileName(file);
   writer->Update();
 }
@@ -1160,7 +1160,7 @@ void BCMTemplate::Save(const char *file)
     }
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
-  writer->SetInput(pd);
+  writer->SetInputData(pd);
   writer->SetFileName(file);
   writer->Update();
 }
@@ -1493,7 +1493,7 @@ void FixCmrepMedialMesh(std::string fnInput, std::string fnOutput)
   SubdivisionSurface::ExportLevelToVTK(mfix, pd_new);
 
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInput(pd_new);
+  writer->SetInputData(pd_new);
   writer->SetFileName(fnOutput.c_str());
   writer->Update();
 
