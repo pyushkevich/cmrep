@@ -519,6 +519,8 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
       }
     }
 
+  int n_flips = 0;
+
 
   // Proceed while there are edges on the queue
   while(edge_que.size())
@@ -577,7 +579,12 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
       // If the cotan weight is less than zero, we have to flip
       if(cotan_weight < 0)
         {
-        cout << "Flip " << t << " edge " << q << endl; 
+        // cout << "Flip " << t << " edge " << q << endl; 
+        n_flips++;
+        if(n_flips > 0 && n_flips % 1000 == 0)
+          {
+          cout << "Flipped " << n_flips << "\t Que Size: " << edge_que.size() << endl;
+          }
 
         // Create a pair of triangles and perform all the flip operations
         Triangle tnew, toppnew;
@@ -658,6 +665,7 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
         }
       }
     }
+  cout << endl;
 }
 
 

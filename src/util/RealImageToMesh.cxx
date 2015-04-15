@@ -14,6 +14,11 @@
 #include <iostream>
 #include "itkLinearInterpolateImageFunction.h"
 #include "vtkImplicitFunction.h"
+#include "vtkCleanPolyData.h"
+#include "vtkTriangleFilter.h"
+#include "vtkCell.h"
+
+#include "MeshTraversal.h"
 
 #include "itk_to_nifti_xform.h"
 #include <vnl/vnl_inverse.h>
@@ -26,6 +31,8 @@ int usage()
   cout << "Options: " << endl;
   cout << "  -c clipimage.img   : clip output (keep part where clipimage > 0" << endl;
   cout << "  -v                 : export mesh in voxel coordinates (not physical)" << endl;
+  cout << "  -k                 : apply clean filter to the mesh" << endl;
+  cout << "  -d                 : perform Delaunay edge flipping" << endl;
   return -1;
 }
 
@@ -78,15 +85,24 @@ int main(int argc, char *argv[])
   // Clip image
   const char *imClip = NULL;
   bool voxelSpace = false;
+  bool flag_clean = false, flag_delaunay = false;
   for(int i = 1; i < argc - 3; i++)
     {
     if(!strcmp(argv[i], "-c"))
       {
       imClip = argv[++i];
       }
-    if(!strcmp(argv[i], "-v"))
+    else if(!strcmp(argv[i], "-v"))
       {
       voxelSpace = true;
+      }
+    else if(!strcmp(argv[i], "-d"))
+      {
+      flag_delaunay = true;
+      }
+    else if(!strcmp(argv[i], "-k"))
+      {
+      flag_clean = true;
       }
     else 
       { 
@@ -134,12 +150,73 @@ int main(int argc, char *argv[])
   fltMarching->SetValue(0,cut);
   fltMarching->Update();
 
-  // If there is a clip filter, apply it
-  
+  vtkPolyData *pipe_tail = fltMarching->GetOutput();
 
+  // If the clean option is requested, use it
+  if(flag_clean || flag_delaunay) 
+    {
+    vtkTriangleFilter *trifi = vtkTriangleFilter::New();
+    trifi->SetInputData(pipe_tail);
+    trifi->PassLinesOff();
+    trifi->PassVertsOff();
+    trifi->Update();
+
+    vtkCleanPolyData *clean = vtkCleanPolyData::New();
+    clean->SetInputConnection(trifi->GetOutputPort());
+    clean->PointMergingOn();
+    clean->SetTolerance(0.0);
+    clean->Update();
+
+    vtkTriangleFilter *trifi2 = vtkTriangleFilter::New();
+    trifi2->SetInputConnection(clean->GetOutputPort());
+    trifi2->PassLinesOff();
+    trifi2->PassVertsOff();
+    trifi2->Update();
+    pipe_tail = trifi2->GetOutput();
+    }
+
+  if(flag_delaunay)
+    {
+
+    typedef vnl_vector_fixed<double, 3> Vec;
+    Vec *X = new Vec[pipe_tail->GetNumberOfPoints()];
+    for(size_t i = 0; i < pipe_tail->GetNumberOfPoints(); i++)
+      for(size_t k = 0; k < 3; k++)
+        X[i][k] = pipe_tail->GetPoint(i)[k];
+
+    // Generate the mesh object
+    TriangleMesh bmesh;
+    TriangleMeshGenerator gen(&bmesh, pipe_tail->GetNumberOfPoints());
+    for(int i = 0; i < pipe_tail->GetNumberOfCells(); i++)
+      {
+      vtkCell *c = pipe_tail->GetCell(i);
+      gen.AddTriangle(c->GetPointId(0), c->GetPointId(1), c->GetPointId(2));
+      }
+    gen.GenerateMesh();
+
+    // Perform Delaunay
+    bmesh.MakeDelaunay(X);
+
+    // Set new cell data on the mesh
+    pipe_tail->DeleteCells();
+    pipe_tail->Allocate(bmesh.triangles.size());
+    for(int i = 0; i < bmesh.triangles.size(); i++)
+      {
+      Triangle &tri = bmesh.triangles[i];
+      vtkIdType pts[3];
+      pts[0] = tri.vertices[0];
+      pts[1] = tri.vertices[1];
+      pts[2] = tri.vertices[2];
+      pipe_tail->InsertNextCell(VTK_TRIANGLE, 3, pts);
+      }
+
+    pipe_tail->BuildCells();
+    pipe_tail->BuildLinks();
+    }
+  
   // Create the transform filter
   vtkTransformPolyDataFilter *fltTransform = vtkTransformPolyDataFilter::New();
-  fltTransform->SetInputConnection(fltMarching->GetOutputPort());
+  fltTransform->SetInputData(pipe_tail);
  
   // Compute the transform from VTK coordinates to NIFTI/RAS coordinates
   typedef vnl_matrix_fixed<double, 4, 4> Mat44;
