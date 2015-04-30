@@ -46,9 +46,11 @@ IF(USE_PARDISO)
     # On Linux, Lapack is also required
     INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
 
+    FIND_LIBRARY(GOMP_LIB gomp DOC "The location of the libgomp library")
+
     # Set the PDE libraries variable
     IF(PARDISO_LIB AND LAPACK_FOUND)
-      SET(PDE_LIBS ${PARDISO_LIB} ${LAPACK_LIBS})
+      SET(PDE_LIBS ${PARDISO_LIB} ${LAPACK_LIBS} ${GOMP_LIB})
     ENDIF(PARDISO_LIB AND LAPACK_FOUND)
 
   ENDIF(WIN32)
@@ -177,6 +179,11 @@ IF(GLUT_FOUND)
   LINK_DIRECTORIES(${GLUT_INCLUDE_DIR})
 ENDIF(GLUT_FOUND)
 
+FIND_PACKAGE(OpenGL)
+IF(OpenGL_FOUND)
+
+ENDIF(OpenGL_FOUND)
+
 #  ${CMREP_SOURCE_DIR}/extras/afront/tmp/
 
 # Include subdirectories
@@ -243,35 +250,53 @@ ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 # Define the VTK libraries
 SET(VTK_LIBRARIES
   vtkChartsCore
-  vtkCommonCore
-  vtkRenderingCore
   vtkRenderingFreeType
   vtkRenderingFreeTypeOpenGL
   vtkRenderingLOD
   vtkRenderingOpenGL
   vtkRenderingVolume
   vtkRenderingVolumeOpenGL
-  vtkFiltersCore
-  vtkImagingCore
+  vtkfreetype
+  vtkftgl
   vtkViewsCore
   vtkViewsContext2D
-  vtkIOCore
+  vtkInteractionStyle
   vtkIOExport
   vtkIOGeometry
-  vtkIOLegacy)
+  vtkIOLegacy
+  vtkIOImage
+  vtkIOCore
+  vtkImagingCore
+  vtkFiltersModeling
+  vtkFiltersGeneral
+  vtkFiltersCore
+  vtkRenderingFreeType
+  vtkRenderingCore
+  vtkCommonExecutionModel
+  vtkCommonDataModel
+  vtkCommonMisc
+  vtkCommonSystem
+  vtkCommonTransforms
+  vtkCommonMath
+  vtkCommonCore
+  vtksys
+)
 
 # Set the list of required libraries
 LINK_LIBRARIES(
-  cmrep
   ${ITK_LIBRARIES}
-  ${VTK_LIBRARIES})
+  ${VTK_LIBRARIES}
+  ${OPENGL_LIBRARIES}
+  ${OPENGL_glu_LIBRARY}
+  ${SYSTEM_LIBS}
+  cmrep)
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
 TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
-TARGET_LINK_LIBRARIES(cmrep_fit ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_fit cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
 TARGET_LINK_LIBRARIES(cmrep_getmesh ${PDE_LIBS} toms611)

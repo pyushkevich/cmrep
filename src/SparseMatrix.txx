@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 
 template<class TVal>
 ImmutableSparseArray<TVal>

@@ -577,7 +577,7 @@ SymmetricClosestPointMatchTerm
   // Perform the closest to target computation
 
   // Output vector
-  xClosestToTarget.resize(xMeshReduced->GetNumberOfPoints());
+  xClosestToTarget.reserve(xMeshReduced->GetNumberOfPoints());
 
   // Create the polydata rep of the boundary
   vtkSmartPointer<vtkPolyData> poly = vtkSmartPointer<vtkPolyData>::New();

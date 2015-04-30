@@ -1,5 +1,7 @@
 #include "PardisoInterface.h"
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
 
 
 using namespace std;
@@ -38,14 +40,23 @@ GenericRealPARDISO::GenericRealPARDISO(int type)
 
   // Set the type of matrix to unsymmetric real
   MTYPE = type; 
+  SOLVER = 0;
+  int ERROR = 0;
 
   // Clear the parameter array
   memset(IPARM, 0, sizeof(int) * 64);
 
   // Initialize PARDISO to default values
-  pardisoinit_(PT,&MTYPE,IPARM);
+  pardisoinit_(PT,&MTYPE,&SOLVER,IPARM,DPARM,&ERROR);
+  switch(ERROR)
+    {
+    case -10 : cerr << "No PARDISO license file found" << endl; exit(-1);
+    case -11 : cerr << "PARDISO license is expired" << endl; exit(-1);
+    case -12 : cerr << "PARDISO license username mismatch" << endl; exit(-1);
+    }
 
   // Specify the number of processors on the system (1)
+  IPARM[0] = 0;
   IPARM[2] = 1;
 
   flagPardisoCalled = false;
@@ -77,7 +88,7 @@ GenericRealPARDISO
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     xMatrix, idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR, DPARM);
 
   // Record the parameter for next phase
   ResetIndices();
@@ -118,7 +129,7 @@ GenericRealPARDISO
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(mat.GetSparseData()), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR, DPARM);
 
   // Set the flag so we know that pardiso was launched before
   flagPardisoCalled = true;
@@ -135,7 +146,7 @@ GenericRealPARDISO
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR, DPARM);
 
   // Record the parameter for next phase
   this->xMatrix = xMatrix;
@@ -152,7 +163,7 @@ GenericRealPARDISO
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR, DPARM);
 }
 
 void                              
@@ -162,11 +173,13 @@ GenericRealPARDISO
   // Set the various parameters
   int MAXFCT = 1, MNUM = 1, PHASE = 33, N = n, NRHS = nRHS, PERROR = 0; 
   int MSGLVL = (flagVerbose) ? 1 : 0; 
+
+  IPARM[7] = 1;
   
   // Perform the symbolic factorization phase
   pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
     const_cast<double *>(xMatrix), idxRows, idxCols,
-    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR);
+    NULL, &NRHS, IPARM, &MSGLVL, xRhs, xSoln, &PERROR, DPARM);
 }
 
 GenericRealPARDISO::
@@ -180,7 +193,7 @@ GenericRealPARDISO::
   if(flagPardisoCalled)
     pardiso_(PT, &MAXFCT, &MNUM, &MTYPE, &PHASE, &N, 
       const_cast<double *>(xMatrix), idxRows, idxCols,
-      NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR);
+      NULL, &NRHS, IPARM, &MSGLVL, NULL, NULL, &PERROR, DPARM);
 
   // Reset the arrays
   ResetIndices();

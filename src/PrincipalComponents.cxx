@@ -1,5 +1,6 @@
 #include "PrincipalComponents.h"
 #include "vnl/algo/vnl_symmetric_eigensystem.h"
+#include <cstdio>
 
 bool ReadMatrixFile(vnl_matrix<double> &mat, const char *file)
 {

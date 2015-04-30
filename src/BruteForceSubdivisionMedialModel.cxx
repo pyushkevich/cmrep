@@ -114,7 +114,12 @@ BruteForceSubdivisionMedialModel
       }
 
     if(!flagAllowErrors && !a.flagValid)
+      {
+      std::cerr << "Atom " << i << " is invalid in ComputeAtoms" << std::endl;
+      std::cerr << "  Edge atom? " << a.flagCrest << std::endl;
+      std::cerr << "  GradMagRSq " << a.xGradRMagSqr << std::endl;
       throw MedialModelException("Invalid Atom in BruteForceModel");
+      }
     }
 }
 

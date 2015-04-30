@@ -23,9 +23,11 @@
 #else
 
 extern "C" {
-  void pardisoinit_(size_t *, int *, int *);
-  void pardiso_(size_t *, int *, int *, int *, int *, int *, double *, int *, int *, 
-    int *, int *, int *, int *, double *, double *, int*);
+  void pardisoinit_ (void * , int * , int * , int * , double * , int *);
+
+  void pardiso_ ( void * , int * , int * , int * , int * , int * ,
+    double * , int * , int * , int * , int * , int * ,
+    int * , double * , double * , int * , double *);
 }
 
 #endif
@@ -83,9 +85,11 @@ protected:
 #endif
 
   /** Internal data for PARDISO */
-  size_t PT[64];
+  void *PT[64];
   int MTYPE;
+  int SOLVER;
   int IPARM[64];
+  double DPARM[64];
 
   // Storage for data in intermediate steps
   int n, *idxRows, *idxCols;

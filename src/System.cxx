@@ -5,6 +5,8 @@
 #include <signal.h>
 #include <execinfo.h>
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace std;
 
