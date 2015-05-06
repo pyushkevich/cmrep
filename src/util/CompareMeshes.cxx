@@ -86,7 +86,7 @@ vtkPolyData *ReadVTKData(string fn)
 
   // Convert the model to triangles
   vtkTriangleFilter *tri = vtkTriangleFilter::New();
-  tri->SetInput(p1);
+  tri->SetInputData(p1);
   cout << "Converting to triangles ..." << endl;
   tri->Update();
   vtkPolyData *pd = tri->GetOutput();

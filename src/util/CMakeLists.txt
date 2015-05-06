@@ -19,8 +19,8 @@ ADD_EXECUTABLE(meshcluster
   ReadWriteVTK.cxx 
   ${CMREP_SOURCE_DIR}/src/Registry.cxx)
 
-# ADD_EXECUTABLE(meshdiff CompareMeshes.cxx DrawFillInside.cpp DrawTriangles.cpp)
-# TARGET_LINK_LIBRARIES(meshdiff ${ITK_LIBRARIES} ${VTK_LIBRARIES})
+ADD_EXECUTABLE(meshdiff CompareMeshes.cxx DrawFillInside.cpp DrawTriangles.cpp)
+#TARGET_LINK_LIBRARIES(meshdiff ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
 
 # Add installation targets
