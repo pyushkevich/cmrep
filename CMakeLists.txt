@@ -250,14 +250,10 @@ ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 # Define the VTK libraries
 SET(VTK_LIBRARIES
   vtkChartsCore
-  vtkRenderingFreeType
-  vtkRenderingFreeTypeOpenGL
   vtkRenderingLOD
   vtkRenderingOpenGL
   vtkRenderingVolume
   vtkRenderingVolumeOpenGL
-  vtkfreetype
-  vtkftgl
   vtkViewsCore
   vtkViewsContext2D
   vtkInteractionStyle
@@ -267,11 +263,15 @@ SET(VTK_LIBRARIES
   vtkIOImage
   vtkIOCore
   vtkImagingCore
-  vtkFiltersModeling
-  vtkFiltersGeneral
-  vtkFiltersCore
+  vtkRenderingFreeTypeOpenGL
   vtkRenderingFreeType
   vtkRenderingCore
+  vtkFiltersModeling
+  vtkFiltersExtraction
+  vtkFiltersSources
+  vtkFiltersGeometry
+  vtkFiltersGeneral
+  vtkFiltersCore
   vtkCommonExecutionModel
   vtkCommonDataModel
   vtkCommonMisc
@@ -280,6 +280,9 @@ SET(VTK_LIBRARIES
   vtkCommonMath
   vtkCommonCore
   vtksys
+  vtkftgl
+  vtkfreetype
+  vtkzlib
 )
 
 # Set the list of required libraries

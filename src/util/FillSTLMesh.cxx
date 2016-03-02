@@ -4,11 +4,6 @@
 
 #include <vtkCellArray.h>
 #include <vtkPolyData.h>
-#include <vtkLODActor.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkPolyDataMapper.h>
 #include <vtkBYUReader.h>
 #include <vtkSTLReader.h>
 #include <vtkPolyDataReader.h>
@@ -55,40 +50,9 @@ int usage()
   cout << "   -r NN NN NN                 Image resolution in x,y,z in pixels" << endl;
   cout << "   -a NN NN NN XX              Automatic bounding box computation. First three " << endl;
   cout << "                               parameters are the voxel size, the last is the margin in mm" << endl;
-  cout << "   -v                          Visualize (render) the STL mesh on the screen" << endl;
   cout << "   -ref file                   reference file for the origin, size, resolution, etc." << endl;
   cout << "   -c number                   set segmentation mask value (default: 1) " << endl;
   return -1;
-}
-
-void drawPolyData(vtkPolyData *poly)
-{
-  vtkPolyDataMapper *mapper = vtkPolyDataMapper::New();
-  mapper->SetInputData(poly);
-
-  vtkLODActor *actor = vtkLODActor::New();
-  actor->SetMapper(mapper);
-
-  vtkRenderer *ren = vtkRenderer::New();
-  ren->AddActor(actor);
-  ren->SetBackground(0.1,0.2,0.4);
-
-  vtkRenderWindow *renWin = vtkRenderWindow::New();
-  renWin->AddRenderer(ren);
-  renWin->SetSize(500,500);
-
-  vtkRenderWindowInteractor *iren = vtkRenderWindowInteractor::New();
-  iren->SetRenderWindow(renWin);
-  iren->Initialize();
-
-  renWin->Render();
-  iren->Start();
-
-  iren->Delete();
-  renWin->Delete();
-  ren->Delete();
-  actor->Delete();
-  mapper->Delete();
 }
 
 int main(int argc, char **argv)
@@ -98,7 +62,7 @@ int main(int argc, char **argv)
   double xAutoSpacing[3] = {0,0,0};
   double xAutoMargin = 0;
   int res[3] = {128,128,128};
-  bool doRender = false, doFloodFill = false, flagAutoSize = false;
+  bool doFloodFill = false, flagAutoSize = false;
 
   bool useRef = false;
   int segColor = 1;  // default value for segmentation mask
@@ -170,10 +134,6 @@ int main(int argc, char **argv)
         xAutoMargin = atof(argv[++i]);
         flagAutoSize = true;
         }      
-      else if(arg == "-v")
-        {
-        doRender = true;
-        }
       else if(arg == "-f")
         {
         doFloodFill = true;
@@ -308,10 +268,6 @@ int main(int argc, char **argv)
   cout << "Converting to triangles ..." << endl;
   tri->Update();
   vtkPolyData *pd = tri->GetOutput();
-
-  // Display the polydata that we loaded
-  if(doRender)
-    drawPolyData(pd);
 
   // Get the extents of the data
   cout << "STL mesh bounds: " << endl;

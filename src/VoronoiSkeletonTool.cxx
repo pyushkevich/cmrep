@@ -14,11 +14,6 @@
 #include <vtkCellArray.h>
 #include <vtkCellDataToPointData.h>
 #include <vtkPolyData.h>
-#include <vtkLODActor.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkPolyDataMapper.h>
 #include <vtkBYUReader.h>
 #include <vtkSTLReader.h>
 #include <vtkPolyDataWriter.h>
