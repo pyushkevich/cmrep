@@ -46,6 +46,8 @@
 #include <itkImageFileWriter.h>
 #include <itkImageRegionIterator.h>
 #include <itkImageRegionConstIteratorWithIndex.h>
+#include <itkLinearInterpolateImageFunction.h>
+#include <itkVectorImage.h>
 
 #ifndef vtkFloatingPointType
 #define vtkFloatingPointType vtkFloatingPointType
@@ -282,9 +284,21 @@ int usage()
   cout << "                         The effect is to reduce the number of vertices in the skeleton" << endl;
   cout << "                         Parameter n_bins is the number of bins in each dimension" << endl;
   cout << "                         A good value for n_bins is 20-50" << endl;
+  cout << "Other Options: " << endl;
+  cout << "    -S image array mode  Sample from image 'image' and store as array 'array'" << endl;
+  cout << "                         mode is one of 'mean', 'max'. Must be used together with -T command" << endl;
   return -1;
 }
   
+// Sampling info
+enum SamplingMode {
+  MEAN, MAX 
+};
+
+struct SamplingStruct {
+  string fnImage, array;
+  SamplingMode mode;
+};
 
 int main(int argc, char *argv[])
 {
@@ -295,6 +309,9 @@ int main(int argc, char *argv[])
   double xPrune = 2.0, xSearchTol = 1e-6;
   int nComp = 0, nDegrees = 0, nRandSamp = 0, nBins = 0;
   bool flagGeodFull = false;
+
+  // Sampling stuff
+  vector<SamplingStruct> sampling;
 
   // Check that there are at least three command line arguments
   if(argc < 3) return usage();
@@ -335,6 +352,18 @@ int main(int argc, char *argv[])
       fnImgRef = argv[++iArg];
       fnImgThick = argv[++iArg];
       fnImgDepth = argv[++iArg];
+      }
+    else if(arg == "-S")
+      {
+      SamplingStruct ss;
+      ss.fnImage = argv[++iArg];
+      ss.array = argv[++iArg];
+      string mode = argv[++iArg];
+      if(mode == "mean") ss.mode = MEAN;
+      else if(mode == "max") ss.mode = MAX;
+      else
+        cerr << "Bad mode for -S: " << ss.mode << endl;
+      sampling.push_back(ss);
       }
     else if(arg == "-e")
       {
@@ -716,6 +745,52 @@ int main(int argc, char *argv[])
     loc->CacheCellBoundsOn();
     loc->BuildLocator();
 
+    // Vector of sampling images and arrays
+    typedef itk::VectorImage<double, 3> SampleImageType;
+    vector<SampleImageType::Pointer> imgSam(sampling.size(), NULL);
+    vector<vtkDoubleArray *> daSam(sampling.size(), NULL);
+
+    // Interpolators
+    typedef itk::LinearInterpolateImageFunction<SampleImageType, double> SampleInterpType;
+    vector<SampleInterpType::Pointer> interp(sampling.size(), NULL);
+
+    // Vector of step sizes for each image
+    vector<double> stepsize(sampling.size(), 0);
+
+    // Create and add all the sampling arrays 
+    for(int i = 0; i < sampling.size(); i++)
+      {
+      // Load the image that needs to be sampled
+      typedef itk::ImageFileReader<SampleImageType> SampleReaderType;
+      SampleReaderType::Pointer reader = SampleReaderType::New();
+      reader->SetFileName(sampling[i].fnImage.c_str());
+      reader->Update();
+      imgSam[i] = reader->GetOutput(); 
+
+      // Interpolator
+      interp[i] = SampleInterpType::New();
+      interp[i]->SetInputImage(imgSam[i]);
+
+      // Create an output array
+      int ncomp = imgSam[i]->GetNumberOfComponentsPerPixel();
+      daSam[i] = vtkDoubleArray::New();
+      daSam[i]->SetNumberOfComponents(ncomp);
+      daSam[i]->SetNumberOfTuples(bndraw->GetNumberOfPoints());
+      daSam[i]->SetName(sampling[i].array.c_str());
+
+      // Compute step size - smallest of spacing values
+      double minspc = 
+        std::min(
+          std::min(imgSam[i]->GetSpacing()[0], imgSam[i]->GetSpacing()[1]),
+          imgSam[i]->GetSpacing()[2]);
+
+      // Arbitrary - set to 1/4 voxel extent
+      stepsize[i] = minspc / 4;
+
+      // Add the array to the boundary mesh
+      bndraw->GetPointData()->AddArray(daSam[i]);
+      }
+
     // Compute thickness values
     for(size_t i = 0; i < (size_t) bndraw->GetNumberOfPoints(); i++)
       {
@@ -728,6 +803,64 @@ int main(int argc, char *argv[])
 
       d = sqrt(d2);
       daRad->InsertNextTuple(&d);
+
+      // Sample along the interval between point i and point xs
+      for(int j = 0; j < imgSam.size(); j++)
+        {
+        int n_steps = std::max((int) (0.5 + d / stepsize[j]), 5);
+
+        // Current sample
+        SampleImageType::PixelType sample, sample_sum, sample_max;
+
+        // Ncomp
+        int ncomp = imgSam[j]->GetNumberOfComponentsPerPixel();
+
+        for(int k = 0; k < n_steps; k++)
+          {
+          // Interpolate a point here
+          double t = k / (n_steps - 1.0);
+          itk::Point<double, 3> pt;
+          pt[0] = bndraw->GetPoint(i)[0] * t + xs[0] * (1-t);
+          pt[1] = bndraw->GetPoint(i)[1] * t + xs[1] * (1-t);
+          pt[2] = bndraw->GetPoint(i)[2] * t + xs[2] * (1-t);
+
+          // Map point to DICOM coordinates from NIFTI coordinates - hard coded
+          pt[0] *= -1; pt[1] *= -1;
+
+          // Map to voxel continuous index
+          SampleInterpType::ContinuousIndexType cix;
+          imgSam[j]->TransformPhysicalPointToContinuousIndex(pt, cix);
+          sample = interp[j]->EvaluateAtContinuousIndex(cix);
+
+          // If first point, store
+          if(k == 0)
+            {
+            sample_sum = sample;
+            sample_max = sample;
+            }
+          else
+            {
+            for(int c = 0; c < ncomp; c++)
+              {
+              sample_sum[c] += sample[c];
+              sample_max[c] = std::max(sample_max[c], sample[c]);
+              }
+            }
+          }
+
+        // Store the information
+        for(int c = 0; c < ncomp; c++)
+          {
+          if(sampling[j].mode == MEAN)
+            {
+            daSam[j]->SetComponent(i, c, sample_sum[c] / n_steps);
+            }
+          else
+            {
+            daSam[j]->SetComponent(i, c, sample_max[c]);
+            }
+          }
+        }
       }
 
     // Add array to boundary data
