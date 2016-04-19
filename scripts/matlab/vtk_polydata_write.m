@@ -21,7 +21,7 @@ function vtk_polydata_write(file, p)
     for i = 1:length(cell_types)
         pc = p.cells.(cell_types{i});
         n_cell = length(pc);
-	total_cells = total_cells + n_cell;
+	    total_cells = total_cells + n_cell;
         n_store = sum(arrayfun(@(x)length(x{1}), pc)) + n_cell;
         fprintf(fid, '%s %d %d\n', cell_types{i}, n_cell, n_store);
         for j = 1:n_cell

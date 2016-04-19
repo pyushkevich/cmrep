@@ -2,7 +2,6 @@
 #include "itkImage.h"
 #include "itkLinearInterpolateImageFunction.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
-#include "itkOrientedRASImage.h"
 #include <vtkPolyData.h>
 #include <vtkUnstructuredGrid.h>
 #include <vtkUnstructuredGridReader.h>
@@ -11,6 +10,7 @@
 #include <vtkPolyDataWriter.h>
 #include "vtkPointData.h"
 #include "vtkFloatArray.h"
+#include "itkVectorImage.h"
 #include "ReadWriteVTK.h"
 #include <iostream>
 
@@ -23,6 +23,7 @@ int usage()
   cout << "   -rms i n       : Root mean square mode: recursively computes RMS of n images, e.g. " << endl;
   cout << "                    mesh_image_sample -rms 0 5 mesh.vtk sample.img mesh.vtk arr " << endl;
   cout << "                    mesh_image_sample -rms 1 5 mesh.vtk sample.img mesh.vtk arr " << endl;
+  cout << "   -i n           : Interpolation, 0 for nearest neighbor, 1 for linear (*default*)" << endl;
   return -1;
 }
 
@@ -72,13 +73,13 @@ void WriteMesh<>(vtkPolyData *mesh, const char *fname)
 }
 
 template <class TMeshType>
-int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms)
+int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp_mode)
 {
   // Read the input mesh
   TMeshType *mesh = ReadMesh<TMeshType>(argv[argc-4]);
 
   // Read the input image
-  typedef itk::OrientedRASImage<float, 3> ImageType;
+  typedef itk::VectorImage<float, 3> ImageType;
   typedef itk::ImageFileReader<ImageType> ReaderType;
   ReaderType::Pointer fltReader = ReaderType::New();
   fltReader->SetFileName(argv[argc-3]);
@@ -86,26 +87,37 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms)
   ImageType::Pointer imgInput = fltReader->GetOutput();
 
   // Create an interpolation function
-  //typedef itk::LinearInterpolateImageFunction<ImageType, double> InterpType;
-  typedef itk::NearestNeighborInterpolateImageFunction<ImageType, double> InterpType;
-  InterpType::Pointer interp = InterpType::New();
+  typedef itk::InterpolateImageFunction<ImageType, double> InterpType;
+  InterpType::Pointer interp;
+  if(interp_mode == 0)
+    interp = itk::NearestNeighborInterpolateImageFunction<ImageType, double>::New();
+  else
+    interp = itk::LinearInterpolateImageFunction<ImageType, double>::New();
+
   interp->SetInputImage(imgInput);
 
   // Create an array to hold the output
   vtkFloatArray *array = vtkFloatArray::New();
-  array->Allocate(mesh->GetNumberOfPoints());
+  array->SetNumberOfComponents(imgInput->GetNumberOfComponentsPerPixel());
+  array->SetNumberOfTuples(mesh->GetNumberOfPoints());
 
   // Sample the data
   size_t n = mesh->GetNumberOfPoints();
+  size_t c = array->GetNumberOfComponents();
   for(size_t i = 0; i < n; i++)
     {
+    // Get the physical position of the point
     double *x = mesh->GetPoint(i);
     itk::Point<double,3> pt;
     itk::ContinuousIndex<double,3> idx;
-    pt[0] = x[0]; pt[1] = x[1]; pt[2] = x[2];
-    imgInput->TransformRASPhysicalPointToContinuousIndex(pt, idx);
-    float val = interp->EvaluateAtContinuousIndex(idx);
-    array->InsertTuple1(i, val);
+
+    // The first two coordinates are flipped for RAS/LPS conversion
+    pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
+
+    imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
+    typename ImageType::PixelType pix = interp->EvaluateAtContinuousIndex(idx);
+    for(int j = 0; j < c; j++)
+      array->SetComponent(i, j, pix[j]);
     }
 
   // Get the point data
@@ -157,8 +169,22 @@ int main(int argc, char *argv[])
 
   // Read optional parameters
   size_t irms = 0, nrms = 0;
+  int interp_mode = 1;
+
   for(int ip = 1; ip < argc-4; ip++)
     {
+    if(strcmp(argv[ip], "-i") == 0)
+      {
+      if(ip + 1 < argc-4)
+        {
+        interp_mode = atoi(argv[++ip]);
+        }
+      else
+        {
+        cerr << "error: -i flag needs one parameter" << endl;
+        return usage();
+        }
+      }
     if(strcmp(argv[ip], "-rms") == 0)
       {
       if(ip + 2 < argc-4)
@@ -192,12 +218,12 @@ int main(int argc, char *argv[])
     {
     reader->Delete();
     isPolyData = false;
-    return MeshImageSample<vtkUnstructuredGrid>( argc, argv, irms, nrms);
+    return MeshImageSample<vtkUnstructuredGrid>( argc, argv, irms, nrms, interp_mode);
     }
   else if(reader->IsFilePolyData())
     {
     reader->Delete();
-    return MeshImageSample<vtkPolyData>( argc, argv, irms, nrms);
+    return MeshImageSample<vtkPolyData>( argc, argv, irms, nrms, interp_mode);
 
     }
   else
