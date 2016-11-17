@@ -294,6 +294,10 @@ LINK_LIBRARIES(
   ${SYSTEM_LIBS}
   cmrep)
 
+# New: Geodesic shooting
+ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
+TARGET_LINK_LIBRARIES(shooting_test)
+
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
 TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS} toms611)
