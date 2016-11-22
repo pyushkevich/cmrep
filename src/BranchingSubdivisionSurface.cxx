@@ -9,10 +9,6 @@
 #include <set>
 #include <algorithm>
 
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType float
-#endif
-
 using namespace std;
 
 BranchingSubdivisionSurface::Triangle::Triangle()
@@ -930,14 +926,14 @@ void BranchingSubdivisionSurface
   for(i = 0; i < m.vertices.size(); i++)
   {
     // Output point
-    vnl_vector_fixed<vtkFloatingPointType, 3> p(0.0);
+    vnl_vector_fixed<double, 3> p(0.0);
 
     // Iterate over columns
     typedef ImmutableSparseMatrix<double>::RowIterator IteratorType;
     for(IteratorType it = m.weights.Row(i); !it.IsAtEnd(); ++it)
     {
-      vnl_vector_fixed<vtkFloatingPointType, 3> x(src->GetPoints()->GetPoint(it.Column()));
-      p += x * (vtkFloatingPointType) it.Value();
+      vnl_vector_fixed<double, 3> x(src->GetPoints()->GetPoint(it.Column()));
+      p += x * (double) it.Value();
     }
 
     // Add the point to the output mesh

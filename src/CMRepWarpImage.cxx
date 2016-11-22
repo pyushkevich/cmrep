@@ -23,14 +23,10 @@
 using namespace itk;
 using namespace std;
 
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType vtkFloatingPointType
-typedef float vtkFloatingPointType;
-#endif
 
 
 
-typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
+typedef vnl_vector_fixed<double, 3> Vec;
 typedef itk::OrientedRASImage<float, 3> ImageType;
 typedef itk::OrientedRASImage<unsigned char,3> ByteImage;
 
@@ -309,7 +305,7 @@ int main(int argc, char *argv[])
   size_t nt = m1->GetNumberOfPolys();
   vtkCellArray *tri = m1->GetPolys();
   vtkIdType npts; vtkIdType *pts;
-  typedef vnl_vector_fixed<vtkFloatingPointType, 3> Vec;
+  typedef vnl_vector_fixed<double, 3> Vec;
   size_t itri = 0;
   for(tri->InitTraversal(); tri->GetNextCell(npts,pts); itri++)
     {

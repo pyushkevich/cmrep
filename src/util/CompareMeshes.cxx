@@ -36,10 +36,6 @@
 using namespace std;
 using namespace itk;
 
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType vtkFloatingPointType
-typedef float vtkFloatingPointType;
-#endif
 
 int usage()
 {
@@ -199,7 +195,7 @@ void ScanConvertPolyData(vtkPolyData *pd, double *b0, double *b1, int *res, doub
     {
     for(unsigned int i=0;i<3;i++)
       {
-      vtkFloatingPointType *x = pd->GetPoints()->GetPoint(pts[i]);
+      double *x = pd->GetPoints()->GetPoint(pts[i]);
       vtx[it] = (double *) malloc(3*sizeof(double));
       for(unsigned int j=0;j<3;j++)
         {
@@ -218,7 +214,7 @@ void ScanConvertPolyData(vtkPolyData *pd, double *b0, double *b1, int *res, doub
   img->FillBuffer(0);
 
   // Convert the polydata to an image
-  drawBinaryTrianglesFilled(img->GetBufferPointer(), res, vtx, nt);
+  drawBinaryTrianglesFilled(img->GetBufferPointer(), res, vtx, nt, 1);
 
   // Set the origin and spacing of the image
   ByteImageType::SpacingType xSpacing;
@@ -247,16 +243,16 @@ void ScanConvertPolyData(vtkPolyData *pd, double *b0, double *b1, int *res, doub
   */
 }
 
-inline vtkFloatingPointType TriangleArea(
-  const vnl_vector_fixed<vtkFloatingPointType,3> &A, 
-  const vnl_vector_fixed<vtkFloatingPointType,3> &B, 
-  const vnl_vector_fixed<vtkFloatingPointType,3> &C)
+inline double TriangleArea(
+  const vnl_vector_fixed<double,3> &A, 
+  const vnl_vector_fixed<double,3> &B, 
+  const vnl_vector_fixed<double,3> &C)
 {
   return 0.5 * vnl_cross_3d(B - A, C - A).magnitude();
 }
 
 
-void ComputeAreaElement(vtkPolyData *poly, vnl_vector<vtkFloatingPointType> &elt)
+void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
 {
   // For each triangle in the polydata compute its area
   vtkIdType nCells = poly->GetNumberOfCells();
@@ -279,9 +275,9 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<vtkFloatingPointType> &elt
       }
 
     // Get the three points
-    vnl_vector_fixed<vtkFloatingPointType, 3> X0(poly->GetPoint(xPoints[0]));
-    vnl_vector_fixed<vtkFloatingPointType, 3> X1(poly->GetPoint(xPoints[1]));
-    vnl_vector_fixed<vtkFloatingPointType, 3> X2(poly->GetPoint(xPoints[2]));
+    vnl_vector_fixed<double, 3> X0(poly->GetPoint(xPoints[0]));
+    vnl_vector_fixed<double, 3> X1(poly->GetPoint(xPoints[1]));
+    vnl_vector_fixed<double, 3> X2(poly->GetPoint(xPoints[2]));
 
     // Compute the area
     double xArea = TriangleArea(X0, X1, X2);
@@ -296,7 +292,7 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<vtkFloatingPointType> &elt
     }
 }
 
-void ComputeExactMeshToMeshDistance(vtkPolyData *source, vtkPolyData *target, vnl_vector<vtkFloatingPointType> &dist)
+void ComputeExactMeshToMeshDistance(vtkPolyData *source, vtkPolyData *target, vnl_vector<double> &dist)
 {
   // Create a cell locator from the target mesh
   vtkCellLocator *xLocator = vtkCellLocator::New();
@@ -309,7 +305,7 @@ void ComputeExactMeshToMeshDistance(vtkPolyData *source, vtkPolyData *target, vn
   // Compute each distance
   for(size_t i = 0; i < dist.size(); i++)
     {
-    vtkFloatingPointType xClosest[3];
+    double xClosest[3];
     vtkIdType cellId;
     int subId;
     xLocator->FindClosestPoint(source->GetPoint(i), xClosest, cellId, subId, dist[i]);
@@ -370,8 +366,8 @@ int main(int argc, char **argv)
   vtkPolyData *p2 = ReadVTKData(fn2);
 
   // Get the extents of the data
-  vtkFloatingPointType *b1 = p1->GetBounds();  
-  vtkFloatingPointType *b2 = p2->GetBounds();  
+  double *b1 = p1->GetBounds();  
+  double *b2 = p2->GetBounds();  
 
   // Compute the bounding box
   for(size_t i = 0; i < 3; i++) 
@@ -419,7 +415,7 @@ int main(int argc, char **argv)
   */
 
   // Compute exact pointwise distances from mesh to mesh
-  vnl_vector<vtkFloatingPointType> d1, d2, ae1, ae2;
+  vnl_vector<double> d1, d2, ae1, ae2;
   ComputeExactMeshToMeshDistance(p1, p2, d1);
   ComputeExactMeshToMeshDistance(p2, p1, d2);
   ComputeAreaElement(p1, ae1);
@@ -442,7 +438,7 @@ int main(int argc, char **argv)
       dist->SetTuple1(q, d1[q]);
     vtkPolyDataWriter *pdw = vtkPolyDataWriter::New();
     pdw->SetFileName(fnMesh.c_str());
-    pdw->SetInput(p1);
+    pdw->SetInputData(p1);
     pdw->Update();
     }
 

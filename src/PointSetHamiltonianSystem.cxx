@@ -1,6 +1,8 @@
 #include "PointSetHamiltonianSystem.h"
+#include <vnl/vnl_fastops.h>
+#include <iostream>
 
-template <class TFloat, class VDim>
+template <class TFloat, unsigned int VDim>
 PointSetHamiltonianSystem<TFloat, VDim>
 ::PointSetHamiltonianSystem(
     const Matrix &q0, TFloat sigma, unsigned int N)
@@ -15,20 +17,20 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Allocate H derivatives
   for(unsigned int a = 0; a < VDim; a++)
     {
-    this->Hq.set_size(k, 0.0);
-    this->Hp.set_size(k, 0.0);
+    this->Hq[a].set_size(k);
+    this->Hp[a].set_size(k);
 
     for(unsigned int b = 0; b < VDim; b++)
       {
-      this->Hqq[a][b].set_size(k,k,0.0);
-      this->Hqp[a][b].set_size(k,k,0.0);
-      this->Hpp[a][b].set_size(k,k,0.0);
+      this->Hqq[a][b].set_size(k,k);
+      this->Hqp[a][b].set_size(k,k);
+      this->Hpp[a][b].set_size(k,k);
       }
     }
 }
 
 
-template <class TFloat, class VDim>
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::ComputeHamiltonianJet(const Matrix &q, const Matrix &p, bool flag_hessian)
@@ -94,12 +96,12 @@ PointSetHamiltonianSystem<TFloat, VDim>
           {
           for(unsigned int b = 0; b < VDim; b++)
             {
-            TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + g1);
-            Hqq[a][b](i,j) -= val;
-            Hqq[a][b](i,i) += val;
+            TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
+            Hqq[a][b](i,j) -= val_qq;
+            Hqq[a][b](i,i) += val_qq;
 
-            Hqp[a][b](i,j) += 2.0 * g1 * dq[a] * p(i,a);
-            Hqp[a][b](i,i) += 2.0 * g1 * dq[a] * p(j,a);
+            Hqp[a][b](i,j) += 2.0 * g1 * dq[a] * p(i,b);
+            Hqp[a][b](i,i) += 2.0 * g1 * dq[a] * p(j,b);
             }
 
           Hpp[a][a](i,j) = g;
@@ -111,13 +113,17 @@ PointSetHamiltonianSystem<TFloat, VDim>
   return H;
 }
 
-template <class TFloat, class VDim>
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p)
 {
   // Initialize q and p
   q = q0; p = p0;
+
+  // Allocate the streamline arrays
+  Qt.resize(N); Qt[0] = q0;
+  Pt.resize(N); Pt[0] = p0;
 
   // The return value
   TFloat H, H0;
@@ -139,6 +145,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
         }
       }
 
+    // Store the flow results
+    Qt[t] = q; Pt[t] = p;
+
     // store the first hamiltonian value
     if(t == 1)
       H0 = H;
@@ -147,7 +156,113 @@ PointSetHamiltonianSystem<TFloat, VDim>
   return H0;
 }
 
-template <class TFloat, class VDim>
+extern "C" {
+  int dgemm_(char *, char *, int *, int *, int *, double *, double *, int *, 
+    double *, int *, double *, double *, int *);
+};
+
+/** WARNING - this is only meant for square matrices! */
+template <class TFloat> class BlasInterface
+{
+public:
+  typedef vnl_matrix<TFloat> Mat;
+  static void add_AB_to_C(const Mat &A, const Mat &B, Mat &C) {}
+  static void add_AtB_to_C(const Mat &A, const Mat &B, Mat &C) {}
+};
+
+/** WARNING - this is only meant for square matrices! */
+template <>
+void
+BlasInterface<double>
+::add_AB_to_C(const Mat &A, const Mat &B, Mat &C)
+{
+  assert(
+    A.rows() == B.rows() && A.rows() == C.rows() && A.rows() == A.columns() 
+    && A.rows() == B.columns() && A.rows() == C.columns());
+
+  char opA = 'N', opB = 'N';
+  int M=A.rows(), N=M, K=M, LDA=K, LDB=N, LDC=M;
+  double alpha = 1.0, beta = 1.0;
+  dgemm_(&opA, &opB, &M,&N,&K,&alpha,
+    const_cast<double *>(B.data_block()),&LDA,
+    const_cast<double *>(A.data_block()),&LDB,
+    &beta,
+    C.data_block(),&LDC);
+}
+
+template <>
+void
+BlasInterface<double>
+::add_AtB_to_C(const Mat &A, const Mat &B, Mat &C)
+{
+  assert(
+    A.rows() == B.rows() && A.rows() == C.rows() && A.rows() == A.columns() 
+    && A.rows() == B.columns() && A.rows() == C.columns());
+
+  char opA = 'N', opB = 'T';
+  int M=A.rows(), N=M, K=M, LDA=K, LDB=N, LDC=M;
+  double alpha = 1.0, beta = 1.0;
+  dgemm_(&opA, &opB, &M,&N,&K,&alpha,
+    const_cast<double *>(B.data_block()),&LDA,
+    const_cast<double *>(A.data_block()),&LDB,
+    &beta,
+    C.data_block(),&LDC);
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowGradientBackward(
+  const Vector alpha1[VDim], 
+  const Vector beta1[VDim],
+  Vector result[VDim])
+{
+  // Allocate update vectors for alpha and beta
+  Vector alpha[VDim], beta[VDim];
+  Vector d_alpha[VDim], d_beta[VDim];
+  for(int a = 0; a < VDim; a++)
+    {
+    alpha[a] = alpha1[a];
+    beta[a] = beta1[a];
+    d_alpha[a].set_size(k);
+    d_beta[a].set_size(k);
+    }
+
+  // Work our way backwards
+  for(int t = N-1; t > 0; t--)
+    {
+    // Compute the Hamiltonian on the (i-1)st q/p
+    ComputeHamiltonianJet(Qt[t - 1], Pt[t - 1], true);
+
+    // Compute the updates
+    for(int a = 0; a < VDim; a++)
+      {
+      d_alpha[a].fill(0.0);
+      d_beta[a].fill(0.0);
+
+      for(int b = 0; b < VDim; b++)
+        {
+        d_alpha[a] += alpha[b] * (Hqp[a][b]).transpose() - beta[b] * Hqq[b][a];
+        d_beta[a] += alpha[b] * Hpp[b][a] - beta[b] * Hqp[b][a];
+        }
+      }
+
+    // Update the vectors
+    for(int a = 0; a < VDim; a++)
+      {
+      alpha[a] += dt * d_alpha[a];
+      beta[a] += dt * d_beta[a];
+      }
+    } 
+
+  // Finally, what we are really after are the betas
+  for(int a = 0; a < VDim; a++)
+    {
+    result[a] = beta[a];
+    }
+}
+
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::FlowHamiltonianWithGradient(
@@ -156,6 +271,10 @@ PointSetHamiltonianSystem<TFloat, VDim>
 {
   // Initialize q and p
   q = q0; p = p0;
+
+  // Allocate the streamline arrays
+  Qt.resize(N); Qt[0] = q0;
+  Pt.resize(N); Pt[0] = p0;
 
   // We need temporary matrices to store the updates of gradient
   Matrix gupd_q[VDim][VDim], gupd_p[VDim][VDim];
@@ -196,6 +315,8 @@ PointSetHamiltonianSystem<TFloat, VDim>
         }
       }
 
+    Qt[t] = q; Pt[t] = p;
+
     // The nastiest part - some matrix multiplications
     for(unsigned int a = 0; a < VDim; a++)
       {
@@ -206,8 +327,13 @@ PointSetHamiltonianSystem<TFloat, VDim>
         
         for(unsigned int c = 0; c < VDim; c++)
           {
-          gupd_p[a][b] += Hqp[a][c] * grad_p[c][b] + Hqq[a][c] * grad_q[c][b];
-          gupd_q[a][b] += Hpp[a][c] * grad_p[c][b] + Hqp[c][a].transpose() * grad_q[c][b];
+          BlasInterface<TFloat>::add_AB_to_C(Hqp[a][c], grad_p[c][b], gupd_p[a][b]);
+          BlasInterface<TFloat>::add_AB_to_C(Hqq[a][c], grad_q[c][b], gupd_p[a][b]);
+          BlasInterface<TFloat>::add_AB_to_C(Hpp[a][c], grad_p[c][b], gupd_q[a][b]); 
+          BlasInterface<TFloat>::add_AtB_to_C(Hqp[c][a], grad_q[c][b], gupd_q[a][b]); 
+
+          // gupd_p[a][b] += Hqp[a][c] * grad_p[c][b] + Hqq[a][c] * grad_q[c][b];
+          // gupd_q[a][b] += Hpp[a][c] * grad_p[c][b] + Hqp[c][a].transpose() * grad_q[c][b];
           }
         }
       }
@@ -216,8 +342,8 @@ PointSetHamiltonianSystem<TFloat, VDim>
       {
       for(unsigned int b = 0; b < VDim; b++)
         {
-        grad_q[a][b] += gupd_q[a][b];
-        grad_p[a][b] -= gupd_p[a][b];
+        grad_q[a][b] += dt * gupd_q[a][b];
+        grad_p[a][b] -= dt * gupd_p[a][b];
         }
       }
 

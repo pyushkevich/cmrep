@@ -248,6 +248,7 @@ SET(DIJKSTRA_SRCS
 ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 
 # Define the VTK libraries
+IF(COMMENT_OUT)
 SET(VTK_LIBRARIES
   vtkChartsCore
   vtkRenderingLOD
@@ -284,6 +285,7 @@ SET(VTK_LIBRARIES
   vtkfreetype
   vtkzlib
 )
+ENDIF(COMMENT_OUT)
 
 # Set the list of required libraries
 LINK_LIBRARIES(
@@ -296,7 +298,13 @@ LINK_LIBRARIES(
 
 # New: Geodesic shooting
 ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
-TARGET_LINK_LIBRARIES(shooting_test)
+TARGET_LINK_LIBRARIES(shooting_test ${PDE_LIBS})
+
+ADD_EXECUTABLE(lmshoot 
+  src/PointSetHamiltonianSystem.cxx 
+  src/PointSetGeodesicShooting.cxx
+  src/util/ReadWriteVTK.cxx)
+TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)

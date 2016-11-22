@@ -44,11 +44,6 @@
 #include <itkLinearInterpolateImageFunction.h>
 #include <itkVectorImage.h>
 
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType vtkFloatingPointType
-typedef float vtkFloatingPointType;
-#endif
-
 using namespace std;
 
 typedef std::pair<vtkIdType, vtkIdType> VertexPair;
@@ -170,10 +165,10 @@ vtkPolyData *ReadVoronoiOutput(
   return poly;
 }
 
-inline vtkFloatingPointType TriangleArea(
-  const vnl_vector_fixed<vtkFloatingPointType,3> &A, 
-  const vnl_vector_fixed<vtkFloatingPointType,3> &B, 
-  const vnl_vector_fixed<vtkFloatingPointType,3> &C)
+inline double TriangleArea(
+  const vnl_vector_fixed<double,3> &A, 
+  const vnl_vector_fixed<double,3> &B, 
+  const vnl_vector_fixed<double,3> &C)
 {
   return 0.5 * vnl_cross_3d(B - A, C - A).magnitude();
 }
@@ -193,8 +188,8 @@ double ComputeAverageEdgeLength(vtkPolyData *poly)
     for(vtkIdType j = 0; j < nPoints; j++)
       {
       vtkIdType k = (j + 1) % nPoints;
-      vnl_vector_fixed<vtkFloatingPointType,3> x1(poly->GetPoint(xPoints[j]));
-      vnl_vector_fixed<vtkFloatingPointType,3> x2(poly->GetPoint(xPoints[k]));
+      vnl_vector_fixed<double,3> x1(poly->GetPoint(xPoints[j]));
+      vnl_vector_fixed<double,3> x2(poly->GetPoint(xPoints[k]));
       l += sqrt(dot_product(x1-x2,x1-x2));
       n++;
       }
@@ -203,7 +198,7 @@ double ComputeAverageEdgeLength(vtkPolyData *poly)
   return l / n;
 }
 
-void ComputeAreaElement(vtkPolyData *poly, vnl_vector<vtkFloatingPointType> &elt)
+void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
 {
   // For each triangle in the polydata compute its area
   vtkIdType nCells = poly->GetNumberOfCells();
@@ -226,9 +221,9 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<vtkFloatingPointType> &elt
       }
 
     // Get the three points
-    vnl_vector_fixed<vtkFloatingPointType, 3> X0(poly->GetPoint(xPoints[0]));
-    vnl_vector_fixed<vtkFloatingPointType, 3> X1(poly->GetPoint(xPoints[1]));
-    vnl_vector_fixed<vtkFloatingPointType, 3> X2(poly->GetPoint(xPoints[2]));
+    vnl_vector_fixed<double, 3> X0(poly->GetPoint(xPoints[0]));
+    vnl_vector_fixed<double, 3> X1(poly->GetPoint(xPoints[1]));
+    vnl_vector_fixed<double, 3> X2(poly->GetPoint(xPoints[2]));
 
     // Compute the area
     double xArea = TriangleArea(X0, X1, X2);
@@ -554,8 +549,8 @@ int main(int argc, char *argv[])
       else
         {
         // Get the Euclidean distance between generator points
-        vnl_vector_fixed<vtkFloatingPointType,3> p1(bnd->GetPoint(ip1)); 
-        vnl_vector_fixed<vtkFloatingPointType,3> p2(bnd->GetPoint(ip2)); 
+        vnl_vector_fixed<double,3> p1(bnd->GetPoint(ip1)); 
+        vnl_vector_fixed<double,3> p2(bnd->GetPoint(ip2)); 
         r = (p1 - p2).magnitude();
         
         // The geodesic distance between generators should exceed d * xPrune;
@@ -673,9 +668,9 @@ int main(int argc, char *argv[])
     vtkCell *c = final->GetCell(i);
     if(c->GetNumberOfPoints() == 3)
       {
-      vnl_vector_fixed<vtkFloatingPointType, 3> p1(final->GetPoint(c->GetPointId(0)));
-      vnl_vector_fixed<vtkFloatingPointType, 3> p2(final->GetPoint(c->GetPointId(1)));
-      vnl_vector_fixed<vtkFloatingPointType, 3> p3(final->GetPoint(c->GetPointId(2)));
+      vnl_vector_fixed<double, 3> p1(final->GetPoint(c->GetPointId(0)));
+      vnl_vector_fixed<double, 3> p2(final->GetPoint(c->GetPointId(1)));
+      vnl_vector_fixed<double, 3> p3(final->GetPoint(c->GetPointId(2)));
       double a = fabs(TriangleArea(p1, p2, p3));
       int_area += a;
       int_thick += r * a;

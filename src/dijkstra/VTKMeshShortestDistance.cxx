@@ -79,10 +79,10 @@ VTKMeshShortestDistance
 ::PickCell(Vec xStart, Vec xEnd, vtkIdType &point) const
 {
   // Ugly VTK
-  vtkFloatingPointType v1[3], v2[3], ptLine[3], pCoords[3];
+  double v1[3], v2[3], ptLine[3], pCoords[3];
   int subId;
   vtkIdType cellid;
-  vtkFloatingPointType t; 
+  double t; 
 
   v1[0] = xStart[0]; v1[1] = xStart[1]; v1[2] = xStart[2];
   v2[0] = xEnd[0]; v2[1] = xEnd[1]; v2[2] = xEnd[2];
@@ -98,8 +98,8 @@ bool
 VTKMeshShortestDistance
 ::PickPoint(Vec xStart, Vec xEnd, vtkIdType &point, ICellChecher *cbCell) const
 {
-  vtkFloatingPointType v1[3], v2[3], ptLine[3], pCoords[3];
-  vtkFloatingPointType t; 
+  double v1[3], v2[3], ptLine[3], pCoords[3];
+  double t; 
   int subId; vtkIdType iCell;
   
   v1[0] = xStart[0]; v1[1] = xStart[1]; v1[2] = xStart[2];

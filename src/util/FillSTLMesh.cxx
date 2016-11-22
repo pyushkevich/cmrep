@@ -17,11 +17,6 @@
 #include <itk_to_nifti_xform.h>
 #include "DrawTriangles.h"
 
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType vtkFloatingPointType
-typedef float vtkFloatingPointType;
-#endif
-
 using namespace std;
 using namespace itk;
 
@@ -373,7 +368,7 @@ int main(int argc, char **argv)
     {
     for(unsigned int i=0;i<3;i++)
       {
-      vtkFloatingPointType *x = pd->GetPoints()->GetPoint(pts[i]);
+      double *x = pd->GetPoints()->GetPoint(pts[i]);
       vtx[it] = (double *) malloc(3*sizeof(double));
 
       // Use ITK to map from spatial to voxel coordinates

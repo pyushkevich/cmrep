@@ -20,9 +20,6 @@
 #include "ShortestPath.h"
 
 // Code for dealing with the VTK float->double transition
-#ifndef vtkFloatingPointType
-#define vtkFloatingPointType float 
-#endif
 
 using namespace std;
 
@@ -184,10 +181,10 @@ public:
     int subid;
 
     // VTK Garbage
-    vnl_vector_fixed<vtkFloatingPointType, 3> v1(vec[0], vec[1], vec[2]);
-    vnl_vector_fixed<vtkFloatingPointType, 3> v2(
+    vnl_vector_fixed<double, 3> v1(vec[0], vec[1], vec[2]);
+    vnl_vector_fixed<double, 3> v2(
       xClosestPoint[0], xClosestPoint[1], xClosestPoint[2]);
-    vtkFloatingPointType dist2;
+    double dist2;
     
     fltCellLocator->FindClosestPoint(
       v1.data_block(), v2.data_block(),iCell,subid,dist2);

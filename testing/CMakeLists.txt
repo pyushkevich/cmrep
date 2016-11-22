@@ -15,3 +15,17 @@ ADD_TEST(TestBruteNoImage      ${CMREP_BINARY_DIR}/cmrep_test DERIV1 ${TEST_SUBJ
 ADD_TEST(TestBruteWithImage    ${CMREP_BINARY_DIR}/cmrep_test DERIV2 ${TEST_SUBJECT_BRUTE} ${TEST_IMAGE_BINARY} ${TEST_PARAM_FILE})
 ADD_TEST(TestPDENoImage        ${CMREP_BINARY_DIR}/cmrep_test DERIV1 ${TEST_SUBJECT_PDE})
 ADD_TEST(TestPDEWithImage      ${CMREP_BINARY_DIR}/cmrep_test DERIV2 ${TEST_SUBJECT_PDE} ${TEST_IMAGE_CAUDATE})
+
+# Geodesic shooting tests
+SET(TEST_GSHOOT_DIR ${CMREP_SOURCE_DIR}/testing/shooting)
+ADD_TEST(ShootingRegression    ${CMREP_BINARY_DIR}/shooting_test ${TEST_GSHOOT_DIR}/shoot_regression.mat)
+ADD_TEST(ShootingA             ${CMREP_BINARY_DIR}/lmshoot 
+                                 -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
+                                    ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
+                                 -o ${CMREP_BINARY_DIR}/res.vtk 
+                                 -s 0.2 -l 20 -d 2 -a A -i 20)
+ADD_TEST(ShootingG             ${CMREP_BINARY_DIR}/lmshoot 
+                                 -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
+                                    ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
+                                 -o ${CMREP_BINARY_DIR}/res.vtk 
+                                 -s 0.2 -l 20 -d 2 -a G -i 20)
