@@ -263,6 +263,33 @@ PointSetHamiltonianSystem<TFloat, VDim>
 }
 
 template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::InterpolateVelocity(unsigned int t, const TFloat *x, TFloat *v)
+{
+  // Gaussian factor, i.e., K(z) = exp(f * z)
+  TFloat f = -0.5 / (sigma * sigma);
+
+  // Initialize v to zero
+  for(unsigned int a = 0; a < VDim; a++)
+    v[a] = 0.0;
+
+  // Compute the velocity for this point
+  for(unsigned int i = 0; i < k; i++)
+    {
+    double dsq = 0.0;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      double da = Qt[t](i,a) - x[a];
+      dsq += da * da;
+      }
+    double Kq = exp(dsq * f);
+    for(unsigned int a = 0; a < VDim; a++)
+      v[a] += Kq * Pt[t](i,a);
+    }
+}
+
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::FlowHamiltonianWithGradient(

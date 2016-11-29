@@ -306,6 +306,14 @@ ADD_EXECUTABLE(lmshoot
   src/util/ReadWriteVTK.cxx)
 TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
 
+INCLUDE_DIRECTORIES(submodules/greedy/src)
+ADD_EXECUTABLE(lmtowarp
+  src/PointSetHamiltonianSystem.cxx
+  src/util/ReadWriteVTK.cxx
+  src/PointSetGeodesicToWarp.cxx
+  submodules/greedy/src/lddmm_data.cxx)
+TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
+
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
 TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS} toms611)

@@ -8,6 +8,11 @@
 #include "util/ReadWriteVTK.h"
 #include "vtkPointData.h"
 #include "vtkDoubleArray.h"
+#include "vtkQuadricClustering.h"
+#include "vtkSmartPointer.h"
+
+#include "CommandLineHelper.h"
+#include "GreedyAPI.h"
 
 using namespace std;
 
@@ -26,7 +31,10 @@ int usage()
   cout << "  -n N                       : number of time steps (100)" << endl;
   cout << "  -i iter                    : max iterations for optimization" << endl;
   cout << "  -r fraction                : randomly downsample mesh by factor (e.g. 0.01)" << endl;
+  cout << "  -q vector                  : apply quadric clustering to mesh with specified" <<  endl;
+  cout << "                               number of bins per dimension (e.g. 40x40x30)" << endl;
   cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
+  cout << "  -O filepattern             : pattern for saving traced landmark paths (e.g., path%04d.vtk)" << endl;
   return -1;
 }
 
@@ -50,6 +58,7 @@ struct ShootingParameters
   enum Algorithm { Allassonniere, GradDescent };
   string fnTemplate, fnTarget;
   string fnOutput;
+  string fnOutputPaths;
   double sigma;
   double lambda;
   double downsample;
@@ -57,6 +66,8 @@ struct ShootingParameters
   unsigned int N;
   unsigned int iter;
   Algorithm alg;
+
+  std::vector<int> qcdiv;
 
   ShootingParameters() :
     N(100), dim(3), sigma(0.0), lambda(0.0), iter(120), downsample(1),
@@ -333,6 +344,41 @@ PointSetShootingProblem<VDim>
     k = (unsigned int)(param.downsample * np);
     std::random_shuffle(index.begin(), index.end());
     }
+  else if(param.qcdiv.size())
+    {
+    // Store the index of each input point in VTK mesh
+    vtkSmartPointer<vtkIntArray> arr_idx = vtkIntArray::New();
+    arr_idx->SetNumberOfComponents(1);
+    arr_idx->SetNumberOfTuples(np);
+    arr_idx->SetName("Index");
+    for(int i = 0; i < np; i++)
+      arr_idx->SetTuple1(i, i);
+    pTemplate->GetPointData()->AddArray(arr_idx);
+
+    // Perform quadric clustering
+    vtkSmartPointer<vtkQuadricClustering> qc = vtkQuadricClustering::New();
+    qc->SetInputData(pTemplate);
+    qc->SetUseInputPoints(1);
+
+    // Set the divisions array - it must be 3
+    int div[3];
+    for(int a = 0; a < 3; a++)
+      div[a] = (a < param.qcdiv.size()) ? param.qcdiv[a] : 1;
+    qc->SetNumberOfDivisions(div);
+
+    // Run the filter
+    qc->Update();
+
+    // Generate the index
+    vtkPolyData *qc_result = qc->GetOutput();
+    vtkDataArray *qc_index = qc_result->GetPointData()->GetArray("Index");
+    k = qc_result->GetNumberOfPoints();
+    for(int i = 0; i < k; i++)
+      index[i] = qc_index->GetTuple1(i);
+    }
+
+  // Report number of actual vertices being used
+  cout << "Performing geodesic shooting with " << k << " landmarks" << endl;
 
   // Landmarks and initial momentum
   Matrix q0(k,VDim), qT(k,VDim), p0(k,VDim);
@@ -360,7 +406,7 @@ PointSetShootingProblem<VDim>
   arr_p->SetNumberOfTuples(np);
   arr_p->SetName("InitialMomentum");
   for(unsigned int a = 0; a < VDim; a++)
-    arr_p->FillComponent(a, NAN);
+    arr_p->FillComponent(a, 0);
 
   for(unsigned int a = 0; a < VDim; a++)
     {
@@ -373,6 +419,47 @@ PointSetShootingProblem<VDim>
   pTemplate->GetPointData()->AddArray(arr_p);
   WriteVTKData(pTemplate, param.fnOutput);
 
+  // If saving paths requested
+  if(param.fnOutputPaths.size())
+    {
+    // Create and flow a system
+    HSystem hsys(q0, param.sigma, param.N);
+    Matrix q1, p1;
+    hsys.FlowHamiltonian(p0, q1, p1);
+
+    // Apply the flow to the points in the rest of the mesh
+    vtkDoubleArray *arr_v = vtkDoubleArray::New();
+    arr_v->SetNumberOfComponents(VDim);
+    arr_v->SetNumberOfTuples(np);
+    arr_v->SetName("Velocity");
+    pTemplate->GetPointData()->AddArray(arr_v);
+
+    // Apply Euler method to the mesh points
+    double dt = hsys.GetDeltaT();
+    for(unsigned int t = 1; t < param.N; t++)
+      {
+      for(unsigned int i = 0; i < np; i++)
+        {
+        double qi[VDim], vi[VDim];
+        pTemplate->GetPoint(i, qi);
+
+        // Interpolate the velocity at each mesh point
+        hsys.InterpolateVelocity(t-1, qi, vi);
+
+        // Update the position using Euler's method
+        for(unsigned int a = 0; a < VDim; a++)
+          qi[a] += dt * vi[a];
+
+        pTemplate->GetPoints()->SetPoint(i, qi);
+        }
+
+      // Output the intermediate mesh
+      char buffer[1024];
+      sprintf(buffer, param.fnOutputPaths.c_str(), t);
+      WriteVTKData(pTemplate, buffer);
+      }
+    }
+
   return 0;
 }
 
@@ -384,46 +471,57 @@ int main(int argc, char *argv[])
   ShootingParameters param;
 
   // Process parameters
-  for(int i = 1; i < argc; i++)
+  CommandLineHelper cl(argc, argv);
+  while(!cl.is_at_end())
     {
-    string arg = argv[i];
-    if(arg == "-m" && i < argc-2)
+    // Read the next command
+    std::string arg = cl.read_command();
+
+    if(arg == "-m")
       {
-      param.fnTemplate = argv[++i];
-      param.fnTarget = argv[++i];
+      param.fnTemplate = cl.read_existing_filename();
+      param.fnTarget = cl.read_existing_filename();
       }
-    else if(arg == "-o" && i < argc-1)
+    else if(arg == "-o")
       {
-      param.fnOutput = argv[++i];
+      param.fnOutput = cl.read_output_filename();
       }
-    else if(arg == "-s" && i < argc-1)
+    else if(arg == "-O")
       {
-      param.sigma = atof(argv[++i]);
+      param.fnOutputPaths = cl.read_string();
       }
-    else if(arg == "-l" && i < argc-1)
+    else if(arg == "-s")
       {
-      param.lambda = atof(argv[++i]);
+      param.sigma = cl.read_double();
       }
-    else if(arg == "-r" && i < argc-1)
+    else if(arg == "-l")
       {
-      param.downsample = atof(argv[++i]);
+      param.lambda = cl.read_double();
       }
-    else if(arg == "-n" && i < argc-1)
+    else if(arg == "-r")
       {
-      param.N = (unsigned int) atoi(argv[++i]);
+      param.downsample = cl.read_double();
       }
-    else if(arg == "-d" && i < argc-1)
+    else if(arg == "-n")
       {
-      param.dim = (unsigned int) atoi(argv[++i]);
+      param.N = (unsigned int) cl.read_integer();
       }
-    else if(arg == "-i" && i < argc-1)
+    else if(arg == "-d")
       {
-      param.iter = (unsigned int) atoi(argv[++i]);
+      param.dim = (unsigned int) cl.read_integer();
       }
-    else if (arg == "-a" && i < argc-1)
+    else if(arg == "-i")
       {
-      char alg = argv[++i][0];
-      if(alg == 'a' || alg == 'A')
+      param.iter = (unsigned int) cl.read_integer();
+      }
+    else if(arg == "-q")
+      {
+      param.qcdiv = cl.read_int_vector();
+      }
+    else if (arg == "-a")
+      {
+      string alg = cl.read_string();
+      if(alg == "a" || alg == "A" || alg == "Allassonniere")
         param.alg = ShootingParameters::Allassonniere;
       else
         param.alg = ShootingParameters::GradDescent;

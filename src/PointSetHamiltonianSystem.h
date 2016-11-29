@@ -72,6 +72,17 @@ public:
   const Matrix &GetHqp(unsigned int a, unsigned int b) const { return Hqp[a][b]; }
   const Matrix &GetHpp(unsigned int a, unsigned int b) const { return Hpp[a][b]; }
 
+  const Matrix &GetQt(unsigned int t) const { return Qt[t]; }
+  const Matrix &GetPt(unsigned int t) const { return Pt[t]; }
+
+  const TFloat GetDeltaT() const { return dt; }
+
+  /**
+   * Interpolate the velocity at a given point in space at time point t. This
+   * can only be called after running FlowHamiltonian()
+   */
+  void InterpolateVelocity(unsigned int t, const TFloat *x, TFloat *v);
+
 protected:
 
   // Initial ladnmark coordinates - fixed for duration
