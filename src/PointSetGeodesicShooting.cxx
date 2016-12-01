@@ -35,6 +35,7 @@ int usage()
   cout << "                               number of bins per dimension (e.g. 40x40x30)" << endl;
   cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
   cout << "  -O filepattern             : pattern for saving traced landmark paths (e.g., path%04d.vtk)" << endl;
+  cout << "  -f                         : use single-precision float (off by deflt)" << endl;
   return -1;
 }
 
@@ -66,21 +67,25 @@ struct ShootingParameters
   unsigned int N;
   unsigned int iter;
   Algorithm alg;
+  bool use_float;
 
   std::vector<int> qcdiv;
 
   ShootingParameters() :
     N(100), dim(3), sigma(0.0), lambda(0.0), iter(120), downsample(1),
-    alg(GradDescent) {}
+    use_float(false), alg(GradDescent) {}
 };
 
-template <unsigned int VDim>
+template <class TFloat, unsigned int VDim>
 class PointSetShootingCostFunction : public vnl_cost_function
 {
 public:
-  typedef PointSetHamiltonianSystem<double, VDim> HSystem;
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
   typedef typename HSystem::Vector Vector;
   typedef typename HSystem::Matrix Matrix;
+
+  // Separate type because vnl optimizer is double-only
+  typedef vnl_vector<double> DVector;
 
   PointSetShootingCostFunction(
     const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
@@ -101,9 +106,9 @@ public:
       }
     }
 
-  Vector wide_to_tall(const Vector p[VDim])
+  DVector wide_to_tall(const Vector p[VDim])
     {
-    Vector v(k * VDim);
+    DVector v(k * VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
@@ -111,9 +116,9 @@ public:
     return v;
     }
 
-  Vector wide_to_tall(const Matrix &p)
+  DVector wide_to_tall(const Matrix &p)
     {
-    Vector v(k * VDim);
+    DVector v(k * VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
@@ -121,13 +126,13 @@ public:
     return v;
     }
 
-  Matrix tall_to_wide(const Vector &v)
+  Matrix tall_to_wide(const DVector &v)
     {
     Matrix p(k,VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
-        p(i,a) = v[pos++];
+        p(i,a) = (TFloat) v[pos++];
     return p;
     }
 
@@ -187,11 +192,122 @@ protected:
 
 };
 
-template <unsigned int VDim>
+
+
+
+template <class TFloat, unsigned int VDim>
+class PointSetShootingTransversalityCostFunction : public vnl_cost_function
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+
+  // Separate type because vnl optimizer is double-only
+  typedef vnl_vector<double> DVector;
+
+  PointSetShootingTransversalityCostFunction(
+    const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
+    : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
+    {
+    this->p0 = (qT - q0) / param.N;
+    this->qT = qT;
+    this->param = param;
+    this->k = q0.rows();
+    this->p1.set_size(k,VDim);
+    this->q1.set_size(k,VDim);
+
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      grad_f[a].set_size(k);
+      }
+    }
+
+  DVector wide_to_tall(const Vector p[VDim])
+    {
+    DVector v(k * VDim);
+    int pos = 0;
+    for(unsigned int a = 0; a < VDim; a++)
+      for(unsigned int i = 0; i < k; i++)
+        v[pos++] = p[a](i);
+    return v;
+    }
+
+  DVector wide_to_tall(const Matrix &p)
+    {
+    DVector v(k * VDim);
+    int pos = 0;
+    for(unsigned int a = 0; a < VDim; a++)
+      for(unsigned int i = 0; i < k; i++)
+        v[pos++] = p(i,a);
+    return v;
+    }
+
+  Matrix tall_to_wide(const DVector &v)
+    {
+    Matrix p(k,VDim);
+    int pos = 0;
+    for(unsigned int a = 0; a < VDim; a++)
+      for(unsigned int i = 0; i < k; i++)
+        p(i,a) = (TFloat) v[pos++];
+    return p;
+    }
+
+  virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
+    {
+    // Initialize the p0-vector
+    p0 = tall_to_wide(x);
+
+    // Perform flow
+    double H = hsys.FlowHamiltonian(p0, q1, p1);
+
+    // Compute the landmark errors
+    Matrix lmdiff = q1 - qT;
+
+    // Compute the landmark part of the objective
+    double fnorm = lmdiff.frobenius_norm();
+    double fnorm_sq = fnorm * fnorm;
+
+    // Compute the landmark part of the objective
+    double Edist = 0.5 * fnorm_sq;
+
+    cout << H + param.lambda * Edist << endl;
+
+    if(f)
+      {
+      *f = H + param.lambda * Edist;
+      }
+
+    if(g)
+      {
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        for(unsigned int i = 0; i < k; i++)
+          {
+          // Compute the transversality vector error vector G
+          grad_f[a](i) = p1(i,a) + param.lambda * lmdiff(i,a);
+          }
+        }
+
+      // Pack the gradient into the output vector
+      *g = wide_to_tall(grad_f);
+      }
+    }
+
+protected:
+  HSystem hsys;
+  ShootingParameters param;
+  Matrix qT, p0, q0, p1, q1;
+  Vector grad_f[VDim];
+  unsigned int k;
+
+};
+
+template <class TFloat, unsigned int VDim>
 class PointSetShootingProblem
 {
 public:
-  typedef PointSetHamiltonianSystem<double, VDim> HSystem;
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
   typedef typename HSystem::Vector Vector;
   typedef typename HSystem::Matrix Matrix;
 
@@ -199,7 +315,10 @@ public:
   static void minimize_Allassonniere(const ShootingParameters &param, 
     const Matrix &q0, const Matrix &qT, Matrix &p0);
 
-  // Minimize using gradient descent 
+  static void minimize_QuasiAllassonniere(const ShootingParameters &param,
+    const Matrix &q0, const Matrix &qT, Matrix &p0) {}
+
+  // Minimize using gradient descent
   static void minimize_gradient(const ShootingParameters &param, 
     const Matrix &q0, const Matrix &qT, Matrix &p0);
 
@@ -208,9 +327,9 @@ public:
 private:
 };
 
-template <unsigned int VDim>
+template <class TFloat, unsigned int VDim>
 void
-PointSetShootingProblem<VDim>
+PointSetShootingProblem<TFloat, VDim>
 ::minimize_Allassonniere(const ShootingParameters &param, 
   const Matrix &q0, const Matrix &qT, Matrix &p0)
 {
@@ -268,14 +387,14 @@ PointSetShootingProblem<VDim>
 
     // Perform singular value decomposition on the Hessian matrix, zeroing
     // out the singular values below 1.0 (TODO: use a relative threshold?)
-    vnl_svd<double> svd(DG, 1.0);
+    vnl_svd<TFloat> svd(DG, 1.0);
 
     // Compute inv(DG) * G
     Vector del_p0 = - svd.solve(G);
     
     // Print the current state
-    printf("Iter %4d   H=%8.6f   l*Dsq=%8.6f   E=%8.6f   |G|=%8.6f\n",
-      iter, H, param.lambda * dsq, H + param.lambda * dsq, G.two_norm());
+    printf("Iter %4d   H=%8.6f   Edist=%8.6f   E=%8.6f   |G|=%8.6f\n",
+      iter, H, 0.5 * param.lambda * dsq, H + 0.5 * param.lambda * dsq, G.two_norm());
 
     // Update the solution
     for(unsigned int a = 0; a < VDim; a++)
@@ -287,39 +406,144 @@ PointSetShootingProblem<VDim>
       }
     }
 }
-
-template <unsigned int VDim>
+/*
+template <class TFloat, unsigned int VDim>
 void
-PointSetShootingProblem<VDim>
+PointSetShootingProblem<TFloat, VDim>
+::minimize_QuasiAllassonniere(const ShootingParameters &param,
+  const Matrix &q0, const Matrix &qT, Matrix &p0)
+{
+  unsigned int k = q0.rows();
+
+  // Create the hamiltonian system
+  HSystem hsys(q0, param.sigma, param.N);
+
+  // Where to store the results of the flow
+  Matrix q1(k,VDim), p1(k,VDim), p0test(k,VDim);
+
+  // Transversality term
+  Vector G(VDim * k), Gnext(VDim * k);
+  Vector dp0(VDim * k), yj(VDim * k);
+
+  // Hessian inverse term
+  Matrix Hj(VDim * k, VDim * k), Aj(VDim * k, VDim * k), Bj(VDim * k, VDim * k), Cj(VDim * k, VDim * k);
+  Hj.set_identity();
+
+  // Compute gradient G for j = 0
+  double H = hsys.FlowHamiltonian(p0, q1, p1);
+  for(unsigned int a = 0; a < VDim; a++)
+    for(unsigned int i = 0; i < k; i++)
+      G(a * k + i) = p1(i,a) + 2 * param.lambda * (q1(i,a) - qT(i,a));
+
+  // Iterate
+  TFloat alpha = 0.001;
+  for(unsigned int iter = 0; iter < param.iter; iter++)
+    {
+    // Compute the displacement direction
+    dp0 = - (Hj * G);
+
+    // Find an alpha that satisfies Wolfe condition
+    double targ = fabs(0.9 * dot_product(dp0, G));
+
+    while(alpha > 1e-6)
+      {
+      // Update the current point
+      for(unsigned int a = 0; a < VDim; a++)
+        for(unsigned int i = 0; i < k; i++)
+          p0test(i,a) = p0(i,a) + alpha * dp0(a * k + i);
+
+      // Compute gradient at updated location
+      H = hsys.FlowHamiltonian(p0test, q1, p1);
+      for(unsigned int a = 0; a < VDim; a++)
+        for(unsigned int i = 0; i < k; i++)
+          Gnext(a * k + i) = p1(i,a) + 2 * param.lambda * (q1(i,a) - qT(i,a));
+
+      double test = fabs(dot_product(dp0, Gnext));
+      if(test < targ)
+        break;
+      else
+        alpha = 0.5 * alpha;
+      }
+    if(alpha < 1e-6)
+      {
+      cerr << "Failed line search" << endl;
+      break;
+      }
+
+    // Update p0
+    p0 = p0test;
+
+    // Compute yj - difference in gradient
+    yj = Gnext - G;
+
+    // Update the Hessian inverse matrix
+
+    // Compute the update stuff
+    Vector Z = alpha * dp0 - Hj * yj;
+    double z = dot_product(Z, yj);
+
+    for(unsigned int i = 0; i < k * VDim; i++)
+      {
+      for(unsigned int m = 0; m < k * VDim; m++)
+        {
+        // Hj(i,m) += Z(i) * Z(m) / z;
+        }
+      }
+
+    // Store Gnext as G
+    G = Gnext;
+
+    // Compute the landmark part of the objective
+    double fnorm = (q1 - qT).frobenius_norm();
+    double dsq = fnorm * fnorm;
+
+    // Print the current state
+    printf("Iter %4d   H=%8.6f   l*Dsq=%8.6f   E=%8.6f   |G|=%8.6f\n",
+      iter, H, param.lambda * dsq, H + param.lambda * dsq, G.two_norm());
+    }
+}
+*/
+
+
+#include "vnl/algo/vnl_lbfgsb.h"
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetShootingProblem<TFloat, VDim>
 ::minimize_gradient(const ShootingParameters &param, 
   const Matrix &q0, const Matrix &qT, Matrix &p0)
 {
   unsigned int k = q0.rows();
 
   // Create the minimization problem
-  PointSetShootingCostFunction<VDim> cost_fn(param, q0, qT);
+  typedef PointSetShootingCostFunction<TFloat, VDim> CostFn;
+  CostFn cost_fn(param, q0, qT);
 
   // Create initial/final solution
   p0 = (qT - q0) / param.N;
-  Vector x = cost_fn.wide_to_tall(p0);
+  typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
 
   // Solve the minimization problem 
-  vnl_lbfgs optimizer(cost_fn);
+
+  vnl_lbfgsb optimizer(cost_fn);
   optimizer.set_f_tolerance(1e-9);
   optimizer.set_x_tolerance(1e-4);
   optimizer.set_g_tolerance(1e-6);
   optimizer.set_trace(true);
   optimizer.set_max_function_evals(param.iter);
 
+  // vnl_conjugate_gradient optimizer(cost_fn);
+  // optimizer.set_trace(true);
   optimizer.minimize(x);
 
   // Take the optimal solution
   p0 = cost_fn.tall_to_wide(x);
 }
 
-template <unsigned int VDim>
+template <class TFloat, unsigned int VDim>
 int
-PointSetShootingProblem<VDim>
+PointSetShootingProblem<TFloat, VDim>
 ::minimize(const ShootingParameters &param)
 {
   // Read the datasets
@@ -434,14 +658,21 @@ PointSetShootingProblem<VDim>
     arr_v->SetName("Velocity");
     pTemplate->GetPointData()->AddArray(arr_v);
 
+    // Get the points data array
+    vtkDoubleArray *arr_x =
+        dynamic_cast<vtkDoubleArray *>(pTemplate->GetPoints()->GetData());
+    assert(arr_x);
+
     // Apply Euler method to the mesh points
     double dt = hsys.GetDeltaT();
     for(unsigned int t = 1; t < param.N; t++)
       {
       for(unsigned int i = 0; i < np; i++)
         {
-        double qi[VDim], vi[VDim];
-        pTemplate->GetPoint(i, qi);
+        TFloat qi[VDim], vi[VDim];
+
+        for(unsigned int a = 0; a < VDim; a++)
+          qi[a] = arr_x->GetComponent(i, a);
 
         // Interpolate the velocity at each mesh point
         hsys.InterpolateVelocity(t-1, qi, vi);
@@ -450,7 +681,8 @@ PointSetShootingProblem<VDim>
         for(unsigned int a = 0; a < VDim; a++)
           qi[a] += dt * vi[a];
 
-        pTemplate->GetPoints()->SetPoint(i, qi);
+        for(unsigned int a = 0; a < VDim; a++)
+          arr_x->SetComponent(i, a, qi[a]);
         }
 
       // Output the intermediate mesh
@@ -526,6 +758,10 @@ int main(int argc, char *argv[])
       else
         param.alg = ShootingParameters::GradDescent;
       }
+    else if(arg == "-f")
+      {
+      param.use_float = true;
+      }
     else if(arg == "-h")
       {
       return usage();
@@ -546,10 +782,20 @@ int main(int argc, char *argv[])
   check(param.fnOutput.length(), "Missing output filename");
 
   // Specialize by dimension
-  if(param.dim == 2)
-    return PointSetShootingProblem<2>::minimize(param);
+  if(param.use_float)
+    {
+    if(param.dim == 2)
+      return PointSetShootingProblem<float, 2>::minimize(param);
+    else
+      return PointSetShootingProblem<float, 3>::minimize(param);
+    }
   else
-    return PointSetShootingProblem<3>::minimize(param);
+    {
+    if(param.dim == 2)
+      return PointSetShootingProblem<double, 2>::minimize(param);
+    else
+      return PointSetShootingProblem<double, 3>::minimize(param);
+    }
 
 
 }

@@ -159,6 +159,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
 extern "C" {
   int dgemm_(char *, char *, int *, int *, int *, double *, double *, int *, 
     double *, int *, double *, double *, int *);
+
+  int sgemm_(char *, char *, int *, int *, int *, float *, float *, int *,
+    float *, int *, float *, float *, int *);
 };
 
 /** WARNING - this is only meant for square matrices! */
@@ -166,14 +169,19 @@ template <class TFloat> class BlasInterface
 {
 public:
   typedef vnl_matrix<TFloat> Mat;
-  static void add_AB_to_C(const Mat &A, const Mat &B, Mat &C) {}
-  static void add_AtB_to_C(const Mat &A, const Mat &B, Mat &C) {}
+  static void add_AB_to_C(const Mat &A, const Mat &B, Mat &C);
+  static void add_AtB_to_C(const Mat &A, const Mat &B, Mat &C);
+
+private:
+  static void gems(char *opA, char *opB, int *M, int *N, int *K, TFloat *alpha, TFloat *A, int *LDA,
+                   TFloat *B, int *LDB, TFloat *beta, TFloat *C, int *LDC);
+
 };
 
 /** WARNING - this is only meant for square matrices! */
-template <>
+template <class TFloat>
 void
-BlasInterface<double>
+BlasInterface<TFloat>
 ::add_AB_to_C(const Mat &A, const Mat &B, Mat &C)
 {
   assert(
@@ -182,17 +190,17 @@ BlasInterface<double>
 
   char opA = 'N', opB = 'N';
   int M=A.rows(), N=M, K=M, LDA=K, LDB=N, LDC=M;
-  double alpha = 1.0, beta = 1.0;
-  dgemm_(&opA, &opB, &M,&N,&K,&alpha,
-    const_cast<double *>(B.data_block()),&LDA,
-    const_cast<double *>(A.data_block()),&LDB,
+  TFloat alpha = 1.0, beta = 1.0;
+  BlasInterface<TFloat>::gems(&opA, &opB, &M,&N,&K,&alpha,
+    const_cast<TFloat *>(B.data_block()),&LDA,
+    const_cast<TFloat *>(A.data_block()),&LDB,
     &beta,
     C.data_block(),&LDC);
 }
 
-template <>
+template <class TFloat>
 void
-BlasInterface<double>
+BlasInterface<TFloat>
 ::add_AtB_to_C(const Mat &A, const Mat &B, Mat &C)
 {
   assert(
@@ -201,13 +209,33 @@ BlasInterface<double>
 
   char opA = 'N', opB = 'T';
   int M=A.rows(), N=M, K=M, LDA=K, LDB=N, LDC=M;
-  double alpha = 1.0, beta = 1.0;
-  dgemm_(&opA, &opB, &M,&N,&K,&alpha,
-    const_cast<double *>(B.data_block()),&LDA,
-    const_cast<double *>(A.data_block()),&LDB,
+  TFloat alpha = 1.0, beta = 1.0;
+  BlasInterface<TFloat>::gems(&opA, &opB, &M,&N,&K,&alpha,
+    const_cast<TFloat *>(B.data_block()),&LDA,
+    const_cast<TFloat *>(A.data_block()),&LDB,
     &beta,
     C.data_block(),&LDC);
 }
+
+template <>
+void
+BlasInterface<double>
+::gems(char *opA, char *opB, int *M, int *N, int *K, double *alpha, double *A, int *LDA,
+       double *B, int *LDB, double *beta, double *C, int *LDC)
+{
+  dgemm_(opA, opB, M,N,K,alpha,A,LDA,B,LDB,beta,C,LDC);
+}
+
+template <>
+void
+BlasInterface<float>
+::gems(char *opA, char *opB, int *M, int *N, int *K, float *alpha, float *A, int *LDA,
+       float *B, int *LDB, float *beta, float *C, int *LDC)
+{
+  sgemm_(opA, opB, M,N,K,alpha,A,LDA,B,LDB,beta,C,LDC);
+}
+
+
 
 template <class TFloat, unsigned int VDim>
 void
@@ -384,3 +412,5 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
 template class PointSetHamiltonianSystem<double, 2>;
 template class PointSetHamiltonianSystem<double, 3>;
+template class PointSetHamiltonianSystem<float, 2>;
+template class PointSetHamiltonianSystem<float, 3>;
