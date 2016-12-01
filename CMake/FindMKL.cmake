@@ -11,8 +11,6 @@ find_path(MKL_INCLUDES
   /opt/intel/mkl/*/include
 )
 
-if(CMAKE_MINOR_VERSION GREATER 4)
-
 if(${CMAKE_HOST_SYSTEM_PROCESSOR} STREQUAL "x86_64")
 
 find_library(MKL_LIBRARIES
@@ -42,8 +40,6 @@ set(MKL_LIBRARIES ${MKL_LIBRARIES} mkl_intel mkl_sequential guide pthread)
 endif(MKL_LIBRARIES)
 
 endif(${CMAKE_HOST_SYSTEM_PROCESSOR} STREQUAL "x86_64")
-
-endif(CMAKE_MINOR_VERSION GREATER 4)
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(MKL DEFAULT_MSG
