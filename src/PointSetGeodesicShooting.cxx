@@ -29,11 +29,11 @@ int usage()
   cout << "Additional Options" << endl;
   cout << "  -d dim                     : problem dimension (3)" << endl;
   cout << "  -n N                       : number of time steps (100)" << endl;
-  cout << "  -i iter                    : max iterations for optimization" << endl;
+  cout << "  -i iter_grad iter_newt     : max iterations for optimization for gradient descent and newton's" << endl;
   cout << "  -r fraction                : randomly downsample mesh by factor (e.g. 0.01)" << endl;
   cout << "  -q vector                  : apply quadric clustering to mesh with specified" <<  endl;
   cout << "                               number of bins per dimension (e.g. 40x40x30)" << endl;
-  cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
+//  cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
   cout << "  -O filepattern             : pattern for saving traced landmark paths (e.g., path%04d.vtk)" << endl;
   cout << "  -f                         : use single-precision float (off by deflt)" << endl;
   return -1;
@@ -56,7 +56,7 @@ void check(bool condition, char *format,...)
 
 struct ShootingParameters
 {
-  enum Algorithm { Allassonniere, GradDescent };
+  enum Algorithm { Allassonniere, GradDescent, QuasiAllassonniere };
   string fnTemplate, fnTarget;
   string fnOutput;
   string fnOutputPaths;
@@ -65,14 +65,14 @@ struct ShootingParameters
   double downsample;
   unsigned int dim;
   unsigned int N;
-  unsigned int iter;
+  unsigned int iter_grad, iter_newton;
   Algorithm alg;
   bool use_float;
 
   std::vector<int> qcdiv;
 
   ShootingParameters() :
-    N(100), dim(3), sigma(0.0), lambda(0.0), iter(120), downsample(1),
+    N(100), dim(3), sigma(0.0), lambda(0.0), iter_grad(20), iter_newton(20), downsample(1),
     use_float(false), alg(GradDescent) {}
 };
 
@@ -193,6 +193,64 @@ protected:
 };
 
 
+template <class TFloat, unsigned int VDim>
+class PointSetShootingLineSearchCostFunction : public vnl_cost_function
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+
+  // Separate type because vnl optimizer is double-only
+  typedef vnl_vector<double> DVector;
+
+  PointSetShootingLineSearchCostFunction(
+    const ShootingParameters &param, const Matrix &q0, const Matrix &p0, const Matrix &qT, const Matrix &del_p0)
+    : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
+    {
+    this->p0 = p0;
+    this->del_p0 = del_p0;
+    this->qT = qT;
+    this->param = param;
+    this->k = q0.rows();
+    this->p1.set_size(k,VDim);
+    this->q1.set_size(k,VDim);
+    }
+
+  virtual double f (vnl_vector<double> const& x)
+    {
+    TFloat alpha = (TFloat) x[0];
+
+    // Perform flow
+    double H = hsys.FlowHamiltonian(p0 + alpha * del_p0, q1, p1);
+
+    // Compute the landmark errors
+    double fnorm_sq = 0.0;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      for(unsigned int i = 0; i < k; i++)
+        {
+        double d = q1(i,a) - qT(i,a);
+        fnorm_sq += d * d;
+        }
+      }
+
+    // Compute the landmark part of the objective
+    double Edist = 0.5 * fnorm_sq;
+
+    // cout << H + param.lambda * Edist << endl;
+    return H + param.lambda * Edist;
+    }
+
+
+
+protected:
+  HSystem hsys;
+  ShootingParameters param;
+  Matrix qT, p0, del_p0, q0, p1, q1;
+  unsigned int k;
+};
+
 
 
 template <class TFloat, unsigned int VDim>
@@ -219,6 +277,9 @@ public:
 
     for(unsigned int a = 0; a < VDim; a++)
       {
+      alpha[a].set_size(k);
+      beta[a].set_size(k); beta[a].fill(0.0);
+      G[a].set_size(k);
       grad_f[a].set_size(k);
       }
     }
@@ -261,47 +322,50 @@ public:
     // Perform flow
     double H = hsys.FlowHamiltonian(p0, q1, p1);
 
-    // Compute the landmark errors
-    Matrix lmdiff = q1 - qT;
+    // Compute G and alpha/beta
+    double Gnorm_sq = 0.0, dsq = 0.0;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      for(unsigned int i = 0; i < k; i++)
+        {
+        G[a](i) = p1(i, a) + param.lambda * (q1(i, a) - qT(i, a));
+        Gnorm_sq += G[a][i] * G[a][i];
+        dsq += (q1(i, a) - qT(i, a)) * (q1(i, a) - qT(i, a));
 
-    // Compute the landmark part of the objective
-    double fnorm = lmdiff.frobenius_norm();
-    double fnorm_sq = fnorm * fnorm;
-
-    // Compute the landmark part of the objective
-    double Edist = 0.5 * fnorm_sq;
-
-    cout << H + param.lambda * Edist << endl;
+        alpha[a](i) = param.lambda * G[a][i];
+        beta[a](i) = G[a][i];
+        }
+      }
 
     if(f)
-      {
-      *f = H + param.lambda * Edist;
-      }
+      *f = 0.5 * Gnorm_sq;
 
     if(g)
       {
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        for(unsigned int i = 0; i < k; i++)
-          {
-          // Compute the transversality vector error vector G
-          grad_f[a](i) = p1(i,a) + param.lambda * lmdiff(i,a);
-          }
-        }
+      // Multiply gradient of f. wrt q1 (alpha) by Jacobian of q1 wrt p0
+      hsys.FlowGradientBackward(alpha, beta, grad_f);
 
       // Pack the gradient into the output vector
       *g = wide_to_tall(grad_f);
       }
+
+    // Print the current state
+    printf("H=%8.6f   Edist=%8.6f   E=%8.6f   |G|=%8.6f\n",
+      H, 0.5 * param.lambda * dsq, H + 0.5 * param.lambda * dsq, sqrt(Gnorm_sq));
+
     }
+
+
 
 protected:
   HSystem hsys;
   ShootingParameters param;
   Matrix qT, p0, q0, p1, q1;
-  Vector grad_f[VDim];
+  Vector alpha[VDim], beta[VDim], G[VDim], grad_f[VDim];
   unsigned int k;
 
 };
+
 
 template <class TFloat, unsigned int VDim>
 class PointSetShootingProblem
@@ -316,7 +380,7 @@ public:
     const Matrix &q0, const Matrix &qT, Matrix &p0);
 
   static void minimize_QuasiAllassonniere(const ShootingParameters &param,
-    const Matrix &q0, const Matrix &qT, Matrix &p0) {}
+    const Matrix &q0, const Matrix &qT, Matrix &p0);
 
   // Minimize using gradient descent
   static void minimize_gradient(const ShootingParameters &param, 
@@ -326,6 +390,8 @@ public:
 
 private:
 };
+
+#include <vnl/algo/vnl_brent_minimizer.h>
 
 template <class TFloat, unsigned int VDim>
 void
@@ -339,7 +405,7 @@ PointSetShootingProblem<TFloat, VDim>
   HSystem hsys(q0, param.sigma, param.N);
 
   // Where to store the results of the flow
-  Matrix q1(k,VDim), p1(k,VDim), grad_q[VDim][VDim], grad_p[VDim][VDim];
+  Matrix q1(k,VDim), p1(k,VDim), del_p0(k, VDim), grad_q[VDim][VDim], grad_p[VDim][VDim];
   for(unsigned int a = 0; a < VDim; a++)
     {
     for(unsigned int b = 0; b < VDim; b++)
@@ -354,7 +420,7 @@ PointSetShootingProblem<TFloat, VDim>
   Matrix DG(VDim * k, VDim * k);
 
   // Perform optimization using the Allassonniere method
-  for(unsigned int iter = 0; iter < param.iter; iter++)
+  for(unsigned int iter = 0; iter < param.iter_newton; iter++)
     {
     // Perform Hamiltonian flow
     double H = hsys.FlowHamiltonianWithGradient(p0, q1, p1, grad_q, grad_p);
@@ -374,7 +440,7 @@ PointSetShootingProblem<TFloat, VDim>
         // Compute the transversality vector error vector G
         G(a * k + i) = p1(i,a) + 2 * param.lambda * lmdiff(i,a);
 
-        // Fill the Hessian-like matrix 
+        // Fill the Hessian-like matrix
         for(unsigned int b = 0; b < VDim; b++)
           {
           for(unsigned int j = 0; j < k; j++)
@@ -390,20 +456,29 @@ PointSetShootingProblem<TFloat, VDim>
     vnl_svd<TFloat> svd(DG, 1.0);
 
     // Compute inv(DG) * G
-    Vector del_p0 = - svd.solve(G);
-    
-    // Print the current state
-    printf("Iter %4d   H=%8.6f   Edist=%8.6f   E=%8.6f   |G|=%8.6f\n",
-      iter, H, 0.5 * param.lambda * dsq, H + 0.5 * param.lambda * dsq, G.two_norm());
-
-    // Update the solution
+    Vector del_p0_vec = - svd.solve(G);
     for(unsigned int a = 0; a < VDim; a++)
-      {
       for(unsigned int i = 0; i < k; i++)
-        {
-        p0(i,a) += 0.1 * del_p0(a * k + i);
-        }
-      }
+        del_p0(i,a) = del_p0_vec(a * k + i);
+
+    // Perform line search - turned out useless
+    /*
+    typedef PointSetShootingLineSearchCostFunction<TFloat, VDim> CostFn;
+    CostFn cost_fn(param, q0, p0, qT, del_p0);
+
+    vnl_brent_minimizer brent(cost_fn);
+    brent.set_x_tolerance(0.02);
+    // TFloat alpha = brent.minimize_given_bounds(0.0, 0.9, 2.0);
+    */
+
+    // Argh! What to do with alpha!
+    TFloat alpha = 0.1; // 1.0 - pow( 0.9, iter + 1.0);
+
+    // Print the current state
+    printf("Iter %4d   H=%8.6f   Edist=%8.6f   E=%8.6f   |G|=%8.6f   alpha=%8.6f\n",
+      iter, H, 0.5 * param.lambda * dsq, H + 0.5 * param.lambda * dsq, G.two_norm(), alpha);
+
+    p0 += alpha * del_p0;
     }
 }
 /*
@@ -507,6 +582,36 @@ PointSetShootingProblem<TFloat, VDim>
 
 #include "vnl/algo/vnl_lbfgsb.h"
 
+template <class TFloat, unsigned int VDim>
+void
+PointSetShootingProblem<TFloat, VDim>
+::minimize_QuasiAllassonniere(const ShootingParameters &param,
+  const Matrix &q0, const Matrix &qT, Matrix &p0)
+{
+  // Create the minimization problem
+  typedef PointSetShootingTransversalityCostFunction<TFloat, VDim> CostFn;
+  CostFn cost_fn(param, q0, qT);
+
+  // Create initial/final solution
+  p0 = (qT - q0) / param.N;
+  typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
+
+
+  // Solve the minimization problem
+
+  vnl_lbfgsb optimizer(cost_fn);
+  optimizer.set_f_tolerance(1e-9);
+  optimizer.set_x_tolerance(1e-4);
+  optimizer.set_g_tolerance(1e-6);
+  optimizer.set_trace(true);
+  optimizer.set_max_function_evals(param.iter_newton);
+  optimizer.minimize(x);
+
+  // Take the optimal solution
+  p0 = cost_fn.tall_to_wide(x);
+}
+
+
 
 template <class TFloat, unsigned int VDim>
 void
@@ -531,7 +636,7 @@ PointSetShootingProblem<TFloat, VDim>
   optimizer.set_x_tolerance(1e-4);
   optimizer.set_g_tolerance(1e-6);
   optimizer.set_trace(true);
-  optimizer.set_max_function_evals(param.iter);
+  optimizer.set_max_function_evals(param.iter_grad);
 
   // vnl_conjugate_gradient optimizer(cost_fn);
   // optimizer.set_trace(true);
@@ -618,11 +723,26 @@ PointSetShootingProblem<TFloat, VDim>
       }
     }
 
+  // Run some iterations of gradient descent
+  if(param.iter_grad > 0)
+    {
+    minimize_gradient(param, q0, qT, p0);
+    }
+
+  if(param.iter_newton > 0)
+    {
+    minimize_Allassonniere(param, q0, qT, p0);
+    }
+
   // Select the method to run
+  /*
   if(param.alg == ShootingParameters::Allassonniere)
     minimize_Allassonniere(param, q0, qT, p0);
+  else if(param.alg == ShootingParameters::QuasiAllassonniere)
+    minimize_QuasiAllassonniere(param, q0, qT, p0);
   else
     minimize_gradient(param, q0, qT, p0);
+    */
 
   // Genererate the momentum map
   vtkDoubleArray *arr_p = vtkDoubleArray::New();
@@ -739,7 +859,8 @@ int main(int argc, char *argv[])
       }
     else if(arg == "-i")
       {
-      param.iter = (unsigned int) cl.read_integer();
+      param.iter_grad = (unsigned int) cl.read_integer();
+      param.iter_newton = (unsigned int) cl.read_integer();
       }
     else if(arg == "-q")
       {
@@ -750,6 +871,8 @@ int main(int argc, char *argv[])
       string alg = cl.read_string();
       if(alg == "a" || alg == "A" || alg == "Allassonniere")
         param.alg = ShootingParameters::Allassonniere;
+      else if(alg == "q" || alg == "Q" || alg == "QuasiAllassonniere")
+        param.alg = ShootingParameters::QuasiAllassonniere;
       else
         param.alg = ShootingParameters::GradDescent;
       }

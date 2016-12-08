@@ -1,3 +1,8 @@
+ADD_EXECUTABLE(vtkprocrustes 
+  MeshProcrustes.cxx 
+  ReadWriteVTK.cxx 
+  ${CMREP_SOURCE_DIR}/src/Procrustes.cxx)
+
 ADD_EXECUTABLE(vtklevelset RealImageToMesh.cxx ReadWriteVTK.cxx)
 
 ADD_EXECUTABLE(vtkcontour RealImageToContour.cxx ReadWriteVTK.cxx)
