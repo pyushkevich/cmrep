@@ -180,8 +180,20 @@ PointSetGeodesicToWarp<TPixel, VDim>
       typename VectorImageType::InternalPixelType vec;
       for(unsigned int a = 0; a < VDim; a++)
         {
-        point[a] = qt(i,a);
-        vec[a] = pt(i,a);
+        // Here we have to correct for the fact that the landmark coordinates are 
+        // assumed to be in RAS space, but point is in LPS space. We therefore have
+        // to apply the LPS/RAS transform before splatting
+        if(a < 2)
+          {
+          point[a] = -qt(i,a);
+          vec[a] = -pt(i,a);
+          }
+        else
+          {
+          point[a] = qt(i,a);
+          vec[a] = pt(i,a);
+          }
+
         }
       imRef->TransformPhysicalPointToContinuousIndex(point, cix);
 
