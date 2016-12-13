@@ -63,6 +63,20 @@ int main(int argc, char *argv[])
   phits->SetName("phits");
   sphere->GetPointData()->AddArray(phits);
   
+  vtkSmartPointer<vtkDoubleArray> theta = vtkDoubleArray::New();
+  theta->SetNumberOfComponents(1);
+  theta->SetNumberOfTuples(sphere->GetNumberOfPoints());
+  theta->FillComponent(0, 0.0);
+  theta->SetName("theta");
+  sphere->GetPointData()->AddArray(theta);
+  
+  vtkSmartPointer<vtkDoubleArray> phi = vtkDoubleArray::New();
+  phi->SetNumberOfComponents(1);
+  phi->SetNumberOfTuples(sphere->GetNumberOfPoints());
+  phi->FillComponent(0, 0.0);
+  phi->SetName("phi");
+  sphere->GetPointData()->AddArray(phi);
+  
   // Another array for mean shape
   vtkSmartPointer<vtkDoubleArray> meanshape = vtkDoubleArray::New();
   meanshape->SetNumberOfComponents(3);
@@ -133,6 +147,10 @@ int main(int argc, char *argv[])
   // Update the arrays
   for(int j = 0; j < sphere->GetNumberOfPoints(); j++)
     {
+    double *x = sphere->GetPoint(j);
+    theta->SetTuple1(j, acos(x[2] / (x[0]*x[0]+x[1]*x[1]+x[2]*x[2])));
+    phi->SetTuple1(j, atan2(x[1],x[0]));
+
     double n = phits->GetTuple1(j);
     if(n > 0)
       {
