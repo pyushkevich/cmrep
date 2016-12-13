@@ -61,10 +61,15 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Loop over all points
   for(unsigned int i = 0; i < k; i++)
     {
+    // Get a pointer to pi for faster access?
+    const TFloat *pi = p.data_array()[i], *qi = q.data_array()[i];
+
     // TODO: you should be able to do this computation on half the matrix, it's symmetric!
     #pragma omp parallel for
     for(unsigned int j = 0; j < k; j++)
       {
+      const TFloat *pj = p.data_array()[j], *qj = q.data_array()[j];
+
       // Vector Qi-Qj
       VecD dq;
 
@@ -74,8 +79,8 @@ PointSetHamiltonianSystem<TFloat, VDim>
       // Compute above quantities
       for(unsigned int a = 0; a < VDim; a++)
         {
-        dq[a] = q(i,a) - q(j,a);
-        pi_pj += p(i,a) * p(j,a);
+        dq[a] = qi[a] - qj[a];
+        pi_pj += pi[a] * pj[a];
         }
 
       // Compute the Gaussian and its derivatives
@@ -89,19 +94,20 @@ PointSetHamiltonianSystem<TFloat, VDim>
         {
         // First derivatives
         Hq[a](i) += 2 * pi_pj * g1 * dq[a];
-        Hp[a](i) += g * p(j,a);
+        Hp[a](i) += g * pj[a];
 
         // Second derivatives
         if(flag_hessian)
           {
+          TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
           for(unsigned int b = 0; b < VDim; b++)
             {
             TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
             Hqq[a][b](i,j) -= val_qq;
             Hqq[a][b](i,i) += val_qq;
 
-            Hqp[a][b](i,j) += 2.0 * g1 * dq[a] * p(i,b);
-            Hqp[a][b](i,i) += 2.0 * g1 * dq[a] * p(j,b);
+            Hqp[a][b](i,j) += term_2_g1_dqa * pi[b];
+            Hqp[a][b](i,i) += term_2_g1_dqa * pj[b];
             }
 
           Hpp[a][a](i,j) = g;
@@ -111,6 +117,96 @@ PointSetHamiltonianSystem<TFloat, VDim>
     } // loop over i
 
   return H;
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ApplyHamiltonianHessianToAlphaBeta(
+    const Matrix &q, const Matrix &p,
+    const Vector alpha[], const Vector beta[],
+    Vector d_alpha[], Vector d_beta[])
+{
+  TFloat f = -0.5 / (sigma * sigma);
+
+  for(int a = 0; a < VDim; a++)
+    {
+    d_alpha[a].fill(0.0);
+    d_beta[a].fill(0.0);
+    }
+
+
+  // Loop over all points
+  for(unsigned int i = 0; i < k; i++)
+    {
+    // Get a pointer to pi for faster access?
+    const TFloat *pi = p.data_array()[i], *qi = q.data_array()[i];
+
+    // TODO: you should be able to do this computation on half the matrix, it's symmetric!
+    #pragma omp parallel for
+    for(unsigned int j = 0; j < k; j++)
+      {
+      const TFloat *pj = p.data_array()[j], *qj = q.data_array()[j];
+
+      // Vector Qi-Qj
+      VecD dq;
+
+      // Dot product of Pi and Pj
+      TFloat pi_pj = 0.0;
+
+      // Compute above quantities
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        dq[a] = qi[a] - qj[a];
+        pi_pj += pi[a] * pj[a];
+        }
+
+      // Compute the Gaussian and its derivatives
+      TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+
+      /*
+       * d_beta[a] = alpha[b] * Hpp[b][a] =
+       *
+       * d_beta[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hpp[a][b][i][j] - beta[a][i] * Hqp[a][b][i][j] );
+       *
+       * d_alpha[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hpq[a][b][i][j] - beta[a][i] * Hqq[a][b][i][j] );
+       *
+       * d_alpha[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hqp[b][a][j][i] - beta[a][i] * Hqq[a][b][i][j] );
+       */
+
+      // Accumulate the derivatives
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+
+        TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
+        for(unsigned int b = 0; b < VDim; b++)
+          {
+          TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
+
+          d_alpha[b][j] += beta[a][i] * val_qq;
+          d_alpha[b][i] -= beta[a][i] * val_qq;
+
+          // Same as Hpq_ba_ji
+          TFloat Hqp_ab_ij = term_2_g1_dqa * pi[b];
+
+          // Same as Hpq_ba_ii
+          TFloat Hqp_ab_ii_bit = term_2_g1_dqa * pj[b];
+
+          d_beta[b][j] -= beta[a][i] * Hqp_ab_ij;
+          d_beta[b][i] -= beta[a][i] * Hqp_ab_ii_bit;
+
+          d_alpha[a][i] += alpha[b][j] * Hqp_ab_ij;
+          d_alpha[a][i] += alpha[b][i] * Hqp_ab_ii_bit;
+
+          }
+
+        d_beta[a][i] += g * alpha[a][j];
+        }
+      } // loop over j
+    } // loop over i}
 }
 
 template <class TFloat, unsigned int VDim>
@@ -248,6 +344,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Allocate update vectors for alpha and beta
   Vector alpha[VDim], beta[VDim];
   Vector d_alpha[VDim], d_beta[VDim];
+
   for(int a = 0; a < VDim; a++)
     {
     alpha[a] = alpha1[a];
@@ -259,21 +356,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Work our way backwards
   for(int t = N-1; t > 0; t--)
     {
-    // Compute the Hamiltonian on the (i-1)st q/p
-    ComputeHamiltonianJet(Qt[t - 1], Pt[t - 1], true);
-
-    // Compute the updates
-    for(int a = 0; a < VDim; a++)
-      {
-      d_alpha[a].fill(0.0);
-      d_beta[a].fill(0.0);
-
-      for(int b = 0; b < VDim; b++)
-        {
-        d_alpha[a] += alpha[b] * (Hqp[a][b]).transpose() - beta[b] * Hqq[b][a];
-        d_beta[a] += alpha[b] * Hpp[b][a] - beta[b] * Hqp[b][a];
-        }
-      }
+    // Apply Hamiltonian Hessian to get an update in alpha/beta
+    ApplyHamiltonianHessianToAlphaBeta(
+          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
 
     // Update the vectors
     for(int a = 0; a < VDim; a++)

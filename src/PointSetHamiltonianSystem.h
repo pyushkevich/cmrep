@@ -36,6 +36,21 @@ public:
   TFloat ComputeHamiltonianJet(const Matrix &q, const Matrix &p, bool flag_hessian);
 
   /**
+   * Compute the product of the Hessian of the Hamiltonian and a pair of
+   * vectors \alpha and \beta, as follows:
+   *
+   * d_alpha[a] = \sum_b (alpha[b] * Hpq[b][a] - beta[b] * Hqq[b][a])
+   * d_beta[a] = \sum_b (alpha[b] * Hpp[b][a] - beta[b] * Hqp[b][a])
+   *
+   * This allows backward flowing of the gradient without having to store
+   * the Hessian matrices, and hopefully would be somewhat faster
+   */
+  void ApplyHamiltonianHessianToAlphaBeta(
+      const Matrix &q, const Matrix &p,
+      const Vector alpha[VDim], const Vector beta[VDim],
+      Vector d_alpha[VDim], Vector d_beta[VDim]);
+
+  /**
    * Flow the Hamiltonian system with initial momentum p0 without gradient 
    * computation. Returns the kinetic energy (Hamiltonian value that should 
    * be preserved over the time evolution)
