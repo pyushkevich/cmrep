@@ -64,9 +64,18 @@ PointSetHamiltonianSystem<TFloat, VDim>
     // Get a pointer to pi for faster access?
     const TFloat *pi = p.data_array()[i], *qi = q.data_array()[i];
 
+    // The diagonal terms
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      H += 0.5 * pi[a] * pi[a];
+      Hp[a](i) += pi[a];
+      if(flag_hessian)
+        Hpp[a][a](i,i) = 1.0;
+      }
+
     // TODO: you should be able to do this computation on half the matrix, it's symmetric!
     #pragma omp parallel for
-    for(unsigned int j = 0; j < k; j++)
+    for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *pj = p.data_array()[j], *qj = q.data_array()[j];
 
@@ -87,7 +96,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
       TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       // Accumulate the Hamiltonian
-      H += 0.5 * pi_pj * g;
+      H += pi_pj * g;
 
       // Accumulate the derivatives
       for(unsigned int a = 0; a < VDim; a++)
@@ -95,6 +104,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
         // First derivatives
         Hq[a](i) += 2 * pi_pj * g1 * dq[a];
         Hp[a](i) += g * pj[a];
+
+        Hq[a](j) -= 2 * pi_pj * g1 * dq[a];
+        Hp[a](j) += g * pi[a];
 
         // Second derivatives
         if(flag_hessian)
@@ -105,12 +117,17 @@ PointSetHamiltonianSystem<TFloat, VDim>
             TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
             Hqq[a][b](i,j) -= val_qq;
             Hqq[a][b](i,i) += val_qq;
+            Hqq[a][b](j,i) -= val_qq;
+            Hqq[a][b](j,j) += val_qq;
 
             Hqp[a][b](i,j) += term_2_g1_dqa * pi[b];
             Hqp[a][b](i,i) += term_2_g1_dqa * pj[b];
+            Hqp[a][b](j,i) -= term_2_g1_dqa * pj[b];
+            Hqp[a][b](j,j) -= term_2_g1_dqa * pi[b];
             }
 
           Hpp[a][a](i,j) = g;
+          Hpp[a][a](j,i) = g;
           }
         }
       } // loop over j
