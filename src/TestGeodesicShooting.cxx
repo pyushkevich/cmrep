@@ -4,6 +4,7 @@
 #include <vnl/vnl_matlab_filewrite.h>
 #include <vnl/vnl_matlab_read.h>
 #include <vnl/vnl_random.h>
+#include <cstdarg>
 
 void test(double val1, double val2, double tol, const char *format, ...)
 {
