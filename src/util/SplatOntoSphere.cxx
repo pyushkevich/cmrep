@@ -140,6 +140,10 @@ int main(int argc, char *argv[])
         {
         meanshape->SetComponent(j, d, meanshape->GetComponent(j, d) / n);
         }
+      sphere->GetPoints()->SetPoint(j, 
+        meanshape->GetComponent(j,0),
+        meanshape->GetComponent(j,1),
+        meanshape->GetComponent(j,2));
       }
     }
 
