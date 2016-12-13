@@ -10,6 +10,7 @@
 #include <vtkDoubleArray.h>
 #include <vtkCellData.h>
 #include <vtkGenericCell.h>
+#include <vtkPointData.h>
 
 using namespace std;
 
@@ -55,6 +56,22 @@ int main(int argc, char *argv[])
   hits->SetName("hits");
   sphere->GetCellData()->AddArray(hits);
   
+  vtkSmartPointer<vtkDoubleArray> phits = vtkDoubleArray::New();
+  phits->SetNumberOfComponents(1);
+  phits->SetNumberOfTuples(sphere->GetNumberOfPoints());
+  phits->FillComponent(0, 0.0);
+  phits->SetName("phits");
+  sphere->GetPointData()->AddArray(phits);
+  
+  // Another array for mean shape
+  vtkSmartPointer<vtkDoubleArray> meanshape = vtkDoubleArray::New();
+  meanshape->SetNumberOfComponents(3);
+  meanshape->SetNumberOfTuples(sphere->GetNumberOfPoints());
+  meanshape->FillComponent(0, 0.0);
+  meanshape->FillComponent(1, 0.0);
+  meanshape->FillComponent(2, 0.0);
+  meanshape->SetName("meanshape");
+  sphere->GetPointData()->AddArray(meanshape);
 
   // Create a locator
   vtkSmartPointer<vtkCellLocator> loc = vtkCellLocator::New();
@@ -70,28 +87,61 @@ int main(int argc, char *argv[])
     reader->Update();
     vtkSmartPointer<vtkPolyData> mesh = reader->GetOutput();
 
+    // Get the phi and theta arrays
+    vtkDataArray *phi = mesh->GetPointData()->GetArray("phi");
+    vtkDataArray *theta = mesh->GetPointData()->GetArray("theta");
+
     // Iterate over points
     for(int j = 0; j < mesh->GetNumberOfPoints(); j++)
       {
+      double p[3];
       double cp[3];
       vtkSmartPointer<vtkGenericCell> cell = vtkGenericCell::New();
       vtkIdType cellid;
       int subid;
       double dist2;
 
+      // Compute the spherical coordinates
+      double theta_x = theta->GetComponent(j,0), phi_x = phi->GetComponent(j,0);
+      p[0] = sin(theta_x) * cos(phi_x);
+      p[1] = sin(theta_x) * sin(phi_x);
+      p[2] = cos(theta_x);
+
       // Run the locator
-      loc->FindClosestPoint(mesh->GetPoint(j), cp, cell, cellid, subid, dist2);
+      loc->FindClosestPoint(p, cp, cell, cellid, subid, dist2);
 
       // Add a hit to the cell
       hits->SetTuple1(cellid, hits->GetTuple1(cellid) + 1);
+
+      // Splat the coordinates onto the vertices of the triangle
+      for(int k = 0; k < cell->GetNumberOfPoints(); k++)
+        {
+        vtkIdType m = cell->GetPointId(k);
+        for(int d = 0; d < 3; d++)
+          {
+          meanshape->SetComponent(m, d, meanshape->GetComponent(m, d) + mesh->GetPoint(j)[d]); 
+          phits->SetTuple1(m, 1 + phits->GetTuple1(m));
+          }
+        }
       }
 
     cout << "." << flush;
-    mesh->Delete();
-
     }
 
   cout << endl;
+
+  // Update the arrays
+  for(int j = 0; j < sphere->GetNumberOfPoints(); j++)
+    {
+    double n = phits->GetTuple1(j);
+    if(n > 0)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        meanshape->SetComponent(j, d, meanshape->GetComponent(j, d) / n);
+        }
+      }
+    }
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
   writer->SetFileName(argv[1]);
