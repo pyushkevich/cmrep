@@ -144,7 +144,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
     // TODO: you should be able to do this computation on half the matrix, it's symmetric!
     #pragma omp parallel for
-    for(unsigned int j = 0; j < k; j++)
+    for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *pj = p.data_array()[j], *qj = q.data_array()[j];
 
@@ -182,30 +182,37 @@ PointSetHamiltonianSystem<TFloat, VDim>
         {
 
         TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
+        TFloat alpha_j_pi_plus_alpha_i_pj = 0.0;
+        TFloat d_beta_ji_a = (beta[a][j] - beta[a][i]);
+
         for(unsigned int b = 0; b < VDim; b++)
           {
           TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
+          TFloat upd = d_beta_ji_a * val_qq;
 
-          d_alpha[b][j] += beta[a][i] * val_qq;
-          d_alpha[b][i] -= beta[a][i] * val_qq;
+          // We can take advantage of the symmetry of Hqq.
+          d_alpha[b][j] -= upd;
+          d_alpha[b][i] += upd;
 
-          // Same as Hpq_ba_ji
-          TFloat Hqp_ab_ij = term_2_g1_dqa * pi[b];
+          d_beta[b][j] += d_beta_ji_a * term_2_g1_dqa * pi[b];
+          d_beta[b][i] += d_beta_ji_a * term_2_g1_dqa * pj[b];
 
-          // Same as Hpq_ba_ii
-          TFloat Hqp_ab_ii_bit = term_2_g1_dqa * pj[b];
-
-          d_beta[b][j] -= beta[a][i] * Hqp_ab_ij;
-          d_beta[b][i] -= beta[a][i] * Hqp_ab_ii_bit;
-
-          d_alpha[a][i] += alpha[b][j] * Hqp_ab_ij;
-          d_alpha[a][i] += alpha[b][i] * Hqp_ab_ii_bit;
-
+          alpha_j_pi_plus_alpha_i_pj += alpha[b][j] * pi[b] + alpha[b][i] * pj[b];
           }
 
+        d_alpha[a][i] += term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+        d_alpha[a][j] -= term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+
         d_beta[a][i] += g * alpha[a][j];
+        d_beta[a][j] += g * alpha[a][i];
         }
       } // loop over j
+
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      d_beta[a][i] += alpha[a][i];
+      }
+
     } // loop over i}
 }
 
