@@ -6,6 +6,7 @@
 #include "vtkDataArray.h"
 #include "FastLinearInterpolator.h"
 
+#include <cstdarg>
 
 using namespace std;
 
