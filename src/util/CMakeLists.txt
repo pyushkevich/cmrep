@@ -1,3 +1,6 @@
+ADD_EXECUTABLE(sphere_splat
+  SplatOntoSphere.cxx)
+
 ADD_EXECUTABLE(vtkprocrustes 
   MeshProcrustes.cxx 
   ReadWriteVTK.cxx 
