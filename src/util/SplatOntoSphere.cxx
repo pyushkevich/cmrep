@@ -26,8 +26,9 @@ int usage()
 
 int main(int argc, char *argv[])
 {
-  unsigned int n_tess = 5;
+  unsigned int n_tess = 3;
 
+  /*
   vtkSmartPointer<vtkPlatonicSolidSource> ico = vtkPlatonicSolidSource::New();
   ico->SetSolidTypeToIcosahedron();
   ico->Update();
@@ -48,21 +49,6 @@ int main(int argc, char *argv[])
 
   vtkSmartPointer<vtkPolyData> sphere = calc->GetPolyDataOutput();
 
-  // Create a cell data array
-  vtkSmartPointer<vtkDoubleArray> hits = vtkDoubleArray::New();
-  hits->SetNumberOfComponents(1);
-  hits->SetNumberOfTuples(sphere->GetNumberOfCells());
-  hits->FillComponent(0, 0.0);
-  hits->SetName("hits");
-  sphere->GetCellData()->AddArray(hits);
-  
-  vtkSmartPointer<vtkDoubleArray> phits = vtkDoubleArray::New();
-  phits->SetNumberOfComponents(1);
-  phits->SetNumberOfTuples(sphere->GetNumberOfPoints());
-  phits->FillComponent(0, 0.0);
-  phits->SetName("phits");
-  sphere->GetPointData()->AddArray(phits);
-  
   vtkSmartPointer<vtkDoubleArray> theta = vtkDoubleArray::New();
   theta->SetNumberOfComponents(1);
   theta->SetNumberOfTuples(sphere->GetNumberOfPoints());
@@ -77,20 +63,16 @@ int main(int argc, char *argv[])
   phi->SetName("phi");
   sphere->GetPointData()->AddArray(phi);
   
-  // Another array for mean shape
-  vtkSmartPointer<vtkDoubleArray> meanshape = vtkDoubleArray::New();
-  meanshape->SetNumberOfComponents(3);
-  meanshape->SetNumberOfTuples(sphere->GetNumberOfPoints());
-  meanshape->FillComponent(0, 0.0);
-  meanshape->FillComponent(1, 0.0);
-  meanshape->FillComponent(2, 0.0);
-  meanshape->SetName("meanshape");
-  sphere->GetPointData()->AddArray(meanshape);
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
+  writer->SetFileName("sphere_canon.vtk");
+  writer->SetInputData(sphere);
+  writer->Update();
+  */
 
-  // Create a locator
-  vtkSmartPointer<vtkCellLocator> loc = vtkCellLocator::New();
-  loc->SetDataSet(sphere);
-  loc->BuildLocator();
+  vtkSmartPointer<vtkPolyDataReader> reader = vtkPolyDataReader::New();
+  reader->SetFileName(argv[1]);
+  reader->Update();
+  vtkSmartPointer<vtkPolyData> sphere = reader->GetOutput();
 
   // Process all of the input meshes
   for(int i = 2; i < argc;i++)
@@ -101,12 +83,28 @@ int main(int argc, char *argv[])
     reader->Update();
     vtkSmartPointer<vtkPolyData> mesh = reader->GetOutput();
 
-    // Get the phi and theta arrays
-    vtkDataArray *phi = mesh->GetPointData()->GetArray("phi");
-    vtkDataArray *theta = mesh->GetPointData()->GetArray("theta");
+    // Map the mesh onto the sphere
+    vtkSmartPointer<vtkArrayCalculator> calcmesh = vtkArrayCalculator::New();
+    calcmesh->SetInputData(mesh);
+    calcmesh->AddScalarArrayName("theta");
+    calcmesh->AddScalarArrayName("phi");
+    calcmesh->SetCoordinateResults(1);
+    calcmesh->SetFunction("sin(theta)*cos(phi)*iHat+sin(theta)*sin(phi)*jHat+cos(theta)*kHat");
+    calcmesh->Update();
 
-    // Iterate over points
-    for(int j = 0; j < mesh->GetNumberOfPoints(); j++)
+    vtkSmartPointer<vtkPolyData> mesh_sphere = calcmesh->GetPolyDataOutput();
+
+    // Create a locator for the newly created sphere
+    vtkSmartPointer<vtkCellLocator> loc = vtkCellLocator::New();
+    loc->SetDataSet(mesh_sphere);
+    loc->BuildLocator();
+
+    // Updated sphere
+    vtkSmartPointer<vtkPolyData> sphereCopy = vtkSmartPointer<vtkPolyData>::New();
+    sphereCopy->DeepCopy(sphere);
+
+    // Iterate over points in the landmark sphere
+    for(int j = 0; j < sphere->GetNumberOfPoints(); j++)
       {
       double p[3];
       double cp[3];
@@ -114,60 +112,35 @@ int main(int argc, char *argv[])
       vtkIdType cellid;
       int subid;
       double dist2;
+      double pcoords[3], weights[3];
 
       // Compute the spherical coordinates
-      double theta_x = theta->GetComponent(j,0), phi_x = phi->GetComponent(j,0);
-      p[0] = sin(theta_x) * cos(phi_x);
-      p[1] = sin(theta_x) * sin(phi_x);
-      p[2] = cos(theta_x);
-
-      // Run the locator
-      loc->FindClosestPoint(p, cp, cell, cellid, subid, dist2);
-
-      // Add a hit to the cell
-      hits->SetTuple1(cellid, hits->GetTuple1(cellid) + 1);
+      loc->FindClosestPoint(sphere->GetPoint(j), cp, cell, cellid, subid, dist2);
+      // cout << cp[0] << " " << cp[1] << " " << cp[2] << endl;
+      cell->EvaluatePosition(cp, p, subid, pcoords, dist2, weights);
+      cout << weights[0] << " " << weights[1] << " " << weights[2] << endl;
 
       // Splat the coordinates onto the vertices of the triangle
+      sphereCopy->GetPoints()->SetPoint(j, 0, 0, 0);
       for(int k = 0; k < cell->GetNumberOfPoints(); k++)
         {
         vtkIdType m = cell->GetPointId(k);
-        for(int d = 0; d < 3; d++)
-          {
-          meanshape->SetComponent(m, d, meanshape->GetComponent(m, d) + mesh->GetPoint(j)[d]); 
-          phits->SetTuple1(m, 1 + phits->GetTuple1(m));
-          }
+        double xk = mesh->GetPoint(m)[0] * weights[k] + sphereCopy->GetPoint(j)[0];
+        double yk = mesh->GetPoint(m)[1] * weights[k] + sphereCopy->GetPoint(j)[1];
+        double zk = mesh->GetPoint(m)[2] * weights[k] + sphereCopy->GetPoint(j)[2];
+        sphereCopy->GetPoints()->SetPoint(j, xk, yk, zk);
         }
       }
 
+    char buffer[256];
+    sprintf(buffer,"mesh%04d.vtk", i);
+    vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
+    writer->SetFileName(buffer);
+    writer->SetInputData(sphereCopy);
+    writer->Update();
+    
     cout << "." << flush;
     }
 
   cout << endl;
-
-  // Update the arrays
-  for(int j = 0; j < sphere->GetNumberOfPoints(); j++)
-    {
-    double *x = sphere->GetPoint(j);
-    theta->SetTuple1(j, acos(x[2] / (x[0]*x[0]+x[1]*x[1]+x[2]*x[2])));
-    phi->SetTuple1(j, atan2(x[1],x[0]));
-
-    double n = phits->GetTuple1(j);
-    if(n > 0)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        meanshape->SetComponent(j, d, meanshape->GetComponent(j, d) / n);
-        }
-      sphere->GetPoints()->SetPoint(j, 
-        meanshape->GetComponent(j,0),
-        meanshape->GetComponent(j,1),
-        meanshape->GetComponent(j,2));
-      }
-    }
-
-  vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
-  writer->SetFileName(argv[1]);
-  writer->SetInputData(sphere);
-  writer->Update();
-
 }

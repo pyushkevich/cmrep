@@ -306,6 +306,13 @@ ADD_EXECUTABLE(lmshoot
   src/util/ReadWriteVTK.cxx)
 TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
 
+ADD_EXECUTABLE(lmflow
+  src/PointSetHamiltonianSystem.cxx
+  src/util/ReadWriteVTK.cxx
+  src/PointSetGeodesicFlowUtil.cxx)
+TARGET_LINK_LIBRARIES(lmflow ${PDE_LIBS})
+
+
 INCLUDE_DIRECTORIES(submodules/greedy/src)
 ADD_EXECUTABLE(lmtowarp
   src/PointSetHamiltonianSystem.cxx
