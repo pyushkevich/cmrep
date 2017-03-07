@@ -17,6 +17,7 @@ int usage()
   cout << "Usage:" << endl;
   cout << "  vtkprocrustes [options] fixed.vtk moving.vtk output.mat" << endl;
   cout << "Options: " << endl;
+  cout << "  -r                 : do a rigid (no scaling) match between meshes" << endl;
   cout << "  -a                 : do a full affine match between meshes" << endl;
   cout << "  -f                 : flip meshes before procrustes" << endl;
   return -1;
@@ -26,6 +27,7 @@ int main(int argc, char *argv[])
 {
   bool flip = false;
   bool affine = false;
+  bool rigid = false;
   if(argc < 4)
     return usage();
 
@@ -39,6 +41,10 @@ int main(int argc, char *argv[])
       {
       affine = true;
       }
+    else if(arg == "-r")
+      {
+      rigid = true;
+      }
     else if(arg == "-f")
       {
       flip = true;
@@ -48,6 +54,12 @@ int main(int argc, char *argv[])
       cerr << "Unknown argument " << arg << endl;
       return usage();
       }
+    }
+
+  if(affine && rigid)
+    {
+    cerr << "Affine and rigid cannot be used together" << endl;
+    return -1;
     }
 
   // Read the two meshes
@@ -139,6 +151,9 @@ int main(int argc, char *argv[])
     vnl_vector<double> b;
     double s;
     ExtendedProcrustesAnalysis(Xfix, Xmov, Xfix2mov, R, b, s);
+
+    if(rigid)
+      s = 1.0;
 
     A.update(R.transpose() * s, 0, 0);
     A(0,3) = b[0];
