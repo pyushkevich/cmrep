@@ -22,8 +22,14 @@ int usage()
   cout << "  -m mesh.vtk        : Mesh with the InitialMomentum array defined" << endl;
   cout << "  -s sigma           : kernel standard deviation" << endl;
   cout << "Additional options:" << endl;
-  cout << "  -d dim                     : problem dimension (3)" << endl;
-  cout << "  -n N                       : number of time steps (100)" << endl;
+  cout << "  -d dim             : problem dimension (3)" << endl;
+  cout << "  -n N               : number of time steps (100)" << endl;
+  cout << "Mesh warping mode:" << endl;
+  cout << "  -M in.vtk out.vtk  : additional meshes to apply warp to" << endl;
+  cout << "                       when using -M, -r/-o are optional" << endl;
+  cout << "Animation:" << endl;
+  cout << "  -a k               : save an animation frame every k-th timepoint" << endl;
+  cout << "                       output files must have %03d pattern in them" << endl;
 
   return -1;
 }
@@ -46,13 +52,18 @@ void check(bool condition, char *format,...)
 
 struct WarpGenerationParameters
 {
+  typedef std::pair<string, string> MeshPair;
+
   string fnReference, fnMesh, fnOutWarp;
   double sigma;
   unsigned int dim;
   unsigned int N;
+  unsigned int anim_freq;
+
+  std::list<MeshPair> fnWarpMeshes;
 
   WarpGenerationParameters():
-    N(100), dim(3), sigma(0.0) {}
+    N(100), dim(3), sigma(0.0), anim_freq(0) {}
 };
 
 template <class TPixel, unsigned int VDim>
@@ -75,7 +86,38 @@ public:
   typedef itk::ContinuousIndex<TPixel,VDim> ContIndexType;
 
   static int run(const WarpGenerationParameters &param);
+
+private:
+
+  static void UpdateAndWriteMesh(
+    vtkPolyData *mesh, const Matrix &x, 
+    const std::string filePattern,
+    int k);
 };
+
+
+template <class TPixel, unsigned int VDim>
+void
+PointSetGeodesicToWarp<TPixel, VDim>
+::UpdateAndWriteMesh(
+  vtkPolyData *mesh, const Matrix &x, 
+  const std::string filePattern,
+  int k)
+{
+  // Assign new points to the mesh
+  for(int i = 0; i < x.rows(); i++)
+    {
+    double x_out[VDim];
+    for(int a = 0; a < VDim; a++) 
+      x_out[a] = x(i,a);
+    mesh->GetPoints()->SetPoint(i,x_out);
+    }
+
+  // Write the mesh
+  char buffer[2048];
+  sprintf(buffer, filePattern.c_str(), k);
+  WriteVTKData(mesh, buffer);
+}
 
 template <class TPixel, unsigned int VDim>
 int
@@ -135,124 +177,189 @@ PointSetGeodesicToWarp<TPixel, VDim>
   // Flow without gradients - we have streamlines
   hsys.FlowHamiltonian(p0, q1, p1);
 
-  // Read the reference image
-  ImagePointer imRef;
-  LDDMM::img_read(param.fnReference.c_str(), imRef);
-
-  // Image for splatting
-  VectorImagePointer imSplat, imVelocity, imLagragean, imPhi;
-  LDDMM::alloc_vimg(imSplat, imRef);
-  LDDMM::alloc_vimg(imVelocity, imRef);
-  LDDMM::alloc_vimg(imLagragean, imRef);
-  LDDMM::alloc_vimg(imPhi, imRef);
-
-  // Compute the scaling factor for the Gaussian smoothing
-  double scaling = 1.0;
-  for(unsigned int a = 0; a < VDim; a++)
-    {
-    scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
-    }
-
   // Direction of interpolation
   int tdir = 1;
   int tStart = (tdir > 0) ? 0 : param.N - 1;
   int tEnd = (tdir > 0) ? param.N : 0;
 
-  // Iterate over time
-  // for(unsigned int t = 0; t < param.N; t++)
-  for(int t = tStart; t != tEnd; t+=tdir)
+  // Apply the warp to other meshes
+  std::list<WarpGenerationParameters::MeshPair>::const_iterator it;
+  for(it = param.fnWarpMeshes.begin(); it != param.fnWarpMeshes.end(); ++it)
     {
-    // Get all landmarks
-    const Matrix &qt = hsys.GetQt(t);
-    const Matrix &pt = hsys.GetPt(t);
-
-    // Splatting approach
-    // Splat each landmark onto the splat image
-    imSplat->FillBuffer(0.0);
-
-    // Create an interpolator for splatting
-    FastInterpolator flint(imSplat);
-
-    for(int i = 0; i < k; i++)
+    // Read the VTK mesh
+    vtkPolyData *mesh_to_warp = ReadVTKData(it->first);
+    if(!mesh_to_warp)
       {
-      // Map landmark point to continuous index
-      ContIndexType cix;
-      PointType point;
-      typename VectorImageType::InternalPixelType vec;
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        // Here we have to correct for the fact that the landmark coordinates are 
-        // assumed to be in RAS space, but point is in LPS space. We therefore have
-        // to apply the LPS/RAS transform before splatting
-        if(a < 2)
-          {
-          point[a] = -qt(i,a);
-          vec[a] = -pt(i,a);
-          }
-        else
-          {
-          point[a] = qt(i,a);
-          vec[a] = pt(i,a);
-          }
-
-        }
-      imRef->TransformPhysicalPointToContinuousIndex(point, cix);
-
-      // Splat landmark's momentum at the point location
-      flint.Splat(cix.GetVnlVector().data_block(), &vec);
+      cerr << "Failed to read mesh from " << param.fnMesh << endl;
+      return -1;
       }
 
-    // Now all the momenta have been splatted. The next step is to smooth with a Gaussian
-    typename LDDMM::Vec vec_sigma; vec_sigma.Fill(param.sigma);
-    LDDMM::vimg_smooth(imSplat, imVelocity, vec_sigma);
+    // Create the arrays to track the point positions
+    Matrix m_x(mesh_to_warp->GetNumberOfPoints(), VDim);
 
-    // Accumulate the velocity into phi - using imSplat as a temporary
-    LDDMM::vimg_scale_in_place(imVelocity, scaling);
+    // Initialize
+    for(int i = 0; i < m_x.rows(); i++)
+      for(int a = 0; a < VDim; a++)
+        m_x(i,a) = mesh_to_warp->GetPoint(i)[a];
 
+    // F for the Gaussian
+    double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
 
-    /*
-    // Direct approach - going to be slow!
-    double f = -0.5 / (param.sigma * param.sigma);
-    typedef itk::ImageRegionIteratorWithIndex<VectorImageType> IterType;
-    IterType iter(imVelocity,imVelocity->GetBufferedRegion());
-    for(; !iter.IsAtEnd(); ++iter)
+    // Cutoff where the Gaussian is < 1e-6
+    double d2_cutoff = 27.63102 * param.sigma * param.sigma;
+
+    // Delta-t 
+    double dt = tdir * 1.0 / (param.N - 1);
+
+    // Some print-out
+    std::cout << "Warping mesh " << it->first << " : " << std::flush;
+
+    // Iterate over time
+    for(int t = tStart; t != tEnd; t+=tdir)
       {
-      // Get coordinate of this pixel
-      itk::Index<VDim> idx = iter.GetIndex();
-      PointType X;
-      imVelocity->TransformIndexToPhysicalPoint(idx, X);
+      // Get all landmarks
+      const Matrix &qt = hsys.GetQt(t);
+      const Matrix &pt = hsys.GetPt(t);
 
-      typename LDDMM::Vec vi(0.0);
-      for(unsigned int i = 0; i < k; i++)
+      // Compute the velocity for each landmark
+      for(int i = 0; i < m_x.rows(); i++)
         {
-        double dstsq = 0;
-        for(unsigned int a = 0; a < VDim; a++)
+        // Local arrays for speed
+        double vi[VDim], xi[VDim];
+        for(int a = 0; a < VDim; a++) 
           {
-          double d = (X[a] - qt(i,a));
-          dstsq += d * d;
+          xi[a] = m_x(i,a);
+          vi[a] = 0;
           }
-        double w = exp(dstsq * f);
-        for(unsigned int a = 0; a < VDim; a++)
+
+        // Loop over all q nodes
+        for(int j = 0; j < qt.rows(); j++)
           {
-          vi[a] += w * pt(i,a);
+          // Compute distance to that point
+          double delta, d2 = 0;
+          for(int a = 0; a < VDim; a++) 
+            {
+            delta = xi[a] - qt(j,a);
+            d2 += delta * delta;
+            }
+
+          // Only proceed if distance is below cutoff
+          if(d2 < d2_cutoff)
+            {
+            // Take the exponent
+            double g = exp(gaussian_f * d2);
+
+            // Scale momentum by exponent
+            for(int a = 0; a < VDim; a++) 
+              vi[a] += g * pt(j,a);
+            }
           }
+
+        // Use Euler's method to get position at next timepoint
+        for(int a = 0; a < VDim; a++) 
+          m_x(i,a) += vi[a] * dt;
         }
 
-      iter.Set(vi);
+      // If this is an animation frame, save it
+      if(0 == (t + 1) % param.anim_freq || t + 1 == tEnd)
+        UpdateAndWriteMesh(mesh_to_warp, m_x, it->second, t + 1);
+
+      std::cout << "." << std::flush;
       }
-      */
 
-    // Euler interpolation
-    LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
-    LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
-
-    cout << "." << flush;
+    // Done for this mesh - just have to save it
+    std::cout << std::endl;
     }
 
-  cout << endl;
+  // Compute warp if that was requested
+  if(param.fnReference.size() && param.fnOutWarp.size())
+    {
+    // Read the reference image
+    ImagePointer imRef;
+    LDDMM::img_read(param.fnReference.c_str(), imRef);
 
-  // Save the warp
-  LDDMM::vimg_write(imPhi, param.fnOutWarp.c_str());
+    // Image for splatting
+    VectorImagePointer imSplat, imVelocity, imLagragean, imPhi;
+    LDDMM::alloc_vimg(imSplat, imRef);
+    LDDMM::alloc_vimg(imVelocity, imRef);
+    LDDMM::alloc_vimg(imLagragean, imRef);
+    LDDMM::alloc_vimg(imPhi, imRef);
+
+    // Compute the scaling factor for the Gaussian smoothing
+    double scaling = 1.0;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
+      }
+
+    // Iterate over time
+    // for(unsigned int t = 0; t < param.N; t++)
+    for(int t = tStart; t != tEnd; t+=tdir)
+      {
+      // Get all landmarks
+      const Matrix &qt = hsys.GetQt(t);
+      const Matrix &pt = hsys.GetPt(t);
+
+      // Splatting approach
+      // Splat each landmark onto the splat image
+      imSplat->FillBuffer(0.0);
+
+      // Create an interpolator for splatting
+      FastInterpolator flint(imSplat);
+
+      for(int i = 0; i < k; i++)
+        {
+        // Map landmark point to continuous index
+        ContIndexType cix;
+        PointType point;
+        typename VectorImageType::InternalPixelType vec;
+        for(unsigned int a = 0; a < VDim; a++)
+          {
+          // Here we have to correct for the fact that the landmark coordinates are 
+          // assumed to be in RAS space, but point is in LPS space. We therefore have
+          // to apply the LPS/RAS transform before splatting
+          if(a < 2)
+            {
+            point[a] = -qt(i,a);
+            vec[a] = -pt(i,a);
+            }
+          else
+            {
+            point[a] = qt(i,a);
+            vec[a] = pt(i,a);
+            }
+
+          }
+        imRef->TransformPhysicalPointToContinuousIndex(point, cix);
+
+        // Splat landmark's momentum at the point location
+        flint.Splat(cix.GetVnlVector().data_block(), &vec);
+        }
+
+      // Now all the momenta have been splatted. The next step is to smooth with a Gaussian
+      typename LDDMM::Vec vec_sigma; vec_sigma.Fill(param.sigma);
+      LDDMM::vimg_smooth(imSplat, imVelocity, vec_sigma);
+
+      // Accumulate the velocity into phi - using imSplat as a temporary
+      LDDMM::vimg_scale_in_place(imVelocity, scaling);
+
+      // Euler interpolation
+      LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
+      LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
+
+      cout << "." << flush;
+
+      // Save the warp if needed
+      if(0 == (t + 1) % param.anim_freq || t + 1 == tEnd)
+        {
+        char buffer[2048];
+        sprintf(buffer, param.fnOutWarp.c_str(), t + 1);
+
+        // Save the warp
+        LDDMM::vimg_write(imPhi, buffer);
+        }
+      }
+    }
 
   return 0;
 }
@@ -294,6 +401,17 @@ int main(int argc, char *argv[])
       {
       param.N = (unsigned int) atoi(argv[++i]);
       }
+    else if(arg == "-a" && i < argc-1)
+      {
+      param.anim_freq = (unsigned int) atoi(argv[++i]);
+      }
+    else if(arg == "-M" && i < argc-2)
+      {
+      string fn1 = std::string(argv[++i]);
+      string fn2 = std::string(argv[++i]);
+      WarpGenerationParameters::MeshPair pair = std::make_pair(fn1,fn2);
+      param.fnWarpMeshes.push_back(pair);
+      }
     else if(arg == "-h")
       {
       return usage();
@@ -308,9 +426,13 @@ int main(int argc, char *argv[])
   check(param.sigma > 0, "Missing or negative sigma parameter");
   check(param.N > 0 && param.N < 10000, "Incorrect N parameter");
   check(param.dim >= 2 && param.dim <= 3, "Incorrect N parameter");
-  check(param.fnReference.length(), "Missing template filename");
   check(param.fnMesh.length(), "Missing target filename");
-  check(param.fnOutWarp.length(), "Missing output filename");
+
+  if(param.fnWarpMeshes.size() == 0)
+    {
+    check(param.fnReference.length(), "Missing template filename");
+    check(param.fnOutWarp.length(), "Missing output filename");
+    }
 
   // Specialize by dimension
   if(param.dim == 2)
