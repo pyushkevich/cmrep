@@ -170,6 +170,30 @@ int main(int argc, char *argv[])
 
   A = A * F;
 
+  // Compute the RMS distance before and after procrustes
+  double sum_d2_pre = 0.0, sum_d2_post = 0.0;
+  for(int i = 0; i < k; i++)
+    {
+    vnl_vector<double> X(4), Y;
+    X[0]=Xfix(i,0);
+    X[1]=Xfix(i,1);
+    X[2]=Xfix(i,2);
+    X[3]=1.0;
+
+    Y = A * X;
+
+    for(int d = 0; d < 3; d++)
+      {
+      sum_d2_pre += (X[d] - Xmov(i,d)) * (X[d] - Xmov(i,d));
+      sum_d2_post += (Y[d] - Xmov(i,d)) * (Y[d] - Xmov(i,d));
+      }
+    }
+
+  double rms_pre = sqrt(sum_d2_pre / k), rms_post = sqrt(sum_d2_post / k);
+  std::cout << " " << std::endl;
+  std::cout << "RMS_landmark_distance_init: " << rms_pre << std::endl;
+  std::cout << "RMS_landmark_distance_final: " << rms_post << std::endl;
+
   // Save the matrix A to output file
   ofstream matrixFile;
   matrixFile.open(fnOut.c_str());
