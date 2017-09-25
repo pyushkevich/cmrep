@@ -92,6 +92,7 @@ public:
     : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
     {
     this->p0 = (qT - q0) / param.N;
+    this->q0 = q0;
     this->qT = qT;
     this->param = param;
     this->k = q0.rows();
@@ -166,8 +167,8 @@ public:
       // Multiply gradient of f. wrt q1 (alpha) by Jacobian of q1 wrt p0
       hsys.FlowGradientBackward(alpha, beta, grad_f);
 
-      // Nice thing is that the last call to ComputeHamiltonianJet in the 
-      // above method is at (q0, p0), so the value of Hp is already valid
+      // Recompute Hq/Hp at initial timepoint
+      hsys.ComputeHamiltonianJet(q0, p0, false);
 
       // Complete gradient computation
       for(unsigned int a = 0; a < VDim; a++)
@@ -628,6 +629,26 @@ PointSetShootingProblem<TFloat, VDim>
   // Create initial/final solution
   p0 = (qT - q0) / param.N;
   typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
+
+  // Uncomment this code to test derivative computation
+  /*
+  TFloat eps = 1e-6;
+  typename CostFn::DVector test_grad(x.size());
+  double f_test;
+  cost_fn.compute(x, &f_test, &test_grad);
+  for(int i = 0; i < std::min((int) p0.size(), 10); i++)
+    {
+    typename CostFn::DVector xtest = x;
+    double f1, f2;
+    xtest[i] = x[i] - eps;
+    cost_fn.compute(xtest, &f1, NULL);
+
+    xtest[i] = x[i] + eps;
+    cost_fn.compute(xtest, &f2, NULL);
+
+    printf("i = %03d,  AG = %8.4f,  NG = %8.4f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+    }
+  */
 
   // Solve the minimization problem 
 
