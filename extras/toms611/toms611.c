@@ -10,9 +10,7 @@
 		http://www.netlib.org/f2c/libf2c.zip
 */
 
-#ifndef __APPLE__
 #include "stdio.h"
-#endif
 
 #define abs(x) ((x) >= 0 ? (x) : -(x))
 #define dabs(x) (doublereal)abs(x)

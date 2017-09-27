@@ -85,7 +85,7 @@ public:
         throw "Consistency check failed in VTKMeshHalfEdgeWrapper::VTKMeshHalfEdgeWrapper";
 
     // Clean up the temp array
-    delete xTemp;
+    delete[] xTemp;
 
     // Now we should have created all the half-edges. What's left is to establish
     // the symmetry links between them

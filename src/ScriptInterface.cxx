@@ -1663,7 +1663,7 @@ void SubdivisionMPDE::Remesh()
     }
 
   // Clean up
-  delete X;
+  delete[] X;
   }
 
 void SubdivisionMPDE::BruteForceToPDE()
@@ -2229,7 +2229,7 @@ void CartesianMPDE::LoadFromDiscreteMRep(const char *file, double xRhoInit)
     }
 
   // Clean up
-  delete xx; delete yy; delete zz; delete uu; delete vv; delete rr; delete rd;
+  delete[] xx; delete[] yy; delete[] zz; delete[] uu; delete[] vv; delete[] rr; delete[] rd;
 }
 
 

@@ -155,7 +155,7 @@ vtkPolyData *ReadVoronoiOutput(
       src.push_back(make_pair(ip1, ip2)); // TODO: is this numbering 0-based?
       }
 
-    delete ids;
+    delete[] ids;
     }
 
   // Create the vtk poly data
@@ -402,7 +402,12 @@ int main(int argc, char *argv[])
   fBoundBox.SetBounds(bbBnd);
 
   // Create a temporary file where to store the points
+#ifndef WIN32
+  char fnTemplate[] = "/tmp/voronoi_pts.XXXXXX";
+  char *fnPoints = mktemp(fnPoints);
+#else
   char *fnPoints = tmpnam(NULL);
+#endif
   cout << "Storing mesh point coordinates in " << fnPoints << endl;
   FILE *f = fopen(fnPoints, "wt");
   fprintf(f, "%d\n3\n", (int) bnd->GetNumberOfPoints());
@@ -584,7 +589,7 @@ int main(int argc, char *argv[])
       next_prog_mark += np / 50;
       }
 
-    delete ids;
+    delete[] ids;
     }
 
   cout << "." << endl;
@@ -1065,9 +1070,9 @@ int main(int argc, char *argv[])
     // vnl_matlab_filewrite exporter2(argv[2]);
     // exporter2.write(mCoord, "xyz");
 
-    delete xLandmarks;
-    delete row_index;
-    delete col_index;
+    delete[] xLandmarks;
+    delete[] row_index;
+    delete[] col_index;
     }
 }
 

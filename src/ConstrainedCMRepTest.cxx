@@ -185,7 +185,7 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
   for(int i = 0; i < mesh->triangles.size(); i++)
     {
     Triangle &t = mesh->triangles[i];
-    vtkIdType v[] = {t.vertices[0], t.vertices[1], t.vertices[2]};
+    vtkIdType v[] = {(vtkIdType) t.vertices[0], (vtkIdType) t.vertices[1], (vtkIdType) t.vertices[2]};
     poly->InsertNextCell(VTK_TRIANGLE, 3, v);
     }
 

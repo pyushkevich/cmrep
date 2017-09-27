@@ -1,6 +1,6 @@
 #include "SparseMatrix.h"
 #include "SparseMatrix.txx"
-#include <vnl/vnl_sparse_matrix.txx>
+#include <vnl/vnl_sparse_matrix.h>
 #include "BruteForceSubdivisionMedialModel.h"
 
 // Need an instantiation of sparse matrix

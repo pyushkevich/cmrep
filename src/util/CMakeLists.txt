@@ -30,7 +30,9 @@ ADD_EXECUTABLE(meshcluster
 ADD_EXECUTABLE(meshdiff CompareMeshes.cxx DrawFillInside.cpp DrawTriangles.cpp)
 #TARGET_LINK_LIBRARIES(meshdiff ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
+ADD_EXECUTABLE(warpmesh WarpMeshBackwards.cxx)
+
 
 # Add installation targets
-INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster meshglm mesh_image_sample vtkcontour mesh_merge_arrays)
+INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster meshglm mesh_image_sample vtkcontour mesh_merge_arrays warpmesh)
 

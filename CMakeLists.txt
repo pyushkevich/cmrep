@@ -297,29 +297,30 @@ LINK_LIBRARIES(
   cmrep)
 
 # New: Geodesic shooting
-ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
-TARGET_LINK_LIBRARIES(shooting_test ${PDE_LIBS})
+IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
+  ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
+  TARGET_LINK_LIBRARIES(shooting_test ${PDE_LIBS})
 
-ADD_EXECUTABLE(lmshoot 
-  src/PointSetHamiltonianSystem.cxx 
-  src/PointSetGeodesicShooting.cxx
-  src/util/ReadWriteVTK.cxx)
-TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
+  ADD_EXECUTABLE(lmshoot 
+    src/PointSetHamiltonianSystem.cxx 
+    src/PointSetGeodesicShooting.cxx
+    src/util/ReadWriteVTK.cxx)
+  TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
 
-ADD_EXECUTABLE(lmflow
-  src/PointSetHamiltonianSystem.cxx
-  src/util/ReadWriteVTK.cxx
-  src/PointSetGeodesicFlowUtil.cxx)
-TARGET_LINK_LIBRARIES(lmflow ${PDE_LIBS})
+  ADD_EXECUTABLE(lmflow
+    src/PointSetHamiltonianSystem.cxx
+    src/util/ReadWriteVTK.cxx
+    src/PointSetGeodesicFlowUtil.cxx)
+  TARGET_LINK_LIBRARIES(lmflow ${PDE_LIBS})
 
-
-INCLUDE_DIRECTORIES(submodules/greedy/src)
-ADD_EXECUTABLE(lmtowarp
-  src/PointSetHamiltonianSystem.cxx
-  src/util/ReadWriteVTK.cxx
-  src/PointSetGeodesicToWarp.cxx
-  submodules/greedy/src/lddmm_data.cxx)
-TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
+  INCLUDE_DIRECTORIES(submodules/greedy/src/ITKFilters/include submodules/greedy/src)
+  ADD_EXECUTABLE(lmtowarp
+    src/PointSetHamiltonianSystem.cxx
+    src/util/ReadWriteVTK.cxx
+    src/PointSetGeodesicToWarp.cxx
+    submodules/greedy/src/lddmm_data.cxx)
+  TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
+ENDIF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
@@ -351,7 +352,7 @@ ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
 TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
 
-IF(USE_IPOPT)
+IF(USE_IPOPT AND USE_TETGEN)
   ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
   ADD_EXECUTABLE(contest
                  src/GentleNLP.cxx
@@ -365,7 +366,7 @@ IF(USE_IPOPT)
      BUNDLE DESTINATION . COMPONENT Runtime
      RUNTIME DESTINATION bin COMPONENT RUNTIME)
 
-ENDIF(USE_IPOPT)
+ENDIF(USE_IPOPT AND USE_TETGEN)
 
 # Add installation targets
 INSTALL(TARGETS cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh

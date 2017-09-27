@@ -39,7 +39,7 @@ int usage()
   return -1;
 }
 
-void check(bool condition, char *format,...)
+void check(bool condition, const char *format,...)
 {
   if(!condition)
     {

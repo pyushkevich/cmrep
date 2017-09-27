@@ -487,10 +487,10 @@ int TestGradientComputation(
     }
 
   // Delete the atoms
-  delete dAtoms;
+  delete[] dAtoms;
 
   // Delete the atom arrays
-  delete A0; delete A1; delete A2; delete A3; delete A4;
+  delete[] A0; delete[] A1; delete[] A2; delete[] A3; delete[] A4;
 
   // Finalize the gradient computation
   tAnalytic.Start();

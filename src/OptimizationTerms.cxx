@@ -586,7 +586,10 @@ SymmetricClosestPointMatchTerm
 
   for(MedialBoundaryTriangleIterator bt(context); !bt.IsAtEnd(); ++bt)
     {
-    vtkIdType v[] = {bt.GetBoundaryIndex(0), bt.GetBoundaryIndex(1), bt.GetBoundaryIndex(2) } ;
+    vtkIdType v[] = {
+      (vtkIdType) bt.GetBoundaryIndex(0), 
+      (vtkIdType) bt.GetBoundaryIndex(1), 
+      (vtkIdType) bt.GetBoundaryIndex(2) } ;
     poly->InsertNextCell(VTK_TRIANGLE, 3, v);
     }
 
@@ -3831,6 +3834,6 @@ void MedialOptimizationProblem::DumpGradientMesh()
   write->SetFileName(fnout);
   write->Update();
 
-  delete fnout;  
+  delete[] fnout;  
 }
 

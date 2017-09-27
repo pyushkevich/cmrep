@@ -747,7 +747,7 @@ void MakeFlatTemplate(FourierSurface *xSurface)
   xSurface->FitToData(q, 2, u, v, z);
   xSurface->FitToData(q, 3, u, v, rho);
 
-  delete u; delete v; delete x; delete y; delete z; delete rho;
+  delete[] u; delete[] v; delete[] x; delete[] y; delete[] z; delete[] rho;
 }
 
 struct TermInfo
