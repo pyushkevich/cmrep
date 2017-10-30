@@ -876,6 +876,25 @@ void ComputeTriangleAndEdgeProperties(
 
 #include "BruteForceSubdivisionMedialModel.h"
 
+Expression *ComputeDistanceToCorrespondingMeshObjective(
+  ConstrainedNonLinearProblem *p,
+  VarVecArray &X,
+  std::vector<SMLVec3d> &targetPoint)
+{
+  BigSum *objSqDist = new BigSum(p);
+  for(int i = 0; i < X.size(); i++)
+    {
+    for(int j = 0; j < 3; j++)
+      {
+      objSqDist->AddSummand(
+            new Square(p,
+                       new BinaryDifference(p, X[i][j],
+                                            new Constant(p, targetPoint[i][j]))));
+      }
+    }
+
+  return objSqDist;
+}
 
 Expression *ComputeDistanceToMeshObjective(
     ConstrainedNonLinearProblem *p,
@@ -1409,7 +1428,7 @@ void FixCmrepMedialMesh(std::string fnInput, std::string fnOutput)
   for(int i = 0; i < mesh.nVertices; i++)
     {
     x.push_back(SMLVec3d(pd->GetPoint(i)));
-    r.push_back(ar->GetTuple1(i));
+    r.push_back(ar ? ar->GetTuple1(i) : 0.5);
     }
 
   // Search for triangles to split
@@ -1904,6 +1923,15 @@ int main(int argc, char *argv[])
   // Initialize the data we are extracting from the boundary mesh
   std::vector<int> &mIndex = tmpl.mIndex;
   std::vector<SMLVec3d> &xInput = tmpl.x;
+
+  // Load the target vertex coordintates if requesting LSQ fit
+  std::vector<SMLVec3d> xLSQTarget = xInput;
+  if(action == ACTION_FIT_SELF)
+    {
+    BCMTemplate lsq_target;
+    lsq_target.Load(fnTarget.c_str());
+    xLSQTarget = lsq_target.x;
+    }
 
   // At this point, we are only working with bMesh and mIndex and xInput
 
@@ -3046,12 +3074,15 @@ int main(int argc, char *argv[])
   BigSum *objDisplacement = new BigSum(p);
   for(int i = 0; i < nb; i++)
     {
+    printf("(%f, %f, %f) to (%f, %f, %f)\n", 
+      X[i][0]->Evaluate(),X[i][1]->Evaluate(),X[i][2]->Evaluate(),
+      xLSQTarget[i][0],xLSQTarget[i][1],xLSQTarget[i][2]);
     objDisplacement->AddSummand(
           new TernaryGradientMagnitudeSqr(
             p,
-            new BinaryDifference(p, X[i][0], new Constant(p, X[i][0]->Evaluate())),
-            new BinaryDifference(p, X[i][1], new Constant(p, X[i][1]->Evaluate())),
-            new BinaryDifference(p, X[i][2], new Constant(p, X[i][2]->Evaluate()))));
+            new BinaryDifference(p, X[i][0], new Constant(p, xLSQTarget[i][0])),
+            new BinaryDifference(p, X[i][1], new Constant(p, xLSQTarget[i][1])),
+            new BinaryDifference(p, X[i][2], new Constant(p, xLSQTarget[i][2]))));
     }
 
   // ------------------------------------------------------------------------

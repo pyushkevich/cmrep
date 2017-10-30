@@ -1083,10 +1083,12 @@ Expression *WeightedSumGenerator::DoGenerateSum()
     }
 
   // Drop all the zero cases
-  for(WeightMap::iterator it = m_WeightMap.begin(); it != m_WeightMap.end(); ++it)
+  for(WeightMap::iterator it = m_WeightMap.begin(); it != m_WeightMap.end();)
     {
     if(it->second == 0)
-      m_WeightMap.erase(it);
+      m_WeightMap.erase(it++);
+    else
+      it++;
     }
 
   // Handle special cases of 0 terms
