@@ -109,10 +109,19 @@ int main(int argc, char *argv[])
   // Passed this stage of the test
   std::cout << "Passed regression test on the Hamiltonian derivatives" << std::endl;
 
+  double t_start, t_finish;
+
+  // Flow the system without gradient - to see how long it takes
+  t_start = clock();
+  hsys.FlowHamiltonian(p0, q1, p1);
+  t_finish = clock();
+  std::cout << "Flow without gradient computed in " 
+    << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
+
   // Flow the system without gradient
-  double t_start = clock();
+  t_start = clock();
   hsys.FlowHamiltonianWithGradient(p0, q1, p1, grad_q, grad_p);
-  double t_finish = clock();
+  t_finish = clock();
   std::cout << "Flow with gradient computed in " 
     << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
 
@@ -169,7 +178,12 @@ int main(int argc, char *argv[])
     }
 
   hsys.FlowHamiltonian(p0, q1, p1);
+
+  t_start = clock();
   hsys.FlowGradientBackward(alpha, beta, dd);
+  t_finish = clock();
+  std::cout << "Flow without gradient computed in " 
+    << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
 
   // Compare the derivative we got with actual computation of the derivative
   for(int a = 0; a < 2; a++)
@@ -221,6 +235,29 @@ int main(int argc, char *argv[])
   // Report that we are done
   std::cout << "Passed derivative check on Hamilton flow" << std::endl;
 
+  // Create a larger problem with 800 time points, to test overhead
+  int big_k = 800;
+  Ham::Matrix big_q0(big_k, 2), big_p0(big_k, 2), big_q1(big_k, 2), big_p1(big_k, 2);
+  for(int i = 0; i < big_k; i++)
+    {
+    double t = 1.0 / (big_k - 1.0);
+    double p = (k - 1.0) * t;
+    int i0 = floor(p), i1 = ceil(p);
+    double v = p - i0;
+    for(int a = 0; a < 2; a++)
+      {
+      big_q0(i,a) = q0(i0, a) * (1.0 - v) + q0(i1, a) * v;
+      big_p0(i,a) = p0(i0, a) * (1.0 - v) + p0(i1, a) * v;
+      }
+    }
+
+  Ham big_hsys(big_q0, 0.08, 100);
+  t_start = clock();
+  big_hsys.FlowHamiltonian(big_p0, big_q1, big_p1);
+  t_finish = clock();
+  std::cout << "Big problem: Flow without gradient computed in " 
+    << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
+  
 
   return 0;
 };
