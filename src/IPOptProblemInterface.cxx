@@ -9,12 +9,12 @@ using namespace Ipopt;
   IPOPT STUFF
   *****************************************************************/
 
-IPOptProblemInterface::IPOptProblemInterface(
-    gnlp::ConstrainedNonLinearProblem *p)
+IPOptProblemInterface::IPOptProblemInterface(gnlp::ConstrainedNonLinearProblem *p, bool use_hessian)
 
 {
   m_Problem = p;
   m_ConstraintLogFile = NULL;
+  m_UseHessian = use_hessian;
 }
 
 void IPOptProblemInterface::log_constraints(FILE *flog)
@@ -142,6 +142,7 @@ bool IPOptProblemInterface::eval_g(
       fprintf(m_ConstraintLogFile, "%12.8f ", it->second);
       }
     fprintf(m_ConstraintLogFile, "\n");
+    fflush(m_ConstraintLogFile);
     iter++;
     }
 
@@ -197,6 +198,10 @@ bool IPOptProblemInterface::eval_h(
     const Number *lambda, bool new_lambda, Index nele_hess,
     Index *iRow, Index *jCol, Number *values)
 {
+  // Do we need the hessian?
+  if(!m_UseHessian)
+    return false;
+
   // Get the Jacobian sparse matrix
   typedef ConstrainedNonLinearProblem::SparseExpressionMatrix SparseMat;
   SparseMat H = m_Problem->GetHessianOfLagrangean();

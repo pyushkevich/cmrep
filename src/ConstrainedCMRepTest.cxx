@@ -17,6 +17,7 @@
 #include "vtkPolyDataReader.h"
 #include "vtkFloatArray.h"
 #include "vtkPointData.h"
+#include "vtkCellData.h"
 
 
 #include "tetgen.h"
@@ -1022,7 +1023,8 @@ void SaveMedialMesh(const char *file,
                     std::vector<std::vector<int> > &mtbIndex,
                     const VarVecArray &M,
                     const VarVec &R,
-                    const VarVecArray &X)
+                    const VarVecArray &X,
+                    const VarVec &TA)
 {
   vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
   pts->Allocate(M.size());
@@ -1048,6 +1050,11 @@ void SaveMedialMesh(const char *file,
   spoke[2]->SetNumberOfComponents(3);
   spoke[2]->Allocate(M.size());
   spoke[2]->SetName("Spoke3");
+
+  vtkSmartPointer<vtkFloatArray> t_area = vtkSmartPointer<vtkFloatArray>::New();
+  t_area->SetNumberOfComponents(1);
+  t_area->Allocate(bmesh->triangles.size());
+  t_area->SetName("Triangle area");
 
   for(int i = 0; i < M.size(); i++)
     {
@@ -1087,7 +1094,11 @@ void SaveMedialMesh(const char *file,
     for(int j = 0; j < 3; j++)
       vtx[j] = mIndex[bmesh->triangles[i].vertices[j]];
     pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+
+    t_area->InsertNextTuple1(TA[i]->Evaluate());
     }
+
+  pd->GetCellData()->AddArray(t_area);
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
   writer->SetInputData(pd);
@@ -1702,26 +1713,34 @@ int usage()
       "usage:\n"
       "  bcmrep [options]\n"
       "options that select an action (use one):\n"
-      "  -icp template.vtk target.vtk           : fit template mesh to target mesh\n"
-      "  -lsq template.vtk target.vtk           : least squares fit to target mesh\n"
-      "  -sub template.vtk factor               : subdivide template by a factor\n"
-      "  -cmr input.cmrep                       : import a cm-rep template\n"
-      "  -cfx input.cmrep                       : fix a cm-rep template with bad triangles\n"
+      "  -icp template.vtk target.vtk   : fit template mesh to target mesh\n"
+      "  -lsq template.vtk target.vtk   : least squares fit to target mesh\n"
+      "  -sub template.vtk factor       : subdivide template by a factor\n"
+      "  -cmr input.cmrep               : import a cm-rep template\n"
+      "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
       "other required options:\n"
-      "  -o output.vtk                          : mesh to save the result\n"
+      "  -o output.vtk                  : mesh to save the result\n"
       "optional parameters:\n"
-      "  -reg-lb NxNxN                          : use Laplace basis regularization \n"
+      "  -reg-lb NxNxN                  : use Laplace basis regularization \n"
       "                                           with N basis functions at each \n"
       "                                           iteration. (default, with N=20)\n"
-      "  -reg-ss L                              : use subdivision surface-based \n"
+      "  -reg-ss L                      : use subdivision surface-based \n"
       "                                           regularlization with L levels of \n"
       "                                           subdivision. \n"
-      "  -reg-weight NxNxN                      : weight of the regularization term\n"
+      "  -reg-weight NxNxN              : weight of the regularization term\n"
       "                                           at each iteration\n"
-      "  -reg-el W                              : penalize the length of the crest\n"
+      "  -reg-el W                      : penalize the length of the crest\n"
       "                                           curve with weight specified\n"
-      "  -solver NAME                           : select which solver to use (see \n"
-      "                                           IPOpt options. Def: ma86\n";
+      "triangle shape constraints:\n"
+      "  -bc alpha,beta,min_area        : Set boundary triangle constraints \n"
+      "                                     alpha:    minimum triangle angle (def: 12)\n"
+      "                                     beta:     minimum dihedral angle (def: 120)\n"
+      "                                     min_area: minimum triangle area  (def: 0.1)\n"
+      "  -mc alpha,beta,min_area        : Set medial triangle constraints (see above) \n"
+      "                                     by default all three are set to 0 (no constraint)\n"
+      "IPOpt options:\n"
+      "  -solver NAME                   : select which solver to use (see IPOpt options. Def: ma86)\n"
+      "  -no-hess                       : Turn off analytical hessian (does not work well)\n";
   std::cout << usage;
   return -1;
 }
@@ -1734,13 +1753,14 @@ struct RegularizationOptions
   double Weight;
   RegularizationMode Mode;
   std::string Solver;
+  bool UseHessian;
 
   double EdgeLengthWeight;
 
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
       Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
-      EdgeLengthWeight(0.0) {}
+      EdgeLengthWeight(0.0), UseHessian(true) {}
 };
 
 class ObjectiveCombiner
@@ -1805,6 +1825,20 @@ protected:
   InfoMap m_ObjectiveInfo;
 };
 
+struct TriangleConstraint
+{
+  // Minimum area of triangles
+  double min_tri_area;
+
+  // Minimum dihedral angle (120 is a good value)
+  double min_dih_angle;
+
+  // Minimum triangle angle (12 is a good value)
+  double min_tri_angle;
+
+  TriangleConstraint(double area, double tri_ang, double dih_ang)
+    : min_tri_area(area), min_tri_angle(tri_ang), min_dih_angle(dih_ang) {}
+};
 
 int main(int argc, char *argv[])
 {
@@ -1817,6 +1851,10 @@ int main(int argc, char *argv[])
   int subdivisionLevel = 0;
 
   RegularizationOptions regOpts;
+
+  // Triangle constraints for medial and boundary triangles
+  TriangleConstraint tc_med(0,0,0);
+  TriangleConstraint tc_bnd(0.1, 12, 120);
 
   for(int p = 1; p < argc; p++)
     {
@@ -1878,6 +1916,22 @@ int main(int argc, char *argv[])
     else if(cmd == "-solver")
       {
       regOpts.Solver = argv[++p];
+      }
+    else if(cmd == "-no-hess")
+      {
+      regOpts.UseHessian = false;
+      }
+    else if(cmd == "-bc")
+      {
+      tc_bnd.min_tri_angle = atof(argv[++p]);
+      tc_bnd.min_dih_angle = atof(argv[++p]);
+      tc_bnd.min_tri_area = atof(argv[++p]);
+      }
+    else if(cmd == "-mc")
+      {
+      tc_med.min_tri_angle = atof(argv[++p]);
+      tc_med.min_dih_angle = atof(argv[++p]);
+      tc_med.min_tri_area = atof(argv[++p]);
       }
     else
       {
@@ -2011,7 +2065,7 @@ int main(int argc, char *argv[])
   // The triangle areas, normals and edge lengths on the boundary surface
   // and on the medial surface (to avoid square roots)
   VarVec taX, taM;
-  VarVecArray NT_X, TEL_X, NT_M;
+  VarVecArray NT_X, TEL_X, NT_M, TEL_M;
 
   // A buffer for making variable names
   char buffer[64];
@@ -2311,11 +2365,6 @@ int main(int argc, char *argv[])
     }
 
   // ------------------------------------------------------------------------
-  // Export the medial atom mesh for debugging purposes.
-  // ------------------------------------------------------------------------
-  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, mtbIndex, M, R, X);
-
-  // ------------------------------------------------------------------------
   // Add the actual medial constraints
   // ------------------------------------------------------------------------
 
@@ -2344,11 +2393,6 @@ int main(int argc, char *argv[])
   // Configure the boundary and medial triangle area variables
   // ------------------------------------------------------------------------
 
-  // Compute boundary triangle edges, normals, and areas
-  ComputeTriangleAndEdgeProperties(
-        p, bmesh,
-        X, NT_X, taX, 0.1, true, TEL_X);
-
   // Create a medial mesh that duplicates the boundary mesh
   TriangleMesh* mmesh = new TriangleMesh(*bmesh);
 
@@ -2361,15 +2405,29 @@ int main(int argc, char *argv[])
       }
     }
 
+  // Compute boundary triangle edges, normals, and areas
+  if(tc_bnd.min_dih_angle > 0 || tc_bnd.min_tri_angle > 0 || tc_bnd.min_tri_area > 0)
+    {
+    ComputeTriangleAndEdgeProperties(
+          p, bmesh,
+          X, NT_X, taX, tc_bnd.min_tri_area, tc_bnd.min_tri_angle > 0, TEL_X);
+    }
+
   // Compute medial triangle edges, normals, and areas.
   // TODO: this is redundant, as it computes two sets of equal normals and
   // areas for each medial triangle, one facing each boundary triangle. We
   // could avoid this by checking for opposite triangles.
-  /*
-  ComputeTriangleAndEdgeProperties(
-        p, mmesh,
-        M, NT_M, taM, 0.1);
-  */
+  if(tc_med.min_dih_angle > 0 || tc_med.min_tri_angle > 0 || tc_med.min_tri_area > 0)
+    {
+    ComputeTriangleAndEdgeProperties(
+          p, mmesh,
+          M, NT_M, taM, tc_med.min_tri_area, tc_med.min_tri_angle > 0, TEL_M);
+    }
+
+  // ------------------------------------------------------------------------
+  // Export the medial atom mesh for debugging purposes.
+  // ------------------------------------------------------------------------
+  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, mtbIndex, M, R, X, taM);
 
   // ------------------------------------------------------------------------
   // Common code for the regularization terms
@@ -2518,6 +2576,7 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Create a total volume objective -
   // ------------------------------------------------------------------------
+  /*
   BigSum *objVolume = new BigSum(p);
 
   // Measure the wedge volume for each boundary triangle
@@ -2547,15 +2606,16 @@ int main(int argc, char *argv[])
     wedgeVol[i] = new TernarySum(p, c1, c2, c3);
 
     // Each tetra should have positive volume
-    /*
+    /--*
     p->AddConstraint(c1, 0.1, 40);
     p->AddConstraint(c2, 0.1, 40);
     p->AddConstraint(c3, 0.1, 40);
-    */
+    *--/
 
     // Total volume integral
     objVolume->AddSummand(wedgeVol[i]);
     }
+    */
 
 
   // ------------------------------------------------------------------------
@@ -2648,12 +2708,14 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Construct the total surface area objective
   // ------------------------------------------------------------------------
+  /*
   BigSum *objSurfArea = new BigSum(p);
   for(int i = 0; i < bmesh->triangles.size(); i++)
     {
     // Add the area to the objective
     objSurfArea->AddSummand(taX[i]);
     }
+    */
 
   // ------------------------------------------------------------------------
   // Solve for the circumcenter and circumradius of each boundary triangle
@@ -2891,32 +2953,70 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Add a constraint on minimal angle of boundary triangles
   // ------------------------------------------------------------------------
-  double min_angle = vnl_math::pi * 12 / 180;
-  double max_csc = 1.0 / sin(min_angle);
-
-  for(int k = 0; k < bmesh->triangles.size(); k++)
+  if(tc_bnd.min_tri_angle > 0)
     {
-    for(int d = 0; d < 3; d++)
+    double min_angle = vnl_math::pi * tc_bnd.min_tri_angle / 180;
+    double max_csc = 1.0 / sin(min_angle);
+
+    for(int k = 0; k < bmesh->triangles.size(); k++)
       {
-      Expression *l1 = TEL_X[k][(d + 1) % 3];
-      Expression *l2 = TEL_X[k][(d + 2) % 3];
-      double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taX[k]->Evaluate());
+      for(int d = 0; d < 3; d++)
+        {
+        Expression *l1 = TEL_X[k][(d + 1) % 3];
+        Expression *l2 = TEL_X[k][(d + 2) % 3];
+        double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taX[k]->Evaluate());
 
-      // Create a constrainted variable for the angle
-      Expression *csc_alpha = p->AddVariable("cscAlpha", v_csc_alpha,
-                                             ConstrainedNonLinearProblem::LBINF,
-                                             max_csc);
+        // Create a constrainted variable for the angle
+        Expression *csc_alpha = p->AddVariable("cscAlpha", v_csc_alpha,
+                                               ConstrainedNonLinearProblem::LBINF,
+                                               max_csc);
 
-      // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
-      Expression *con = new BinaryDifference(
-            p,
-            new ScalarProduct(p, new BinaryProduct(p, taX[k], csc_alpha), 2.0),
-            new BinaryProduct(p, l1, l2));
+        // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
+        Expression *con = new BinaryDifference(
+              p,
+              new ScalarProduct(p, new BinaryProduct(p, taX[k], csc_alpha), 2.0),
+              new BinaryProduct(p, l1, l2));
 
-      if(fabs(con->Evaluate()) > 1e-6)
-        std::cout << "Con-CSC: " << con->Evaluate() << std::endl;
+        if(fabs(con->Evaluate()) > 1e-6)
+          std::cout << "Con-CSC: " << con->Evaluate() << std::endl;
 
-      p->AddConstraint(con, "CSC", 0, 0);
+        p->AddConstraint(con, "CSC", 0, 0);
+        }
+      }
+    }
+
+  // ------------------------------------------------------------------------
+  // Add a constraint on minimal angle of medial triangles
+  // ------------------------------------------------------------------------
+  if(tc_med.min_tri_angle > 0)
+    {
+    double min_angle_med = vnl_math::pi * tc_med.min_tri_angle / 180;
+    double max_csc_med = 1.0 / sin(min_angle_med);
+
+    for(int k = 0; k < mmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        Expression *l1 = TEL_M[k][(d + 1) % 3];
+        Expression *l2 = TEL_M[k][(d + 2) % 3];
+        double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taM[k]->Evaluate());
+
+        // Create a constrainted variable for the angle
+        Expression *csc_alpha = p->AddVariable("cscAlpha", v_csc_alpha,
+                                               ConstrainedNonLinearProblem::LBINF,
+                                               max_csc_med);
+
+        // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
+        Expression *con = new BinaryDifference(
+              p,
+              new ScalarProduct(p, new BinaryProduct(p, taM[k], csc_alpha), 2.0),
+              new BinaryProduct(p, l1, l2));
+
+        if(fabs(con->Evaluate()) > 1e-6)
+          std::cout << "Con-Med-CSC: " << con->Evaluate() << std::endl;
+
+        p->AddConstraint(con, "Med-CSC", 0, 0);
+        }
       }
     }
 
@@ -2948,26 +3048,62 @@ int main(int argc, char *argv[])
   // ------------------------------------------------------------------------
   // Constrain the dihedral angle
   // ------------------------------------------------------------------------
-  for(int k = 0; k < bmesh->triangles.size(); k++)
+  if(tc_bnd.min_dih_angle > 0)
     {
-    for(int d = 0; d < 3; d++)
+    double non_edge_thresh = cos(vnl_math::pi * (180. - tc_bnd.min_dih_angle) / 180.);
+    double edge_thresh = -0.9;
+
+    for(int k = 0; k < bmesh->triangles.size(); k++)
       {
-      int kopp = bmesh->triangles[k].neighbors[d];
-      // One side only!
-      if(kopp != NOID && k < kopp)
+      for(int d = 0; d < 3; d++)
         {
-        // Is this a boundary edge?
-        int v1 = bmesh->triangles[k].vertices[(d+1)%3];
-        int v2 = bmesh->triangles[k].vertices[(d+2)%3];
-        bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
+        int kopp = bmesh->triangles[k].neighbors[d];
+        // One side only!
+        if(kopp != NOID && k < kopp)
+          {
+          // Is this a boundary edge?
+          int v1 = bmesh->triangles[k].vertices[(d+1)%3];
+          int v2 = bmesh->triangles[k].vertices[(d+2)%3];
+          bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
 
-        Expression *da = DotProduct(p, NT_X[k], NT_X[kopp]);
-        p->AddConstraint(da, "DA", isBnd ? -0.9 : 0.5, ConstrainedNonLinearProblem::UBINF);
+          Expression *da = DotProduct(p, NT_X[k], NT_X[kopp]);
+          p->AddConstraint(da, "DA", isBnd ? edge_thresh : non_edge_thresh, ConstrainedNonLinearProblem::UBINF);
 
+          }
         }
       }
     }
 
+  // ------------------------------------------------------------------------
+  // Constrain the dihedral angle of the medial axis
+  // ------------------------------------------------------------------------
+  if(tc_med.min_dih_angle > 0)
+    {
+    double non_edge_thresh = cos(vnl_math::pi * (180. - tc_med.min_dih_angle) / 180.);
+    for(int k = 0; k < mmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        int kopp = mmesh->triangles[k].neighbors[d];
+        // One side only!
+        if(kopp != NOID && k < kopp)
+          {
+          // Is this a boundary edge?
+          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
+          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
+          bool isBnd = (mtbIndex[v1].size() == 1) && (mtbIndex[v2].size() == 1);
+
+          Expression *da = DotProduct(p, NT_M[k], NT_M[kopp]);
+          if(!isBnd)
+            {
+            if(da->Evaluate() < 0.9)
+              printf("MDA: (%d, %d) via edge (%d, %d): %f\n", k, kopp, v1, v2, da->Evaluate());
+            p->AddConstraint(da, "DA-Med", non_edge_thresh, ConstrainedNonLinearProblem::UBINF);
+            }
+          }
+        }
+      }
+    }
 
   /*
   double constEdgeRatio = 0.1;
@@ -3074,9 +3210,6 @@ int main(int argc, char *argv[])
   BigSum *objDisplacement = new BigSum(p);
   for(int i = 0; i < nb; i++)
     {
-    printf("(%f, %f, %f) to (%f, %f, %f)\n", 
-      X[i][0]->Evaluate(),X[i][1]->Evaluate(),X[i][2]->Evaluate(),
-      xLSQTarget[i][0],xLSQTarget[i][1],xLSQTarget[i][2]);
     objDisplacement->AddSummand(
           new TernaryGradientMagnitudeSqr(
             p,
@@ -3207,6 +3340,9 @@ int main(int argc, char *argv[])
   // app->Options()->SetStringValue("output_file", "ipopt.out");
 
   app->Options()->SetIntegerValue("max_iter", 200);
+  if(!regOpts.UseHessian)
+    app->Options()->SetStringValue("hessian_approximation", "limited-memory");
+
   // app->Options()->SetStringValue("hessian_approximation", "limited-memory");
   // app->Options()->SetStringValue("derivative_test", "second-order");
   // app->Options()->SetStringValue("derivative_test_print_all", "yes");
@@ -3253,7 +3389,7 @@ int main(int argc, char *argv[])
   SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
   sprintf(buffer, "%s_fit2tmp_med.vtk", fnOutBase.c_str());
-  SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X);
+  SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
 
   // Continue if in ICP mode
   if(action == ACTION_FIT_TARGET)
@@ -3306,7 +3442,7 @@ int main(int argc, char *argv[])
       SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
       sprintf(buffer, "%s_icp_%02d_med.vtk", fnOutBase.c_str(), i);
-      SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X);
+      SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
       }
 
   #ifdef USE_DICE

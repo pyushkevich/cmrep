@@ -9,7 +9,7 @@ using namespace Ipopt;
 class IPOptProblemInterface : public Ipopt::TNLP
 {
 public:
-  IPOptProblemInterface(gnlp::ConstrainedNonLinearProblem *p);
+  IPOptProblemInterface(gnlp::ConstrainedNonLinearProblem *p, bool use_hessian = true);
 
   /** Set whether the problem logs constraint values at each iteration */
   virtual void log_constraints(FILE *flog);
@@ -67,6 +67,7 @@ public:
 private:
   gnlp::ConstrainedNonLinearProblem *m_Problem;
   FILE *m_ConstraintLogFile;
+  bool m_UseHessian;
 };
 
 #endif // IPOPTPROBLEMINTERFACE_H
