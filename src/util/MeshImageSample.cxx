@@ -178,6 +178,7 @@ int main(int argc, char *argv[])
       if(ip + 1 < argc-4)
         {
         interp_mode = atoi(argv[++ip]);
+        cout << "Interpolation mode: " << interp_mode << endl;
         }
       else
         {
@@ -185,7 +186,7 @@ int main(int argc, char *argv[])
         return usage();
         }
       }
-    if(strcmp(argv[ip], "-rms") == 0)
+    else if(strcmp(argv[ip], "-rms") == 0)
       {
       if(ip + 2 < argc-4)
         {
