@@ -16,6 +16,8 @@ ADD_EXECUTABLE(mesh_image_sample MeshImageSample.cxx)
 
 ADD_EXECUTABLE(mesh_merge_arrays MeshMergeArrays.cxx ReadWriteVTK.cxx)
 
+ADD_EXECUTABLE(mesh_area_element MeshAreaElement.cxx)
+
 ADD_EXECUTABLE(meshglm 
   SurfaceClusterGLM.cxx 
   asa243.c
