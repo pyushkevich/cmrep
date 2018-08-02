@@ -178,7 +178,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
         for(unsigned int b = 0; b < VDim; b++)
           {
           d_alpha[b][i] -= gamma[a][j] * term_2_g1_dzqa * pi[b];
-          d_gamma[b][j] += gamma[b][j]
+          d_gamma[b][j] += gamma[b][j];
           }
         d_beta[a][i] += g;
         }
@@ -303,7 +303,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(unsigned int t = 1; t < N; t++)
     {
     const Matrix &q = Qt[t], &p = Pt[t];
-    for(int i = 0; i < z.rows(); z++)
+    for(int i = 0; i < z.rows(); i++)
       {
       // Current coordinate and its velocity
       TFloat *zi = z.data_array()[i];
@@ -504,6 +504,50 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(int a = 0; a < VDim; a++)
     {
     result[a] = beta[a];
+    }
+}
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Matrix &result)
+{
+  // Allocate update vectors for alpha and beta
+  Vector alpha[VDim], beta[VDim];
+  Vector d_alpha[VDim], d_beta[VDim];
+
+  for(int a = 0; a < VDim; a++)
+    {
+    // Initialize alpha with the last time-point q-gradient
+    alpha[a] = d_obj__d_qt[N-1].get_column(a);
+
+    // Initialize beta to zero 
+    beta[a].set_size(k); beta[a].fill(0.0);
+
+    d_alpha[a].set_size(k);
+    d_beta[a].set_size(k);
+    }
+
+  // Work our way backwards
+  for(int t = N-1; t > 0; t--)
+    {
+    // Apply Hamiltonian Hessian to get an update in alpha/beta
+    ApplyHamiltonianHessianToAlphaBeta(
+          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+    // Update the vectors
+    for(int a = 0; a < VDim; a++)
+      {
+      alpha[a] += dt * d_alpha[a] + d_obj__d_qt[t-1].get_column(a);
+      beta[a] += dt * d_beta[a];
+      }
+    } 
+
+  // Finally, what we are really after are the betas
+  for(int a = 0; a < VDim; a++)
+    {
+    result.set_column(a, beta[a]);
     }
 }
 

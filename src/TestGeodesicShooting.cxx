@@ -30,19 +30,57 @@ int main(int argc, char *argv[])
   std::ifstream iss(argv[1]);
 
   // Input data
-  vnl_vector<double> in_q0[2], in_p0[2];
-  vnl_matlab_read_or_die(iss, in_q0[0], "qx");
-  vnl_matlab_read_or_die(iss, in_q0[1], "qy");
+  vnl_vector<double> in_q0[2], in_p0[2], in_target[2];
+  vnl_vector<double> r_H, r_Hp[2], r_Hq[2];
+  vnl_matrix<double> r_Hqq[2][2], r_Hqp[2][2], r_Hpp[2][2];
+
+  // Read the regression data for the flow and derivatives
+  vnl_vector<double> r_q1[2], r_p1[2];
+  vnl_matrix<double> r_gradQ[2][2], r_gradP[2][2];
+
+  // Read the regression data for the Hamiltonian and derivatives
+  vnl_matlab_read_or_die(iss, r_H, "H");
+  vnl_matlab_read_or_die(iss, r_Hp[0], "Hpx");
+  vnl_matlab_read_or_die(iss, r_Hp[1], "Hpy");
+  vnl_matlab_read_or_die(iss, r_Hq[0], "Hqx");
+  vnl_matlab_read_or_die(iss, r_Hq[1], "Hqy");
   vnl_matlab_read_or_die(iss, in_p0[0], "px");
   vnl_matlab_read_or_die(iss, in_p0[1], "py");
+  vnl_matlab_read_or_die(iss, in_q0[0], "qx");
+  vnl_matlab_read_or_die(iss, in_q0[1], "qy");
+  vnl_matlab_read_or_die(iss, r_Hqq[0][0], "Hqxqx");
+  vnl_matlab_read_or_die(iss, r_Hqq[0][1], "Hqxqy");
+  vnl_matlab_read_or_die(iss, r_Hqq[1][1], "Hqyqy");
+  vnl_matlab_read_or_die(iss, r_Hqp[0][0], "Hqxpx");
+  vnl_matlab_read_or_die(iss, r_Hqp[0][1], "Hqxpy");
+  vnl_matlab_read_or_die(iss, r_Hqp[1][0], "Hqypx");
+  vnl_matlab_read_or_die(iss, r_Hqp[1][1], "Hqypy");
+  vnl_matlab_read_or_die(iss, r_Hpp[0][0], "Hpxpx");
+  vnl_matlab_read_or_die(iss, r_Hpp[0][1], "Hpxpy");
+  vnl_matlab_read_or_die(iss, r_Hpp[1][1], "Hpypy");
+  vnl_matlab_read_or_die(iss, r_p1[0], "px_t");
+  vnl_matlab_read_or_die(iss, r_p1[1], "py_t");
+  vnl_matlab_read_or_die(iss, r_q1[0], "qx_t");
+  vnl_matlab_read_or_die(iss, r_q1[1], "qy_t");
+  vnl_matlab_read_or_die(iss, r_gradQ[0][0], "qx_nx");
+  vnl_matlab_read_or_die(iss, r_gradQ[0][1], "qx_ny");
+  vnl_matlab_read_or_die(iss, r_gradQ[1][0], "qy_nx");
+  vnl_matlab_read_or_die(iss, r_gradQ[1][1], "qy_ny");
+  vnl_matlab_read_or_die(iss, r_gradP[0][0], "px_nx");
+  vnl_matlab_read_or_die(iss, r_gradP[0][1], "px_ny");
+  vnl_matlab_read_or_die(iss, r_gradP[1][0], "py_nx");
+  vnl_matlab_read_or_die(iss, r_gradP[1][1], "py_ny");
+  vnl_matlab_read_or_die(iss, in_target[0], "tx");
+  vnl_matlab_read_or_die(iss, in_target[1], "ty");
   
   // Initialize the input vectors
   int k = 80;
-  Ham::Matrix q0(k, 2), p0(k, 2), q1(k, 2), p1(k, 2);
+  Ham::Matrix q0(k, 2), p0(k, 2), q1(k, 2), p1(k, 2), trg(k, 2);
   for(int a = 0; a < 2; a++)
     {
     q0.set_column(a, in_q0[a]);
     p0.set_column(a, in_p0[a]);
+    trg.set_column(a, in_target[a]);
     }
 
   // Initialize the gradients
@@ -62,24 +100,6 @@ int main(int argc, char *argv[])
   // Compute the Hamiltonian
   double H  = hsys.ComputeHamiltonianJet(q0, p0, true);
 
-  // Read the regression data for the Hamiltonian and derivatives
-  vnl_vector<double> r_H, r_Hp[2], r_Hq[2];
-  vnl_matrix<double> r_Hqq[2][2], r_Hqp[2][2], r_Hpp[2][2];
-  vnl_matlab_read_or_die(iss, r_H, "H");
-  vnl_matlab_read_or_die(iss, r_Hp[0], "Hpx");
-  vnl_matlab_read_or_die(iss, r_Hp[1], "Hpy");
-  vnl_matlab_read_or_die(iss, r_Hq[0], "Hqx");
-  vnl_matlab_read_or_die(iss, r_Hq[1], "Hqy");
-  vnl_matlab_read_or_die(iss, r_Hqq[0][0], "Hqxqx");
-  vnl_matlab_read_or_die(iss, r_Hqq[0][1], "Hqxqy");
-  vnl_matlab_read_or_die(iss, r_Hqq[1][1], "Hqyqy");
-  vnl_matlab_read_or_die(iss, r_Hqp[0][0], "Hqxpx");
-  vnl_matlab_read_or_die(iss, r_Hqp[0][1], "Hqxpy");
-  vnl_matlab_read_or_die(iss, r_Hqp[1][0], "Hqypx");
-  vnl_matlab_read_or_die(iss, r_Hqp[1][1], "Hqypy");
-  vnl_matlab_read_or_die(iss, r_Hpp[0][0], "Hpxpx");
-  vnl_matlab_read_or_die(iss, r_Hpp[0][1], "Hpxpy");
-  vnl_matlab_read_or_die(iss, r_Hpp[1][1], "Hpypy");
 
   // Symmetric terms
   r_Hqq[1][0] = r_Hqq[0][1];
@@ -125,21 +145,6 @@ int main(int argc, char *argv[])
   std::cout << "Flow with gradient computed in " 
     << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
 
-  // Read the regression data for the flow and derivatives
-  vnl_vector<double> r_q1[2], r_p1[2];
-  vnl_matrix<double> r_gradQ[2][2], r_gradP[2][2];
-  vnl_matlab_read_or_die(iss, r_q1[0], "qx_t");
-  vnl_matlab_read_or_die(iss, r_q1[1], "qy_t");
-  vnl_matlab_read_or_die(iss, r_p1[0], "px_t");
-  vnl_matlab_read_or_die(iss, r_p1[1], "py_t");
-  vnl_matlab_read_or_die(iss, r_gradQ[0][0], "qx_nx");
-  vnl_matlab_read_or_die(iss, r_gradQ[0][1], "qx_ny");
-  vnl_matlab_read_or_die(iss, r_gradQ[1][0], "qy_nx");
-  vnl_matlab_read_or_die(iss, r_gradQ[1][1], "qy_ny");
-  vnl_matlab_read_or_die(iss, r_gradP[0][0], "px_nx");
-  vnl_matlab_read_or_die(iss, r_gradP[0][1], "px_ny");
-  vnl_matlab_read_or_die(iss, r_gradP[1][0], "py_nx");
-  vnl_matlab_read_or_die(iss, r_gradP[1][1], "py_ny");
 
   for(int i = 0; i < k; i++)
     {
@@ -172,8 +177,8 @@ int main(int argc, char *argv[])
 
     for(int i = 0; i < k; i++)
       {
-      alpha[a](k) = rnd.drand32(-1.0, 1.0);
-      beta[a](k) = rnd.drand32(-1.0, 1.0);
+      alpha[a](i) = rnd.drand32(-1.0, 1.0);
+      beta[a](i) = rnd.drand32(-1.0, 1.0);
       }
     }
 
@@ -234,6 +239,91 @@ int main(int argc, char *argv[])
 
   // Report that we are done
   std::cout << "Passed derivative check on Hamilton flow" << std::endl;
+
+  // Test an objective function that involves multiple timepoints. The objective
+  // is just the distance between the flowing point (q_t) and the linear interpolation
+  // between q_0 and target points q_T
+  
+  // First, compute the central difference approximation of the objective function. The 
+  // objective function is computed in the loop
+  Ham::Matrix dE_num(k, 2);
+  Ham::Matrix dE_ana(k, 2);
+
+  for(int i = 0; i < k; i++)
+    {
+    for(int a = 0; a < 2; a++)
+      {
+      // We are computing the gradient of objective 'E' with respect to P0_i,a. Next 
+      // loop over forward and backwad differences
+      double E_dir[2];
+      for(int dir = 0; dir < 2; dir++)
+        {
+        // Perturb forward or backward
+        Ham::Matrix p0_eps = p0; p0_eps(i,a) += (dir == 0) ? -eps : eps;
+
+        // Perform flow
+        hsys.FlowHamiltonian(p0_eps, q1, p1);
+
+        // Compute the objective function across the entire time
+        E_dir[dir] = 0.0;
+        for(int t = 0; t < hsys.GetN(); t++)
+          {
+          // Get the interpolant for this time
+          const Ham::Matrix &qt = hsys.GetQt(t);
+
+          // Get the target points
+          double lerp = t * 1.0 / (hsys.GetN() - 1);
+
+          for(int j = 0; j < k; j++)
+            {
+            for(int b = 0; b < 2; b++)
+              {
+              double trg_jbt = q0(j, b) * (1.0 - lerp) + trg(j, b) * lerp;
+              E_dir[dir] += (trg_jbt - qt(j,b)) * (trg_jbt - qt(j,b));
+              }
+            }
+          }
+        }
+
+      // Compute the partial derivative of the objective function
+      dE_num(i,a) = (E_dir[1] - E_dir[0]) / (2 * eps);
+      }
+    }
+
+  // Now perform the flow with the actual input to compute analytic derivative
+  hsys.FlowHamiltonian(p0, q1, p1);
+
+  // Compute the gradient of the objective w.r.t. to qt at every t
+  std::vector<Ham::Matrix> d_obj__d_qt(hsys.GetN());
+  for(int t = 0; t < hsys.GetN(); t++)
+    {
+    d_obj__d_qt[t].set_size(k, 2);
+    const Ham::Matrix &qt = hsys.GetQt(t);
+    double lerp = t * 1.0 / (hsys.GetN() - 1);
+    for(int j = 0; j < k; j++)
+      {
+      for(int b = 0; b < 2; b++)
+        {
+        double trg_jbt = q0(j, b) * (1.0 - lerp) + trg(j, b) * lerp;
+        d_obj__d_qt[t](j, b) = 2 * (qt(j,b) - trg_jbt);
+        }
+      }
+    }
+
+  // Perform the backward flow
+  hsys.FlowTimeVaryingGradientsBackward(d_obj__d_qt, dE_ana);
+
+  // Validate
+  for(int j = 0; j < k; j++)
+    {
+    for(int b = 0; b < 2; b++)
+      {
+      test(dE_num(j,b), dE_ana(j,b), 1e-5, "tvar_obj[%d][%d]",j,b);
+      }
+    }
+
+  // Report that we are done
+  std::cout << "Passed derivative check on multi-time objective backward flow" << std::endl;
 
   // Create a larger problem with 800 time points, to test overhead
   int big_k = 800;
