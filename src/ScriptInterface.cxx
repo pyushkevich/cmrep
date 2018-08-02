@@ -439,9 +439,16 @@ void my_calcf(int &n, double *x, int &nf, double &f, int *dummy1, double *dummy2
   cout << flush;
 
   // Save a mesh
-  // ExportMedialMeshToVTK(mop->GetMedialModel(), NULL, "iter.med.vtk");
-  // ExportBoundaryMeshToVTK(mop->GetMedialModel(), NULL, "iter.bnd.vtk");
-
+  static int iter = 0, iter_freq = 5;
+  if (iter % iter_freq == 0)
+    {
+    char buffer[256];
+    sprintf(buffer, "iter_%03d.med.vtk", iter / iter_freq);
+    ExportMedialMeshToVTK(mop->GetMedialModel(), NULL, buffer);
+    sprintf(buffer, "iter_%03d.bnd.vtk", iter / iter_freq);
+    ExportBoundaryMeshToVTK(mop->GetMedialModel(), NULL, buffer);
+    }
+  ++iter;
 }
 
 void my_calcg(int &n, double *x, int &nf, double *g, int *, double *, void *info)

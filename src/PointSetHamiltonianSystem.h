@@ -53,9 +53,15 @@ public:
   /**
    * Flow the Hamiltonian system with initial momentum p0 without gradient 
    * computation. Returns the kinetic energy (Hamiltonian value that should 
-   * be preserved over the time evolution)
+   * be preserved over the time evolution). 
    */
-  TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p);
+  TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p, const Matrix &z0, Matrix &z);
+
+  /**
+   * Applies the flow to a set of additional points for which we are not optimizing
+   * the momentum. These extra samples are just along for the ride
+   */
+  void ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const;
 
   /**
    * Flow the Hamiltonian system with gradient computation. The gradient is 
