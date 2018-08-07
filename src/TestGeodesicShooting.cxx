@@ -246,12 +246,13 @@ int main(int argc, char *argv[])
   
   // First, compute the central difference approximation of the objective function. The 
   // objective function is computed in the loop
-  Ham::Matrix dE_num(k, 2);
-  Ham::Matrix dE_ana(k, 2);
+  Ham::Vector dE_num[2];
+  Ham::Vector dE_ana[2];
 
-  for(int i = 0; i < k; i++)
+  for(int a = 0; a < 2; a++)
     {
-    for(int a = 0; a < 2; a++)
+    dE_num[a].set_size(k);
+    for(int i = 0; i < k; i++)
       {
       // We are computing the gradient of objective 'E' with respect to P0_i,a. Next 
       // loop over forward and backwad differences
@@ -286,7 +287,7 @@ int main(int argc, char *argv[])
         }
 
       // Compute the partial derivative of the objective function
-      dE_num(i,a) = (E_dir[1] - E_dir[0]) / (2 * eps);
+      dE_num[a](i) = (E_dir[1] - E_dir[0]) / (2 * eps);
       }
     }
 
@@ -318,7 +319,7 @@ int main(int argc, char *argv[])
     {
     for(int b = 0; b < 2; b++)
       {
-      test(dE_num(j,b), dE_ana(j,b), 1e-5, "tvar_obj[%d][%d]",j,b);
+      test(dE_num[b](j), dE_ana[b](j), 1e-5, "tvar_obj[%d][%d]",j,b);
       }
     }
 

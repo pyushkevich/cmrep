@@ -321,6 +321,14 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
     src/PointSetGeodesicToWarp.cxx
     submodules/greedy/src/lddmm_data.cxx)
   TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
+
+  ADD_EXECUTABLE(alcmrep_test
+    src/TestAugLagCMRep.cxx
+    src/MeshTraversal.cxx
+    src/PointSetOptimalControlSystem.cxx
+    src/PointSetHamiltonianSystem.cxx)
+  TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS})
+
 ENDIF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
 
 # Link the main executables

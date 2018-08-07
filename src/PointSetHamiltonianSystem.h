@@ -115,7 +115,7 @@ public:
    * Here there is no beta input, which is normally zero since we rarely involve
    * the momentum in objective functions
    */
-  void FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Matrix &result);
+  void FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Vector result[VDim]);
 
   const Vector &GetHp(unsigned int d) const { return Hp[d]; }
   const Vector &GetHq(unsigned int d) const { return Hq[d]; }

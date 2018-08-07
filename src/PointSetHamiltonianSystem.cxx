@@ -511,7 +511,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 template <class TFloat, unsigned int VDim>
 void
 PointSetHamiltonianSystem<TFloat, VDim>
-::FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Matrix &result)
+::FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Vector result[VDim])
 {
   // Allocate update vectors for alpha and beta
   Vector alpha[VDim], beta[VDim];
@@ -547,7 +547,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Finally, what we are really after are the betas
   for(int a = 0; a < VDim; a++)
     {
-    result.set_column(a, beta[a]);
+    result[a] = beta[a];
     }
 }
 
