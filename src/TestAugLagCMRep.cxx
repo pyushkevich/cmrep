@@ -254,8 +254,8 @@ struct AugLagMedialFitParameters
 
   // Default initializer
   AugLagMedialFitParameters() 
-    : nt(40), w_kinetic(100.0), sigma(4.0), 
-      mu_init(0.0), mu_scale(1.6), mu_update_freq(20) {}
+    : nt(40), w_kinetic(0.05), sigma(4.0), 
+      mu_init(0.05), mu_scale(1.6), mu_update_freq(20) {}
 };
 
 
@@ -651,13 +651,13 @@ int main(int argc, char *argv[])
     obj.set_verbose(true);
 
     // Create an optimization
-    // vnl_lbfgsb optimizer(obj);
-    vnl_conjugate_gradient optimizer(obj);
+    vnl_lbfgsb optimizer(obj);
+    // vnl_conjugate_gradient optimizer(obj);
     optimizer.set_f_tolerance(1e-9);
     optimizer.set_x_tolerance(1e-4);
     optimizer.set_g_tolerance(1e-6);
     optimizer.set_trace(false);
-    optimizer.set_max_function_evals(5);
+    optimizer.set_max_function_evals(80);
 
     // vnl_conjugate_gradient optimizer(cost_fn);
     optimizer.minimize(x_opt);
