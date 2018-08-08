@@ -5,7 +5,7 @@
 
 #include "MeshTraversal.h"
 #include "MedialException.h"
-#include "PointSetHamiltonianSystem.h"
+#include "PointSetOptimalControlSystem.h"
 
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
@@ -254,8 +254,8 @@ struct AugLagMedialFitParameters
 
   // Default initializer
   AugLagMedialFitParameters() 
-    : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.05), mu_scale(1.6), mu_update_freq(20) {}
+    : nt(40), w_kinetic(100.0), sigma(4.0), 
+      mu_init(0.0), mu_scale(1.6), mu_update_freq(20) {}
 };
 
 
@@ -266,13 +266,13 @@ public:
   typedef vnl_matrix_ref<double> MatrixRef;
   typedef CMRep::Matrix Matrix;
   typedef CMRep::Vector Vector;
-  typedef PointSetHamiltonianSystem<double, 3> HSystem;
+  typedef PointSetOptimalControlSystem<double, 3> OCSystem;
 
   AugLagMedialFitObjective(
     const AugLagMedialFitParameters &in_param, 
     CMRep *in_model, CMRep *in_target)
     : model(in_model), target(in_target), param(in_param), 
-      vnl_cost_function((in_model->nv + in_model->nmt) * 3)
+      vnl_cost_function(in_param.nt * (in_model->nv + in_model->nmt) * 3)
     {
     // Compute the number of constraints: for every medial triangle, there are five
     nc_t = model->nmt * 5;
@@ -280,24 +280,35 @@ public:
     // Initialize the lambdas
     lambda.set_size(nc_t * param.nt);
     lambda.fill(0.0);
+
+    // Generate the initial control vector. This vector is large, number of all 
+    // moving points times the number of time steps.
+    unsigned int nvar = param.nt * (model->nmt + model->nv) * 3;
     
     // Generate the initial momentum vector. The initial momentum consists of the 
     // momentum on the boundary vertices and the momentum on the medial triangle
     // centers. We initialize with a linear displacement towards the target point
-    x_init.set_size(model->nmt * 3 + model->nv * 3);
-    MatrixRef x_init_bnd(model->nv, 3, x_init.data_block());
-    MatrixRef x_init_med(model->nmt, 3, x_init.data_block() + model->nv * 3);
-    x_init_bnd.update((target->bnd_vtx - model->bnd_vtx) / param.nt);
-    x_init_med.update((target->med_tctr - model->med_tctr) / param.nt);
+    x_init.set_size(nvar);
+    x_init.fill(0.0);
 
     // Initialize the hamiltonian system
     q0.set_size(model->nv + model->nmt, 3);
     q0.update(model->bnd_vtx, 0, 0);
     q0.update(model->med_tctr, model->nv, 0);
-    hsys = new HSystem(q0, param.sigma, param.nt);
+    ocsys = new OCSystem(q0, param.sigma, param.nt);
 
-    // Initialize the end-flow arrays
-    q1 = q0; p1 = q0;
+    // Initialize the u array
+    u.resize(param.nt, Matrix(model->nv + model->nmt, 3));
+    d_g__d_qt.resize(param.nt, Matrix(model->nv + model->nmt, 3));
+    d_obj__d_ut.resize(param.nt, Matrix(model->nv + model->nmt, 3));
+
+    // Initialize x_init to contain a constant velocity field (for now)
+    for(int t = 0; t < param.nt; t++)
+      {
+      MatrixRef x_init_t(model->nv + model->nmt, 3, x_init.data_block() + t * q0.rows());
+      x_init_t.update((target->bnd_vtx - model->bnd_vtx) / param.nt, 0, 0);
+      x_init_t.update((target->med_tctr - model->med_tctr) / param.nt, model->nv, 0);
+      }
 
     // Initialize mu based on parameters
     mu = param.mu_init;
@@ -314,7 +325,7 @@ public:
   /** Destructor */
   ~AugLagMedialFitObjective() 
     {
-    delete hsys;
+    delete ocsys;
     }
 
   /** Get suitable x for initialization */
@@ -328,31 +339,25 @@ public:
   /** Compute the objective function */
   virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
     {
-    // Read the momenta from the x vector
-    MatrixRef p0(model->nv + model->nmt, 3, const_cast<double *>(x.data_block()));
-    MatrixRef p0_bnd(model->nv, 3, const_cast<double *>(x.data_block()));
-    MatrixRef p0_med(model->nmt, 3, const_cast<double *>(x.data_block()) + 3 * model->nv);
+    // TODO: this copy-in is a waste of time and space
+    for(int t = 0; t < param.nt; t++)
+      u[t].copy_in(x.data_block() + (model->nv + model->nmt) * 3 * t);
 
     // Initialize the various components of the objective function
     double m_distsq = 0, m_kinetic = 0, m_barrier = 0, m_lag = 0, m_total = 0;
 
-    // This structure holds the partials of the augmented lagrangian wrt
-    // points q at different times in the flow
-    std::vector<Matrix> d_obj__d_qt(param.nt);
+    // Initialize the array of objective function derivatives w.r.t. q_t
     for(int t = 0; t < param.nt; t++)
-      {
-      d_obj__d_qt[t].set_size(model->nv + model->nmt, 3);
-      d_obj__d_qt[t].fill(0.0);
-      }
+      d_g__d_qt[t].fill(0.0);
 
     // The reference to the last of these matrices (involved in the final objective)
-    MatrixRef d_obj__d_qbnd1(model->nv, 3, d_obj__d_qt[param.nt - 1].data_block());
+    MatrixRef d_obj__d_qbnd1(model->nv, 3, d_g__d_qt[param.nt - 1].data_block());
 
-    // Perform geodesic shooting on the momenta
-    m_kinetic = hsys->FlowHamiltonian(p0, q1, p1);
+    // Perform forward flow using the control u
+    m_kinetic = ocsys->Flow(u);
 
     // Compute the goodness of fit metric
-    MatrixRef q1_bnd(model->nv, 3, q1.data_block());
+    MatrixRef q1_bnd(model->nv, 3, const_cast<double *>(ocsys->GetQt(param.nt-1).data_block()));
     for(int i = 0; i < model->nv; i++)
       {
       for(int d = 0; d < 3; d++)
@@ -369,7 +374,7 @@ public:
     for(int t = 0; t < param.nt; t++)
       {
       // Get the q for the current timepoint
-      const Matrix &qt = hsys->GetQt(t);
+      const Matrix &qt = ocsys->GetQt(t);
       MatrixRef qt_bnd(model->nv, 3, const_cast<double *>(qt.data_block()));
       MatrixRef qt_med(model->nmt, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
 
@@ -380,8 +385,8 @@ public:
       MatrixRef lambda_t(model->nmt, 5, lambda.data_block() + t * model->nmt * 5);
 
       // Get the partial derivatives for the current timeslice
-      MatrixRef d_obj__d_qbnd_t(model->nv, 3, d_obj__d_qt[t].data_block());
-      MatrixRef d_obj__d_qmed_t(model->nmt, 3, d_obj__d_qt[t].data_block() + 3 * model->nv);
+      MatrixRef d_obj__d_qbnd_t(model->nv, 3, d_g__d_qt[t].data_block());
+      MatrixRef d_obj__d_qmed_t(model->nmt, 3, d_g__d_qt[t].data_block() + 3 * model->nv);
 
       // Iterate over the medial triangles
       for(int k = 0; k < model->nmt; k++)
@@ -455,19 +460,14 @@ public:
         }
 
       // Flow the gradient backward
-      Vector grad_f[3];
-      hsys->FlowTimeVaryingGradientsBackward(d_obj__d_qt, grad_f);
+      ocsys->FlowBackward(u, d_g__d_qt, param.w_kinetic, d_obj__d_ut);
 
-      // Add the gradient of H
-      hsys->ComputeHamiltonianJet(q0, p0, false);
-      for(unsigned int a = 0; a < 3; a++)
-        grad_f[a] += hsys->GetHp(a) * param.w_kinetic;
-
-      // Pack the gradient into a flat vector
+      // Compute the final gradient
       unsigned int ig = 0;
-      for(int i = 0; i < q0.rows(); i++)
-        for(int a = 0; a < 3; a++, ig++)
-          (*g)[ig] = grad_f[a](i);
+      for(int t = 0; t < param.nt; t++)
+        for(int i = 0; i < q0.rows(); i++)
+          for(int a = 0; a < 3; a++, ig++)
+            (*g)[ig] = d_obj__d_ut[t](i,a);
       }
     }
 
@@ -499,7 +499,7 @@ public:
     // Iterate over time
     for(int t = 0; t < param.nt; t++)
       {
-      const Matrix &qt = hsys->GetQt(t);
+      const Matrix &qt = ocsys->GetQt(t);
       MatrixRef qt_bnd(model->nv, 3, const_cast<double *>(qt.data_block()));
       MatrixRef qt_med(model->nmt, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
 
@@ -559,9 +559,11 @@ protected:
   // Matrices of the constraints
   std::vector<Matrix> C;
 
-
   // The hamiltonian system
-  PointSetHamiltonianSystem<double, 3> *hsys;
+  OCSystem *ocsys;
+
+  // Matrix array used to store the control
+  OCSystem::MatrixArray u, d_g__d_qt, d_obj__d_ut, d_ke__d_ut;
 
   // Mu
   double mu;
@@ -625,7 +627,7 @@ int main(int argc, char *argv[])
     typename CMRep::Vector test_grad(x_opt.size());
     double f_test;
     obj.compute(x_opt, &f_test, &test_grad);
-    for(int k = 0; k < 8; k++)
+    for(int k = 0; k < 16; k++)
       {
       int i = rndy.lrand32(0, x_opt.size());
       typename CMRep::Vector xtest = x_opt;
@@ -636,20 +638,26 @@ int main(int argc, char *argv[])
       xtest[i] = x_opt[i] + eps;
       obj.compute(xtest, &f2, NULL);
 
-      printf("i = %03d,  AG = %12.8f,  NG = %12.8f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+      int nv = (m_template.nmt + m_template.nmt);
+      int i_t = i / (nv * 3);
+      int i_v = (i - i_t * (nv * 3)) / 3;
+      int i_d = i % 3;
+      printf("t = %02d, i = %04d, d = %d    AG = %12.8f,  NG = %12.8f,  Del = %12.8f\n", 
+        i_t, i_v, i_d, test_grad[i], (f2 - f1) / (2 * eps), 
+        fabs(test_grad[i] - (f2-f1)/(2*eps)));
       }
 
     // Perform optimization
     obj.set_verbose(true);
 
     // Create an optimization
-    vnl_lbfgsb optimizer(obj);
-    // vnl_conjugate_gradient optimizer(obj);
+    // vnl_lbfgsb optimizer(obj);
+    vnl_conjugate_gradient optimizer(obj);
     optimizer.set_f_tolerance(1e-9);
     optimizer.set_x_tolerance(1e-4);
     optimizer.set_g_tolerance(1e-6);
     optimizer.set_trace(false);
-    optimizer.set_max_function_evals(800);
+    optimizer.set_max_function_evals(5);
 
     // vnl_conjugate_gradient optimizer(cost_fn);
     optimizer.minimize(x_opt);

@@ -52,9 +52,12 @@ public:
    * Perform backward flow in order to compute the gradient of some function
    * f with respect to the control u. The input is the array of partial derivatives
    * of the function f with respect to the path q(t).
+   *
+   * The function also includes the partial derivatives of the kinetic energy
+   * with respect to u, with weight w_kinetic 
    */
-  void FlowBackward(const MatrixArray &u, const MatrixArray &d_f__d_qt, MatrixArray &d_f__d_u);
-
+  void FlowBackward(const MatrixArray &u, const MatrixArray &d_f__d_qt, 
+                    TFloat w_kinetic, MatrixArray &d_f__d_u);
 
   /**
    * Get the curves
@@ -67,8 +70,8 @@ protected:
 
   // Step of backpropagation
   void PropagateAlphaBackwards(
-    const Matrix &q, const Matrix &u, const Vector alpha[], 
-    Vector alpha_Q[], Vector alpha_U[]);
+    const Matrix &q, const Matrix &u, 
+    const Vector alpha[], Vector alpha_Q[], Vector alpha_U[]);
 
   // Initial ladnmark coordinates - fixed for duration
   Matrix q0;

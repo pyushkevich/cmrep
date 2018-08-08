@@ -92,23 +92,39 @@ PointSetOptimalControlSystem<TFloat, VDim>
 template <class TFloat, unsigned int VDim>
 void
 PointSetOptimalControlSystem<TFloat, VDim>
-::FlowBackward(const MatrixArray &u, const MatrixArray &d_f__d_qt, MatrixArray &d_f__d_u)
+::FlowBackward(const MatrixArray &u, const MatrixArray &d_g__d_qt,
+  TFloat w_kinetic,
+  MatrixArray &d_f__d_u)
 {
+  // This function computes the gradient with respect to u[t] of the 
+  // objective function
+  //
+  //    f(q[t],u[t]) = g(q[t]) + w_kinetic * KE
+  //
+  // given the gradient of g with respect to q[t]
+  //
+  // The function f can be written as (' denotes transpose)
+  //
+  //    f = g(q[t]) + w_kinetic * sum_{t=0}^{T-1} u[t]' (q[t+1]-q[t]) / dt
+  //
   // The backflow uses the vector alpha which is updated using the recurrence
   //   alpha[T] = d_f__d_qt[T]
   //   alpha[t-1] = alpha[t] * Q(t,t-1) + d_f__d_qt[t-1]
   // where Q(t,t-1) is the Jacobian of q[t] with respect to q[t-1]
   //
   // Then the partial derivative d_f__d_u[t] is given by
-  //   d_f__d_u[t-1] = alpha[t] * U(t-1)
+  //   d_f__d_u[t-1] = alpha[t] * U(t-1) + w_kinetic * (q[t]-q[t-1]) / dt
   // where U(t-1) is the Jacobian of q[t] with respect to u[t-1]   
-
+  
   // Allocate and initialize the alpha vector and the products of 
   // alpha with Q(t,t-1) and U(t-1)
   Vector alpha[VDim], alpha_Q[VDim], alpha_U[VDim];
+
+  TFloat wke_factor = w_kinetic * 0.5;
+
   for(int a = 0; a < VDim; a++)
     {
-    alpha[a] = d_f__d_qt[N-1].get_column(a);
+    alpha[a] = d_g__d_qt[N-1].get_column(a) + wke_factor * u[N-2].get_column(a);
     alpha_Q[a].set_size(k);
     alpha_U[a].set_size(k);
     }
@@ -119,13 +135,17 @@ PointSetOptimalControlSystem<TFloat, VDim>
     // Propagate gradient backwards
     PropagateAlphaBackwards(Qt[t-1], u[t-1], alpha, alpha_Q, alpha_U);
 
+    // Terms involved in KE computation
+    Matrix delta_q = wke_factor * (Qt[t] - Qt[t-1]);
+    Matrix delta_u = wke_factor * ((t > 1) ? (u[t-2] - u[t-1]) : -u[t-1]);
+
     for(int a = 0; a < VDim; a++)
       {
       // Update the gradient of f with respect to u[t-1]
-      d_f__d_u[t-1].set_column(a, alpha_U[a]);
+      d_f__d_u[t-1].set_column(a, dt * alpha_U[a] + delta_q.get_column(a));
 
       // Update the alpha
-      alpha[a] += dt * alpha_Q[a] + d_f__d_qt[t-1].get_column(a);
+      alpha[a] += dt * alpha_Q[a] + d_g__d_qt[t-1].get_column(a) + delta_u.get_column(a);
       }
     } 
 }
@@ -143,10 +163,11 @@ PointSetOptimalControlSystem<TFloat, VDim>
   for(int a = 0; a < VDim; a++)
     {
     alpha_Q[a].fill(0.0);
-    alpha_U[a].fill(0.0);
+
+    // We must account for the diagonal term
+    alpha_U[a] = alpha[a];
     }
 
-  // Loop over all points
   for(unsigned int i = 0; i < k; i++)
     {
     // Get a pointer to pi for faster access?
@@ -208,7 +229,7 @@ PointSetOptimalControlSystem<TFloat, VDim>
   for(unsigned int t = 1; t < N; t++)
     {
     // Compute the hamiltonian
-    KE += ComputeEnergyAndVelocity(q, u[t-1]);
+    KE += dt * ComputeEnergyAndVelocity(q, u[t-1]);
 
     // Euler update
     for(unsigned int i = 0; i < k; i++)
