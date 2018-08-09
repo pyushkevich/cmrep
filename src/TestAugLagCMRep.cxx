@@ -30,6 +30,7 @@
 class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
 public:
+  typedef vnl_vector<double> Vector;
   FindMedialTriangleCenterObjective(vnl_matrix<double> X) 
     : vnl_cost_function(3)
     { 
@@ -47,30 +48,35 @@ public:
     }
 
   // Compute the variance
-  virtual void compute(vnl_vector<double> const& Y, double *f, vnl_vector<double>* g)
+  virtual double f (vnl_vector<double> const& Y)
     {
-    double sum_sq = 0.0, sum = 0.0;
-    for(int i = 0; i < X.rows(); i++)
-      {
-      vnl_vector<double> xy = X.get_row(i) - Y;
-      double di = xy.magnitude();
-      sum_sq += di * di;
-      sum += di;
-      }
+    // Triangle vertice
+    Vector A1 = X.get_row(0);
+    Vector B1 = X.get_row(1);
+    Vector C1 = X.get_row(2);
+    Vector A2 = X.get_row(3);
+    Vector B2 = X.get_row(4);
+    Vector C2 = X.get_row(5);
 
-    if(f)
-      *f = sum_sq - sum * sum / X.rows();
+    // Spoke vectors
+    Vector AB1 = (B1 - A1), AC1 = (C1 - A1);
+    Vector AB2 = (B2 - A2), AC2 = (C2 - A2);
+    Vector S1 = (A1 + B1 + C1) / 3 - Y;
+    Vector S2 = (A2 + B2 + C2) / 3 - Y;
 
-    if(g)
-      {
-      g->fill(0.0);
-      for(int i = 0; i < X.rows(); i++)
-        {
-        vnl_vector<double> xy = Y - X.get_row(i);
-        double di = xy.magnitude();
-        *g += (2 - 2 * sum / (di * X.rows())) * xy;
-        }
-      }
+    // Compute the total error
+    double c0 = dot_product(AB1, S1);
+    double c1 = dot_product(AC1, S1);
+    double c2 = dot_product(AB2, S2);
+    double c3 = dot_product(AC2, S2);
+    double c4 = dot_product(S1 - S2, S1 + S2);
+
+    return c0 * c0 + c1 * c1 + c2 * c2 + c3 * c3 + 2 * c4 * c4;
+    }
+
+  virtual void gradf(vnl_vector<double> const& x, vnl_vector<double>& g)
+    {
+    this->fdgradf(x, g);
     }
 
 protected:
@@ -86,7 +92,7 @@ vnl_vector<double> FindMedialTriangleCenter(const vnl_matrix<double> &bnd_vertic
   optimizer.set_f_tolerance(1e-9);
   optimizer.set_x_tolerance(1e-4);
   optimizer.set_g_tolerance(1e-6);
-  optimizer.set_trace(false);
+  optimizer.set_trace(true);
   optimizer.set_max_function_evals(100);
   optimizer.minimize(Y);
 
@@ -252,10 +258,14 @@ struct AugLagMedialFitParameters
   double mu_init, mu_scale;
   unsigned int mu_update_freq;
 
+  // Interpolation mode or fitting mode?
+  bool interp_mode;
+
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.05), mu_scale(1.6), mu_update_freq(20) {}
+      mu_init(0.1), mu_scale(1.6), mu_update_freq(20),
+      interp_mode(false)  {}
 };
 
 
@@ -264,6 +274,7 @@ class AugLagMedialFitObjective : public vnl_cost_function
 public:
 
   typedef vnl_matrix_ref<double> MatrixRef;
+  typedef vnl_vector_ref<double> VectorRef;
   typedef CMRep::Matrix Matrix;
   typedef CMRep::Vector Vector;
   typedef PointSetOptimalControlSystem<double, 3> OCSystem;
@@ -316,7 +327,10 @@ public:
     // Initialize the constraints matrices
     C.resize(param.nt);
     for(int t = 0; t < param.nt; t++)
+      {
       C[t].set_size(model->nmt, 5);
+      C[t].fill(0.0);
+      }
 
     // Verbosity
     verbose = false;
@@ -371,7 +385,8 @@ public:
       }
 
     // Compute the constraint violations
-    for(int t = 0; t < param.nt; t++)
+    int t_start = param.interp_mode ? 0 : param.nt - 1;
+    for(int t = t_start; t < param.nt; t++)
       {
       // Get the q for the current timepoint
       const Matrix &qt = ocsys->GetQt(t);
@@ -388,6 +403,8 @@ public:
       MatrixRef d_obj__d_qbnd_t(model->nv, 3, d_g__d_qt[t].data_block());
       MatrixRef d_obj__d_qmed_t(model->nmt, 3, d_g__d_qt[t].data_block() + 3 * model->nv);
 
+      // These vectors store the derivatives of the constraints wrt seven points
+
       // Iterate over the medial triangles
       for(int k = 0; k < model->nmt; k++)
         {
@@ -396,48 +413,83 @@ public:
         const Triangle &btr2 = model->bnd_tri.triangles[model->med_bti(k, 1)];
 
         // Get the six vertices involved
-        unsigned int ibnd[6];
-        for(int j = 0; j < 3; j++)
-          {
-          ibnd[j] = btr1.vertices[j];
-          ibnd[j+3] = btr2.vertices[j];
-          }
+        unsigned int a1 = btr1.vertices[0], b1 = btr1.vertices[1], c1 = btr1.vertices[2];
+        unsigned int a2 = btr2.vertices[0], b2 = btr2.vertices[1], c2 = btr2.vertices[2];
 
-        // Compute the distances from each vertex to the medial vertex
-        Matrix del_d(6, 3);
-        Vector dbm(6);
-        for(int m = 0; m < 6; m++)
-          {
-          double dst_sq = 0.0;
-          for(int d = 0; d < 3; d++)
-            {
-            del_d(m, d) = qt_bnd(ibnd[m], d) - qt_med(k, d);
-            dst_sq += del_d(m, d) * del_d(m, d);
-            }
-          dbm[m] = sqrt(dst_sq);
-          }
+        // Corners of the two triangles
+        VectorRef A1(3, qt_bnd.data_block() + 3 * a1);
+        VectorRef B1(3, qt_bnd.data_block() + 3 * b1);
+        VectorRef C1(3, qt_bnd.data_block() + 3 * c1);
+        VectorRef A2(3, qt_bnd.data_block() + 3 * a2);
+        VectorRef B2(3, qt_bnd.data_block() + 3 * b2);
+        VectorRef C2(3, qt_bnd.data_block() + 3 * c2);
+        VectorRef M(3, qt_med.data_block() + 3 * k);
 
-        // Compute the constraints
-        for(int l = 1; l < 6; l++)
+        // Derivatives of obj with respect to these seven points
+        VectorRef d_obj__d_A1(3, d_obj__d_qbnd_t.data_block() + 3 * a1);
+        VectorRef d_obj__d_B1(3, d_obj__d_qbnd_t.data_block() + 3 * b1);
+        VectorRef d_obj__d_C1(3, d_obj__d_qbnd_t.data_block() + 3 * c1);
+        VectorRef d_obj__d_A2(3, d_obj__d_qbnd_t.data_block() + 3 * a2);
+        VectorRef d_obj__d_B2(3, d_obj__d_qbnd_t.data_block() + 3 * b2);
+        VectorRef d_obj__d_C2(3, d_obj__d_qbnd_t.data_block() + 3 * c2);
+        VectorRef d_obj__d_M(3, d_obj__d_qmed_t.data_block() + 3 * k);
+
+        // Spoke vectors
+        Vector AB1 = (B1 - A1), AC1 = (C1 - A1);
+        Vector AB2 = (B2 - A2), AC2 = (C2 - A2);
+        Vector S1 = (A1 + B1 + C1) / 3 - M;
+        Vector S2 = (A2 + B2 + C2) / 3 - M;
+
+        // Weight factor for the constraints
+        double z;
+
+        // Spokes orthogonal to triangles
+        Ct(k, 0) = dot_product(AB1, S1);
+        z = mu * Ct(k, 0) - lambda_t(k, 0);
+        d_obj__d_A1 += z * (AB1 / 3 - S1);
+        d_obj__d_B1 += z * (AB1 / 3 + S1);
+        d_obj__d_C1 += z * (AB1 / 3);
+        d_obj__d_M  -= z * AB1;
+
+        Ct(k, 1) = dot_product(AC1, S1);
+        z = mu * Ct(k, 1) - lambda_t(k, 1);
+        d_obj__d_A1 += z * (AC1 / 3 - S1);
+        d_obj__d_B1 += z * (AC1 / 3);
+        d_obj__d_C1 += z * (AC1 / 3 + S1);
+        d_obj__d_M  -= z * AC1;
+
+        Ct(k, 2) = dot_product(AB2, S2);
+        z = mu * Ct(k, 2) - lambda_t(k, 2);
+        d_obj__d_A2 += z * (AB2 / 3 - S2);
+        d_obj__d_B2 += z * (AB2 / 3 + S2);
+        d_obj__d_C2 += z * (AB2 / 3);
+        d_obj__d_M  -= z * AB2;
+
+        Ct(k, 3) = dot_product(AC2, S2);
+        z = mu * Ct(k, 3) - lambda_t(k, 3);
+        d_obj__d_A2 += z * (AC2 / 3 - S2);
+        d_obj__d_B2 += z * (AC2 / 3);
+        d_obj__d_C2 += z * (AC2 / 3 + S2);
+        d_obj__d_M  -= z * AC2;
+
+        // Spokes are equal length
+        Ct(k, 4) = dot_product(S1 - S2, S1 + S2);
+        z = mu * Ct(k, 4) - lambda_t(k, 4);
+        d_obj__d_A1 += (z / 1.5) * S1;
+        d_obj__d_B1 += (z / 1.5) * S1;
+        d_obj__d_C1 += (z / 1.5) * S1;
+        d_obj__d_A2 -= (z / 1.5) * S2;
+        d_obj__d_B2 -= (z / 1.5) * S2;
+        d_obj__d_C2 -= (z / 1.5) * S2;
+        d_obj__d_M  -= (z * 2.0) * (S1 - S2);
+
+        // Accumulate the constraints in the objective function
+        for(int l = 0; l < 5; l++)
           {
           // Compute the constraint
-          double c_l = dbm[l] - dbm[0];
+          double c_l = Ct(k, l);
           m_barrier += c_l * c_l;
-          m_lag += lambda_t(k, l - 1) * c_l;
-
-          // Store the constraint
-          Ct(k, l-1) = c_l;
-
-          // Compute the contribution of the constraint to the partial derivatives
-          double z = (mu * c_l - lambda_t(k, l - 1));
-          for(int d = 0; d < 3; d++)
-            {
-            double ddl = del_d(l, d) / dbm[l];
-            double dd0 = del_d(0, d) / dbm[0];
-            d_obj__d_qbnd_t(ibnd[l], d) += z * ddl;
-            d_obj__d_qbnd_t(ibnd[0], d) -= z * dd0;
-            d_obj__d_qmed_t(k, d) += z * (dd0 - ddl);
-            }
+          m_lag += lambda_t(k, l) * c_l;
           }
         } // loop over medial triangles
       } // loop over time 
