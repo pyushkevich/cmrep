@@ -811,9 +811,22 @@ inline vnl_vector<double> VectorEvaluate(VarVec &vec)
   return v;
 }
 
+// Convenient shorthand for VectorApplyPairwise<BinaryDifference>
+inline VarVec VecDiff(Problem *p, const VarVec &a, const VarVec &b)
+{
+  return VectorApplyPairwise<BinaryDifference>(p, a, b);
+}
+
+// Convenient shorthand for VectorApplyPairwise<BinarySum>
+inline VarVec VecSum(Problem *p, const VarVec &a, const VarVec &b)
+{
+  return VectorApplyPairwise<BinarySum>(p, a, b);
+}
+
 VarVec CrossProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *DotProduct(Problem *p, const VarVec &a, const VarVec &b);
 Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c);
+VarVec TriangleCentroid(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c);
 Expression *DistanceSqr(Problem *p, const VarVec &a, const VarVec &b);
 Expression *MagnitudeSqr(Problem *p, const VarVec &a);
 

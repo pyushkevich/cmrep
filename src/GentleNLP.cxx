@@ -625,6 +625,21 @@ Expression *TriangleTwiceAreaSqr(Problem *p, const VarVec &a, const VarVec &b, c
   return new TernaryGradientMagnitudeSqr(p, W[0], W[1], W[2]);
 }
 
+VarVec TriangleCentroid(Problem *p, const VarVec &a, const VarVec &b, const VarVec &c)
+{
+  VarVec out(a.size(), NULL);
+  for(int d = 0; d < a.size(); d++)
+    {
+    WeightedSumGenerator wsg(p);
+    wsg.AddTerm(a[d], 1.0 / 3.0);
+    wsg.AddTerm(b[d], 1.0 / 3.0);
+    wsg.AddTerm(c[d], 1.0 / 3.0);
+    out[d] = wsg.GenerateSum();
+    }
+
+  return out;
+}
+
 
 /******************************************************************
   Generic Constrained PRoblem STUFF

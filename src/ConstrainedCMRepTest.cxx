@@ -809,8 +809,8 @@ void ComputeTriangleAndEdgeProperties(
     size_t *v = t.vertices;
 
     // The un-normalized normal of the triangle
-    VarVec Xu = VectorApplyPairwise<BinaryDifference>(p, X[v[1]], X[v[0]]);
-    VarVec Xv = VectorApplyPairwise<BinaryDifference>(p, X[v[2]], X[v[0]]);
+    VarVec Xu = VecDiff(p, X[v[1]], X[v[0]]);
+    VarVec Xv = VecDiff(p, X[v[2]], X[v[0]]);
     VarVec Xu_cross_Xv = CrossProduct(p, Xu, Xv);
 
     // The area is half the norm of this cross product
@@ -1058,7 +1058,7 @@ void SaveMedialMesh(const char *file,
       xm[j] = M[i][j]->Evaluate();
 
     pts->InsertNextPoint(xm[0], xm[1], xm[2]);
-    rad->InsertNextTuple1(R[i]->Evaluate());
+    // rad->InsertNextTuple1(R[i]->Evaluate());
     
     std::vector<int> &ix = mtbIndex[i];
 
@@ -2005,6 +2005,55 @@ int main(int argc, char *argv[])
     mtbIndex[mIndex[i]].push_back(i);
     }
 
+  
+  // Create pairings between corresponding boundary triangles. The pairing is encoded as
+  // a list of triangle pairs. In the future this list should be used as a basis for mmesh
+  // instead of replicating the structure of the boundary mesh
+  typedef std::map<std::vector<int>, std::pair<int, int> > MedialTriMap;
+  MedialTriMap med_tri_map;
+
+  // First create a map from medial triangles to boundary triangles
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    // Sort the list of medial indices for this triangle to create a hash
+    std::vector<int> vi(3);
+    vi[0] = mIndex[bmesh->triangles[i].vertices[0]];
+    vi[1] = mIndex[bmesh->triangles[i].vertices[1]];
+    vi[2] = mIndex[bmesh->triangles[i].vertices[2]];
+    std::sort(vi.begin(), vi.end());
+
+    MedialTriMap::iterator itf = med_tri_map.find(vi);
+    if(itf == med_tri_map.end())
+      {
+      med_tri_map[vi] = make_pair(i, -1);
+      }
+    else if(itf->second.second == -1)
+      {
+      itf->second.second = i;
+      }
+    else
+      {
+      throw MedialModelException("Bad pairing of boundary triangles");
+      }
+    }
+
+  // Now convert this map to an array
+  std::vector<std::pair<size_t,size_t> > mpairIndex;
+  std::vector<size_t> btmTriIndex(bmesh->triangles.size(), -1);
+  for(MedialTriMap::const_iterator it = med_tri_map.begin(); it != med_tri_map.end(); ++it)
+    {
+    // Check that there is a valid triangle pair (no unmatched triangles)
+    if(it->second.second == -1)
+      throw MedialModelException("Bad pairing of boundary triangles");
+
+    // Save the pairing
+    mpairIndex.push_back(it->second);
+
+    // Associate boundary triangle with this pairing
+    btmTriIndex[it->second.first] = mpairIndex.size() - 1;
+    btmTriIndex[it->second.second] = mpairIndex.size() - 1;
+    }
+
 
   // Load the target mesh
   vtkPolyData *target = ReadVTKMesh(fnTarget.c_str());
@@ -2091,6 +2140,28 @@ int main(int argc, char *argv[])
       }
     }
 
+  // ------------------------------------------------------------------------
+  // Configure the medial points. Since there is no obvious way to do this, we
+  // just take the average of all of the boundary points as the initialization
+  // for the medial points, and hope this actually works :(
+  // ------------------------------------------------------------------------
+  std::vector< SMLVec3d > M_init(nm, SMLVec3d(0.0));
+  std::vector< size_t > M_nb(nm, 0);
+  for(int i = 0; i < nb; i++)
+    {
+    M_init[mIndex[i]] += xInput[i];
+    M_nb[mIndex[i]] ++;
+    }
+  for(int j = 0; j < nm; j++)
+    {
+    for(int d = 0; d < 3; d++)
+      {
+      sprintf(buffer, "M[%d,%d]", j, d);
+      M[j][d] = p->AddVariable(buffer, M_init[j][d] / M_nb[j]);
+      }
+    }
+
+#ifdef __OLD__
   // ------------------------------------------------------------------------
   // Configure the constraints on the boundary normal
   // ------------------------------------------------------------------------
@@ -2391,6 +2462,7 @@ int main(int argc, char *argv[])
       }
     }
 
+#endif // __OLD__
 
 
   // ------------------------------------------------------------------------
@@ -2662,12 +2734,12 @@ int main(int argc, char *argv[])
                    M[trit.GetAtomIndex(2)] };
 
     // Get the expression for the triangle normal
-    VarVec xu = VectorApplyPairwise<BinaryDifference>(p, x[1], x[0]);
-    VarVec xv = VectorApplyPairwise<BinaryDifference>(p, x[2], x[0]);
+    VarVec xu = VecDiff(p, x[1], x[0]);
+    VarVec xv = VecDiff(p, x[2], x[0]);
     VarVec Nx = CrossProduct(p, xu, xv);
 
-    VarVec mu = VectorApplyPairwise<BinaryDifference>(p, m[1], m[0]);
-    VarVec mv = VectorApplyPairwise<BinaryDifference>(p, m[2], m[0]);
+    VarVec mu = VecDiff(p, m[1], m[0]);
+    VarVec mv = VecDiff(p, m[2], m[0]);
     VarVec Nm = CrossProduct(p, mu, mv);
 
     // Get the dot products
@@ -2701,10 +2773,58 @@ int main(int argc, char *argv[])
       {
       int k = walk.MovingVertexId();
       Expression *distsq = DistanceSqr(p, M[iAtom], X[k]);
+      Expression *rsq = DistanceSqr(p, M[iAtom], X[iBnd]);
       p->AddConstraint(
-            new BinaryDifference(p, distsq, new Square(p, R[iAtom])),
+            new BinaryDifference(p, distsq, rsq),
             "MIB", 0, ConstrainedNonLinearProblem::UBINF);
       }
+    }
+
+
+  // ------------------------------------------------------------------------
+  // Construct the medialness constraint based on triangles
+  // ------------------------------------------------------------------------
+
+  // Array of centroids of the medial triangles
+  VarVecArray MC(mpairIndex.size(), VarVec(3, NULL));
+  VarVecArray S1(mpairIndex.size(), VarVec(3, NULL));
+  VarVecArray S2(mpairIndex.size(), VarVec(3, NULL));
+
+  // Iterate over medial triangles (no replication)
+  for(int i = 0; i < mpairIndex.size(); i++)
+    {
+    // Indices of the two boundary triangles in this atom
+    size_t ibt[] = { mpairIndex[i].first, mpairIndex[i].second };
+
+    // Indices of the six boundary triangle vertices
+    size_t u0[] = { bmesh->triangles[ibt[0]].vertices[0], bmesh->triangles[ibt[1]].vertices[0] };
+    size_t u1[] = { bmesh->triangles[ibt[0]].vertices[1], bmesh->triangles[ibt[1]].vertices[1] };
+    size_t u2[] = { bmesh->triangles[ibt[0]].vertices[2], bmesh->triangles[ibt[1]].vertices[2] };
+
+    // Indices of the three medial vertices
+    size_t v0 = mIndex[u0[0]];
+    size_t v1 = mIndex[u1[0]];
+    size_t v2 = mIndex[u2[0]];
+
+    // Compute the centroid of the medial triangle
+    MC[i] = TriangleCentroid(p, M[v0], M[v1], M[v2]);
+
+    // Assign names to the six boundary vertices 
+    const VarVec &A1 = X[u0[0]], &B1 = X[u1[0]], &C1 = X[u2[0]];
+    const VarVec &A2 = X[u0[1]], &B2 = X[u1[1]], &C2 = X[u2[1]];
+
+    // Compute the two spokes
+    S1[i] = VecDiff(p, TriangleCentroid(p, A1, B1, C1), MC[i]);
+    S2[i] = VecDiff(p, TriangleCentroid(p, A2, B2, C2), MC[i]);
+
+    // Generate the four 'spoke orthogonal to boundary triangle' constraints
+    p->AddConstraint(DotProduct(p, VecDiff(p, B1, A1), S1[i]), "SpkOrth", 0, 0);
+    p->AddConstraint(DotProduct(p, VecDiff(p, C1, A1), S1[i]), "SpkOrth", 0, 0);
+    p->AddConstraint(DotProduct(p, VecDiff(p, B2, A2), S2[i]), "SpkOrth", 0, 0);
+    p->AddConstraint(DotProduct(p, VecDiff(p, C2, A2), S2[i]), "SpkOrth", 0, 0);
+
+    // Generate the 'spokes are equal length' constraint
+    p->AddConstraint(DotProduct(p, VecDiff(p, S1[i], S2[i]), VecSum(p, S1[i], S2[i])), "SpkEql", 0, 0);
     }
 
 
@@ -2914,8 +3034,8 @@ int main(int argc, char *argv[])
       // cos(theta) = dot(u,v) / (|u| * |v|)
       Expression *UdotV = DotProduct(
             p,
-            VectorApplyPairwise<BinaryDifference>(p, X[k1], X[k0]),
-            VectorApplyPairwise<BinaryDifference>(p, X[k2], X[k0]));
+            VecDiff(p, X[k1], X[k0]),
+            VecDiff(p, X[k2], X[k0]));
 
       Expression *lenU = edge[(j+1) % 3];
       Expression *lenV = edge[(j+2) % 3];
