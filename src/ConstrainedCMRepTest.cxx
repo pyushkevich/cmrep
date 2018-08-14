@@ -3024,9 +3024,13 @@ int main(int argc, char *argv[])
       }
     }
 
+
   // ------------------------------------------------------------------------
   // Minimize the edge length
   // ------------------------------------------------------------------------
+  // TODO: add a constraint on the angle between adjacent boundary edges, b/c
+  // that seems to become quite small sometimes and setting a minimum on it might
+  // work better than penalizing the total length
   BigSum *objEdgeLength = new BigSum(p);
   if(regOpts.EdgeLengthWeight > 0.0)
     {
