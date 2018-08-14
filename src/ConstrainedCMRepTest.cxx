@@ -2262,8 +2262,42 @@ int main(int argc, char *argv[])
   VarVecArray S1(mpairIndex.size(), VarVec(3, NULL));
   VarVecArray S2(mpairIndex.size(), VarVec(3, NULL));
 
-  // Array of the centroids of the boundary triangles
+  // Introduce the barycentric coordinate variables
+  VarVecArray bary(bmesh->triangles.size(), VarVec(3, NULL));
+
+  // Array of the interior points of the boundary triangles defined by the barycentric coords
   VarVecArray BC(bmesh->triangles.size(), VarVec(3, NULL));
+
+  // Construct the barycentric coordinates and interior points
+  for(int j = 0; j < bmesh->triangles.size(); j++)
+    {
+    for(int a = 0; a < 3; a++)
+      {
+      // Add a barycentric coordinate
+      bary[j][a] = p->AddVariable("bary", 1/3.0, 0);
+
+      // Add the cartesian coordinate of the interior point as a variable
+      BC[j][a] = p->AddVariable("BC", 
+        (X[bmesh->triangles[j].vertices[0]][a]->Evaluate() + 
+         X[bmesh->triangles[j].vertices[1]][a]->Evaluate() + 
+         X[bmesh->triangles[j].vertices[2]][a]->Evaluate()) / 3.0);
+      }
+
+    // Add a constraint that the barycentric coordinates add up to one
+    p->AddConstraint(new TernarySum(p, bary[j][0], bary[j][1], bary[j][2]), "Bary", 1, 1);
+
+    // Add a constraint that the interior point has given baricentric coordinates
+    for(int a = 0; a < 3; a++)
+      {
+      Expression *za = 
+        new TernarySum(p, 
+          new BinaryProduct(p, X[bmesh->triangles[j].vertices[0]][a], bary[j][0]),
+          new BinaryProduct(p, X[bmesh->triangles[j].vertices[1]][a], bary[j][1]),
+          new BinaryProduct(p, X[bmesh->triangles[j].vertices[2]][a], bary[j][2]));
+
+      p->AddConstraint(new BinaryDifference(p, za, BC[j][a]), "BaryTIP", 0, 0);
+      }
+    }
 
   // Iterate over medial triangles (no replication)
   for(int i = 0; i < mpairIndex.size(); i++)
@@ -2290,10 +2324,6 @@ int main(int argc, char *argv[])
 
       MC[i][d] = p->AddVariable("MC", mc_init);
       }
-
-    // Compute the two triangle centroids
-    BC[ibt1] = TriangleCentroid(p, A1, B1, C1);
-    BC[ibt2] = TriangleCentroid(p, A2, B2, C2);
 
     // Compute the two spokes
     S1[i] = VecDiff(p, BC[ibt1], MC[i]);
