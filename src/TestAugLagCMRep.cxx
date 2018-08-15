@@ -6,6 +6,7 @@
 #include "MeshTraversal.h"
 #include "MedialException.h"
 #include "PointSetOptimalControlSystem.h"
+#include "SparseMatrix.h"
 
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
@@ -110,6 +111,9 @@ struct CMRep
   typedef vnl_vector<unsigned int> IdxVector;
   typedef vnl_matrix<unsigned int> IdxMatrix;
 
+  typedef ImmutableSparseMatrix<double> SparseMat;
+  typedef SparseMat::RowIterator SparseRowIter;
+
   // The boundary mesh (VTK)
   vtkSmartPointer<vtkPolyData> bnd_vtk;
 
@@ -125,14 +129,17 @@ struct CMRep
   // Half-edge structure of the medial mesh
   TriangleMesh med_tri;
 
-  // Initial positions of medial triangle centers
-  Matrix med_tctr;
+  // Boundary and medial vertices
+  Matrix bnd_vtx, med_vtx;
 
-  // Boundary vertices
-  Matrix bnd_vtx;
+  // For each medial vertex, the list of corresponding boundary ones
+  std::vector< std::vector<unsigned int> > med_bi;
+
+  // Sparse matrices used to compute tangent vectors Qu, Qv from Q's
+  SparseMat wgt_Quv[2];
 
   // Number of boundary vertices
-  unsigned int nv;
+  unsigned int nv, nmv;
 
   // Number of boundary and medial triangles
   unsigned int nt, nmt;
@@ -148,6 +155,10 @@ void CMRep::ReadVTK(const char *fn)
   reader->SetFileName(fn);
   reader->Update();
   this->bnd_vtk = reader->GetOutput();
+
+  // Read the normals
+  vtkDataArray *b_norm = this->bnd_vtk->GetPointData()->GetNormals();
+  vtkDataArray *b_rad = this->bnd_vtk->GetPointData()->GetArray("Radius");
 
   // Get the number of vertices and triangles
   nv = this->bnd_vtk->GetNumberOfPoints();
@@ -216,30 +227,41 @@ void CMRep::ReadVTK(const char *fn)
       }
     }
 
-  // For each medial triangle, compute its center. We do this by finding a point that 
-  // minimizes the variance of the six distances. 
-  this->med_tctr.set_size(nmt, 3);
-  for(int j = 0; j < nmt; j++)
+  // Compute medial to boundary mappings
+  this->nmv = this->bnd_mi.max_value() + 1;
+  this->med_bi.resize(nmv);
+  for(int i = 0; i < this->nv; i++)
+    this->med_bi[this->bnd_mi[i]].push_back(i);
+
+  // Compute initial medial vertices. These can actually be imported from the model
+  this->med_vtx.set_size(nmv, 3);
+  for(unsigned int i = 0; i < nmv; i++)
     {
-    const Triangle &t1 = this->bnd_tri.triangles[this->med_bti(j, 0)];
-    const Triangle &t2 = this->bnd_tri.triangles[this->med_bti(j, 1)];
-    IdxVector vv(6);
-    for(int k = 0; k < 3; k++)
+    // Get the first boundary point
+    unsigned int j = this->med_bi[i][0];
+
+    // Compute the medial point coordinate
+    for(int a = 0; a < 3; a++)
+      this->med_vtx(i, a) = this->bnd_vtx(j, a) - b_norm->GetComponent(j, a) * b_rad->GetTuple1(j);
+    }
+
+
+  // Compute the weights used to generate Qu and Qv derivatives
+  LoopTangentScheme lts;
+  lts.SetMesh(&this->bnd_tri);
+  
+  for(int a = 0; a < 2; a++)
+    {
+    vnl_sparse_matrix<double> vnl_wgt_Quv(this->nv, this->nv);
+    for(int k = 0; k < this->nv; k++)
       {
-      vv[k] = t1.vertices[k];
-      vv[k+3] = t2.vertices[k];
+      vnl_wgt_Quv.put(k, k, lts.GetOwnWeight(a, k));
+      for(EdgeWalkAroundVertex walk(&this->bnd_tri, k); !walk.IsAtEnd(); ++walk)
+        vnl_wgt_Quv.put(k, walk.MovingVertexId(), lts.GetNeighborWeight(a, walk));
       }
 
-    Matrix tri_bnd_vtx(6, 3);
-    for(int m = 0; m < 6; m++)
-      {
-      double *p = this->bnd_vtk->GetPoint(vv[m]);
-      for(int d = 0; d < 3; d++)
-        tri_bnd_vtx(m,d) = p[d];
-      }
-
-    Vector y_opt = FindMedialTriangleCenter(tri_bnd_vtx);
-    this->med_tctr.set_row(j, y_opt);
+    // Place into an efficient sparse matrix
+    this->wgt_Quv[a].SetFromVNL(vnl_wgt_Quv);
     }
 }
 
@@ -264,8 +286,8 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.6), mu_update_freq(20),
-      interp_mode(false)  {}
+      mu_init(0.0001), mu_scale(1.6), mu_update_freq(20),
+      interp_mode(true)  {}
 };
 
 
@@ -283,10 +305,16 @@ public:
     const AugLagMedialFitParameters &in_param, 
     CMRep *in_model, CMRep *in_target)
     : model(in_model), target(in_target), param(in_param), 
-      vnl_cost_function(in_param.nt * (in_model->nv + in_model->nmt) * 3)
+      vnl_cost_function(in_param.nt * (in_model->nv + in_model->nmv) * 3)
     {
-    // Compute the number of constraints: for every medial triangle, there are five
-    nc_t = model->nmt * 5;
+    // The constraint set:
+    //   - each spoke is orthogonal to the boundary surface (2 * nv_b)
+    //   - spokes are equal length (nm_bitangent + 2 * nm_tritangent)
+    
+    // Compute the number of equal length constraints
+    nc_t = 2 * model->nv;
+    for(int j = 0; j < model->med_bi.size(); j++)
+      nc_t += model->med_bi[j].size() - 1;
 
     // Initialize the lambdas
     lambda.set_size(nc_t * param.nt);
@@ -294,7 +322,7 @@ public:
 
     // Generate the initial control vector. This vector is large, number of all 
     // moving points times the number of time steps.
-    unsigned int nvar = param.nt * (model->nmt + model->nv) * 3;
+    unsigned int nvar = param.nt * (model->nmv + model->nv) * 3;
     
     // Generate the initial momentum vector. The initial momentum consists of the 
     // momentum on the boundary vertices and the momentum on the medial triangle
@@ -303,34 +331,29 @@ public:
     x_init.fill(0.0);
 
     // Initialize the hamiltonian system
-    q0.set_size(model->nv + model->nmt, 3);
+    q0.set_size(model->nv + model->nmv, 3);
     q0.update(model->bnd_vtx, 0, 0);
-    q0.update(model->med_tctr, model->nv, 0);
+    q0.update(model->med_vtx, model->nv, 0);
     ocsys = new OCSystem(q0, param.sigma, param.nt);
 
     // Initialize the u array
-    u.resize(param.nt, Matrix(model->nv + model->nmt, 3));
-    d_g__d_qt.resize(param.nt, Matrix(model->nv + model->nmt, 3));
-    d_obj__d_ut.resize(param.nt, Matrix(model->nv + model->nmt, 3));
+    u.resize(param.nt, Matrix(model->nv + model->nmv, 3));
+    d_g__d_qt.resize(param.nt, Matrix(model->nv + model->nmv, 3));
+    d_obj__d_ut.resize(param.nt, Matrix(model->nv + model->nmv, 3));
 
     // Initialize x_init to contain a constant velocity field (for now)
     for(int t = 0; t < param.nt; t++)
       {
-      MatrixRef x_init_t(model->nv + model->nmt, 3, x_init.data_block() + t * q0.rows());
+      MatrixRef x_init_t(model->nv + model->nmv, 3, x_init.data_block() + t * q0.rows());
       x_init_t.update((target->bnd_vtx - model->bnd_vtx) / param.nt, 0, 0);
-      x_init_t.update((target->med_tctr - model->med_tctr) / param.nt, model->nv, 0);
+      x_init_t.update((target->med_vtx - model->med_vtx) / param.nt, model->nv, 0);
       }
 
     // Initialize mu based on parameters
     mu = param.mu_init;
 
     // Initialize the constraints matrices
-    C.resize(param.nt);
-    for(int t = 0; t < param.nt; t++)
-      {
-      C[t].set_size(model->nmt, 5);
-      C[t].fill(0.0);
-      }
+    C.set_size(nc_t * param.nt); C.fill(0.0);
 
     // Verbosity
     verbose = false;
@@ -355,7 +378,7 @@ public:
     {
     // TODO: this copy-in is a waste of time and space
     for(int t = 0; t < param.nt; t++)
-      u[t].copy_in(x.data_block() + (model->nv + model->nmt) * 3 * t);
+      u[t].copy_in(x.data_block() + (model->nv + model->nmv) * 3 * t);
 
     // Initialize the various components of the objective function
     double m_distsq = 0, m_kinetic = 0, m_barrier = 0, m_lag = 0, m_total = 0;
@@ -391,108 +414,110 @@ public:
       // Get the q for the current timepoint
       const Matrix &qt = ocsys->GetQt(t);
       MatrixRef qt_bnd(model->nv, 3, const_cast<double *>(qt.data_block()));
-      MatrixRef qt_med(model->nmt, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
+      MatrixRef qt_med(model->nmv, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
 
-      // Reference to the constraint matrix
-      Matrix &Ct = C[t];
-
+      // Get references to the constraints in the list C
+      MatrixRef Ct_orth(model->nv, 2, C.data_block() + nc_t * t);
+      VectorRef Ct_spklen(nc_t - 2 * model->nv, C.data_block() + nc_t * t + 2 * model->nv);
+      
       // Get the lambdas for the current timeslice
-      MatrixRef lambda_t(model->nmt, 5, lambda.data_block() + t * model->nmt * 5);
+      MatrixRef Lt_orth(model->nv, 2, lambda.data_block() + nc_t * t);
+      VectorRef Lt_spklen(nc_t - 2 * model->nv, lambda.data_block() + nc_t * t + 2 * model->nv);
 
       // Get the partial derivatives for the current timeslice
       MatrixRef d_obj__d_qbnd_t(model->nv, 3, d_g__d_qt[t].data_block());
-      MatrixRef d_obj__d_qmed_t(model->nmt, 3, d_g__d_qt[t].data_block() + 3 * model->nv);
+      MatrixRef d_obj__d_qmed_t(model->nmv, 3, d_g__d_qt[t].data_block() + 3 * model->nv);
 
-      // These vectors store the derivatives of the constraints wrt seven points
-
-      // Iterate over the medial triangles
-      for(int k = 0; k < model->nmt; k++)
+      // For each boundary point, compute its directional derivatives using the loop scheme
+      for(int j = 0; j < model->nv; j++)
         {
-        // Get the two boundary triangles involved
-        const Triangle &btr1 = model->bnd_tri.triangles[model->med_bti(k, 0)];
-        const Triangle &btr2 = model->bnd_tri.triangles[model->med_bti(k, 1)];
+        // Compute the spoke
+        vnl_vector_fixed<double, 3> S(0.0);
+        for(int a = 0; a < 3; a++)
+          S[a] = qt_bnd(j, a) - qt_med(model->bnd_mi(j), a);
 
-        // Get the six vertices involved
-        unsigned int a1 = btr1.vertices[0], b1 = btr1.vertices[1], c1 = btr1.vertices[2];
-        unsigned int a2 = btr2.vertices[0], b2 = btr2.vertices[1], c2 = btr2.vertices[2];
-
-        // Corners of the two triangles
-        VectorRef A1(3, qt_bnd.data_block() + 3 * a1);
-        VectorRef B1(3, qt_bnd.data_block() + 3 * b1);
-        VectorRef C1(3, qt_bnd.data_block() + 3 * c1);
-        VectorRef A2(3, qt_bnd.data_block() + 3 * a2);
-        VectorRef B2(3, qt_bnd.data_block() + 3 * b2);
-        VectorRef C2(3, qt_bnd.data_block() + 3 * c2);
-        VectorRef M(3, qt_med.data_block() + 3 * k);
-
-        // Derivatives of obj with respect to these seven points
-        VectorRef d_obj__d_A1(3, d_obj__d_qbnd_t.data_block() + 3 * a1);
-        VectorRef d_obj__d_B1(3, d_obj__d_qbnd_t.data_block() + 3 * b1);
-        VectorRef d_obj__d_C1(3, d_obj__d_qbnd_t.data_block() + 3 * c1);
-        VectorRef d_obj__d_A2(3, d_obj__d_qbnd_t.data_block() + 3 * a2);
-        VectorRef d_obj__d_B2(3, d_obj__d_qbnd_t.data_block() + 3 * b2);
-        VectorRef d_obj__d_C2(3, d_obj__d_qbnd_t.data_block() + 3 * c2);
-        VectorRef d_obj__d_M(3, d_obj__d_qmed_t.data_block() + 3 * k);
-
-        // Spoke vectors
-        Vector AB1 = (B1 - A1), AC1 = (C1 - A1);
-        Vector AB2 = (B2 - A2), AC2 = (C2 - A2);
-        Vector S1 = (A1 + B1 + C1) / 3 - M;
-        Vector S2 = (A2 + B2 + C2) / 3 - M;
-
-        // Weight factor for the constraints
-        double z;
-
-        // Spokes orthogonal to triangles
-        Ct(k, 0) = dot_product(AB1, S1);
-        z = mu * Ct(k, 0) - lambda_t(k, 0);
-        d_obj__d_A1 += z * (AB1 / 3 - S1);
-        d_obj__d_B1 += z * (AB1 / 3 + S1);
-        d_obj__d_C1 += z * (AB1 / 3);
-        d_obj__d_M  -= z * AB1;
-
-        Ct(k, 1) = dot_product(AC1, S1);
-        z = mu * Ct(k, 1) - lambda_t(k, 1);
-        d_obj__d_A1 += z * (AC1 / 3 - S1);
-        d_obj__d_B1 += z * (AC1 / 3);
-        d_obj__d_C1 += z * (AC1 / 3 + S1);
-        d_obj__d_M  -= z * AC1;
-
-        Ct(k, 2) = dot_product(AB2, S2);
-        z = mu * Ct(k, 2) - lambda_t(k, 2);
-        d_obj__d_A2 += z * (AB2 / 3 - S2);
-        d_obj__d_B2 += z * (AB2 / 3 + S2);
-        d_obj__d_C2 += z * (AB2 / 3);
-        d_obj__d_M  -= z * AB2;
-
-        Ct(k, 3) = dot_product(AC2, S2);
-        z = mu * Ct(k, 3) - lambda_t(k, 3);
-        d_obj__d_A2 += z * (AC2 / 3 - S2);
-        d_obj__d_B2 += z * (AC2 / 3);
-        d_obj__d_C2 += z * (AC2 / 3 + S2);
-        d_obj__d_M  -= z * AC2;
-
-        // Spokes are equal length
-        Ct(k, 4) = dot_product(S1 - S2, S1 + S2);
-        z = mu * Ct(k, 4) - lambda_t(k, 4);
-        d_obj__d_A1 += (z / 1.5) * S1;
-        d_obj__d_B1 += (z / 1.5) * S1;
-        d_obj__d_C1 += (z / 1.5) * S1;
-        d_obj__d_A2 -= (z / 1.5) * S2;
-        d_obj__d_B2 -= (z / 1.5) * S2;
-        d_obj__d_C2 -= (z / 1.5) * S2;
-        d_obj__d_M  -= (z * 2.0) * (S1 - S2);
-
-        // Accumulate the constraints in the objective function
-        for(int l = 0; l < 5; l++)
+        // Iterate over the two tangent vectors at each vertex
+        for(int d = 0; d < 2; d++)
           {
-          // Compute the constraint
-          double c_l = Ct(k, l);
-          m_barrier += c_l * c_l;
-          m_lag += lambda_t(k, l) * c_l;
+          // Initialize the tangent vector to zero
+          vnl_vector_fixed<double, 3> Qd(0.0);
+
+          // Compute the tangent vector as weighted sum of neighbors
+          for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+            for(int a = 0; a < 3; a++)
+              Qd[a] += qt_bnd(it.Column(), a) * it.Value();
+
+          // Compute the dot product with the spoke - this should be zero
+          Ct_orth(j, d) = dot_product(S, Qd);
+
+          // Compute the partial of this constraint's contribution to the objective
+          // with respect to each q_i
+          double d_obj__d_C = mu * Ct_orth(j, d) - Lt_orth(j, d);
+
+          // Contribution to the ring of vertices
+          for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+            {
+            double z = d_obj__d_C * it.Value();
+            for(int a = 0; a < 3; a++)
+              d_obj__d_qbnd_t(it.Column(), a) += z * S[a];
+            }
+
+          // Contribution to the medial and boundary vertices
+          for(int a = 0; a < 3; a++)
+            {
+            double z = d_obj__d_C * Qd[a];
+            d_obj__d_qbnd_t(j, a) += z;
+            d_obj__d_qmed_t(model->bnd_mi[j], a) -= z;
+            }
           }
-        } // loop over medial triangles
+        }
+
+      // Iterate over the medial points now and compute spoke equality constraints
+      //   k is index over medial vertices, m is index over constraints
+      // TODO: for now we just consider bitangencies, should consider all cases
+      for(int k = 0, m = 0; k < model->med_bi.size(); k++)
+        {
+        if(model->med_bi[k].size() > 1)
+          {
+          vnl_vector_fixed<double, 3> del0, delj;
+
+          // Compute the length of the first spoke
+          int b0 = model->med_bi[k][0];
+          for(int a = 0; a < 3; a++)
+            del0[a] = qt_bnd(b0,a) - qt_med(k, a);
+          double len2_0 = del0.squared_magnitude();
+
+          // Compute the lengths of all other spokes and define constraints
+          for(int j = 1; j < model->med_bi[k].size(); j++, m++)
+            {
+            // Compute the length
+            int bj = model->med_bi[k][j];
+            for(int a = 0; a < 3; a++)
+              delj[a] = qt_bnd(bj,a) - qt_med(k, a);
+            double len2_j = delj.squared_magnitude();
+
+            // Define the constraint
+            Ct_spklen[m] = len2_j - len2_0;
+
+            // Compute the partials of the constraint with respect to the q's involved
+            double d_obj__d_C = mu * Ct_spklen[m] - Lt_spklen[m];
+            double z = 2.0 * d_obj__d_C;
+
+            for(int a = 0; a < 3; a++)
+              {
+              // Contribution to boundary nodes
+              d_obj__d_qbnd_t(bj, a) += z * delj[a];
+              d_obj__d_qbnd_t(b0, a) -= z * del0[a];
+              d_obj__d_qmed_t(k, a) += z * (del0[a] - delj[a]);
+              }
+            }
+          }
+        }
       } // loop over time 
+
+    // Compute the contributions of the constraints to the AL objective
+    m_barrier = C.squared_magnitude();
+    m_lag = dot_product(C, lambda);
 
     // Compute total objective
     m_total = m_kinetic * param.w_kinetic 
@@ -526,20 +551,7 @@ public:
   // Update the lambdas
   void update_lambdas()
     {
-    // Compute the constraint violations
-    for(int t = 0; t < param.nt; t++)
-      {
-      // Get the lambdas for the current timeslice
-      MatrixRef lambda_t(model->nmt, 5, lambda.data_block() + t * model->nmt * 5);
-
-      // Get the constraint values for the current timeslice
-      const Matrix &Ct = C[t];
-
-      // Update the lambdas
-      for(int k = 0; k < model->nmt; k++)
-        for(int l = 0; l < 5; l++)
-          lambda_t(k,l) -= mu * Ct(k,l);
-      }
+    lambda -= mu * C;
     }
 
   void SetMu(double mu) { this->mu = mu; }
@@ -553,7 +565,7 @@ public:
       {
       const Matrix &qt = ocsys->GetQt(t);
       MatrixRef qt_bnd(model->nv, 3, const_cast<double *>(qt.data_block()));
-      MatrixRef qt_med(model->nmt, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
+      MatrixRef qt_med(model->nmv, 3, const_cast<double *>(qt.data_block()) + model->nv * 3);
 
       // Create a copy of the mesh in the model
       vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
@@ -564,24 +576,43 @@ public:
         pd->GetPoints()->SetPoint(i, qt_bnd(i,0), qt_bnd(i,1), qt_bnd(i,2));
 
       // Get the constraint values for the current timeslice
-      const Matrix &Ct = C[t];
+      MatrixRef Ct_orth(model->nv, 2, C.data_block() + nc_t * t);
+      VectorRef Ct_spklen(nc_t - 2 * model->nv, C.data_block() + nc_t * t + 2 * model->nv);
 
-      // Create a cell array for the constraints
+      // Create a point array for the constraints
       vtkSmartPointer<vtkFloatArray> arr_con = vtkFloatArray::New();
-      arr_con->SetNumberOfComponents(5);
-      arr_con->SetNumberOfTuples(pd->GetNumberOfCells());
-      for(int j = 0; j < Ct.rows(); j++)
+      arr_con->SetNumberOfComponents(3);
+      arr_con->SetNumberOfTuples(model->nv);
+
+      // The third component needs to be initialized to zeros b/c we skip over some vertices
+      arr_con->FillComponent(2, 0.0f);
+
+      // Assign the ortho constraints
+      for(int j = 0; j < model->nv; j++)
         {
-        int t1 = model->med_bti(j, 0);
-        int t2 = model->med_bti(j, 1);
-        for(int l = 0; l < 5; l++)
+        arr_con->SetComponent(j, 0, Ct_orth(j, 0));
+        arr_con->SetComponent(j, 1, Ct_orth(j, 1));
+        }
+
+      // Assign the spoke constraints
+      for(int k = 0, m = 0; k < model->med_bi.size(); k++)
+        {
+        if(model->med_bi[k].size() > 1)
           {
-          arr_con->SetComponent(t1, l, Ct(j, l));
-          arr_con->SetComponent(t2, l, Ct(j, l));
+          int b0 = model->med_bi[k][0];
+          double consum = 0.0;
+          for(int j = 1; j < model->med_bi[k].size(); j++, m++)
+            {
+            int bj = model->med_bi[k][j];
+            arr_con->SetComponent(bj, 2, Ct_spklen[m]);
+            consum += Ct_spklen[m];
+            }
+          arr_con->SetComponent(b0, 2, -consum);
           }
         }
+
       arr_con->SetName("Constraints");
-      pd->GetCellData()->AddArray(arr_con);
+      pd->GetPointData()->AddArray(arr_con);
 
       // Write the model
       char fn[4096];
@@ -608,8 +639,8 @@ protected:
   // Inputs to the geodesic shooting
   Matrix q0, q1, p1;
 
-  // Matrices of the constraints
-  std::vector<Matrix> C;
+  // Values of the constraints
+  CMRep::Vector C;
 
   // The hamiltonian system
   OCSystem *ocsys;
@@ -690,7 +721,7 @@ int main(int argc, char *argv[])
       xtest[i] = x_opt[i] + eps;
       obj.compute(xtest, &f2, NULL);
 
-      int nv = (m_template.nmt + m_template.nmt);
+      int nv = (m_template.nv + m_template.nmv);
       int i_t = i / (nv * 3);
       int i_v = (i - i_t * (nv * 3)) / 3;
       int i_d = i % 3;
@@ -708,8 +739,8 @@ int main(int argc, char *argv[])
     optimizer.set_f_tolerance(1e-9);
     optimizer.set_x_tolerance(1e-4);
     optimizer.set_g_tolerance(1e-6);
-    optimizer.set_trace(false);
-    optimizer.set_max_function_evals(80);
+    optimizer.set_trace(true);
+    optimizer.set_max_function_evals(200);
 
     // vnl_conjugate_gradient optimizer(cost_fn);
     optimizer.minimize(x_opt);
