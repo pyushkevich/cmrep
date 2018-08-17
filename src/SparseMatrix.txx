@@ -441,3 +441,49 @@ ImmutableSparseMatrix<TVal>
       }
     }
 }
+
+template<class TVal>
+void
+ImmutableSparseMatrix<TVal>
+::AddScaledMatrix(const Self &B, TVal scale)
+{
+  // The structure must match
+  assert(this->nRows == B.nRows && this->nColumns == B.nColumns);
+
+  // Matrix B may have a subset of entries in this matrix
+  for(int i = 0; i < this->nRows; i++)
+    {
+    // Iterate over the columns of B
+    for(size_t j0 = this->xRowIndex[i], j = B.xRowIndex[i]; j < B.xRowIndex[i+1]; j0++)
+      {
+      if(this->xColIndex[j0] == B.xColIndex[j])
+        this->xSparseValues[j0] += B.xSparseValues[j++] * scale;
+      }
+    }
+}
+
+template <class TVal>
+void
+ImmutableSparseMatrix<TVal>
+::AddScaledOuterProduct(const Vec &A, const Vec &B, double scale)
+{
+  assert(this->nRows == this->nColumns && this->nRows == A.size() && this->nRows == B.size());
+
+  // Iterate over all the entries in the matrix
+  for(int i = 0; i < this->nRows; i++)
+    {
+    for(size_t j = this->xRowIndex[i]; j < this->xRowIndex[i+1]; j++)
+      {
+      this->xSparseValues[j] += A[i] * B[this->xColIndex[j]] * scale;
+      }
+    }
+}
+
+template<class TVal>
+void
+ImmutableSparseMatrix<TVal>
+::Scale(TVal c)
+{
+  for(int k = 0; k < this->nSparseEntries; k++)
+    this->xSparseValues[k] *= c;
+}

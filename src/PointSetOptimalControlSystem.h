@@ -1,5 +1,5 @@
-#ifndef __PointSetHamiltionianSystem_h_
-#define __PointSetHamiltionianSystem_h_
+#ifndef __PointSetOptimalControlSystem_h_
+#define __PointSetOptimalControlSystem_h_
 
 #include <vnl/vnl_matrix.h>
 #include <vnl/vnl_vector.h>
@@ -91,4 +91,4 @@ protected:
 
 
 
-#endif // __PointSetHamiltionianSystem_h_
+#endif // __PointSetOptimalControlSystem_h_

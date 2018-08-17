@@ -507,6 +507,27 @@ PointSetHamiltonianSystem<TFloat, VDim>
     }
 }
 
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowGradientBackward(
+  const Matrix &alpha, const Matrix &beta, Matrix &result)
+{
+  Vector alpha_v[VDim], beta_v[VDim], result_v[VDim];
+  for(int a = 0; a < VDim; a++)
+    {
+    alpha_v[a] = alpha.get_column(a);
+    beta_v[a] = beta.get_column(a);
+    result_v[a].set_size(alpha_v[a].size());
+    }
+
+  this->FlowGradientBackward(alpha_v, beta_v, result_v);
+
+  for(int a = 0; a < VDim; a++)
+    result.set_column(a, result_v[a]);
+}
+
+
 
 template <class TFloat, unsigned int VDim>
 void

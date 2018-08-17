@@ -6,6 +6,7 @@
 #include "MeshTraversal.h"
 #include "MedialException.h"
 #include "PointSetOptimalControlSystem.h"
+#include "PointSetHamiltonianSystem.h"
 #include "SparseMatrix.h"
 
 #include <vtkPolyDataReader.h>
@@ -286,8 +287,8 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.0001), mu_scale(1.6), mu_update_freq(20),
-      interp_mode(true)  {}
+      mu_init(0.1), mu_scale(1.6), mu_update_freq(60),
+      interp_mode(false)  {}
 };
 
 
@@ -359,6 +360,79 @@ public:
 
     return m_distsq;
     }
+
+  struct QuadraticForm 
+    {
+    ImmutableSparseMatrix<double> A;
+    Vector b;
+    double c;
+
+    virtual void Initialize(vnl_sparse_matrix<double> &inA, const Vector &in_b, double in_c)
+      {
+      A.SetFromVNL(inA);
+      b = in_b;
+      c = in_c;
+      }
+
+    /** Compute 0.5 x^t A x + b^t x + c */
+    virtual double Compute(const Vector &x, Vector &gradient)
+      {
+      Vector Ax = A.MultiplyByVector(x);
+      gradient = Ax + b;
+      return dot_product(x, Ax * 0.5 + b) + c;
+      }
+
+    QuadraticForm()
+      {
+      b.fill(0.0); c = 0.0;
+      }
+    };
+
+  // Expressions like (M x + d) ^t (M x + d)
+  struct SymmetricQuadraticForm : public QuadraticForm
+    {
+    ImmutableSparseMatrix<double> M;
+    Vector d;
+
+    virtual void Initialize(vnl_sparse_matrix<double> &inM, const Vector &in_d)
+      {
+      M.SetFromVNL(inM);
+      d = in_d;
+
+      // Compute the Hessian matrix
+      vnl_sparse_matrix<double> H = 2.0 * (inM.transpose() * inM);
+      this->A.SetFromVNL(H);
+
+      // Compute linear terms
+      this->b = M.MultiplyByVector(d) + M.MultiplyTransposeByVector(d);
+      this->c = dot_product(d, d);
+      }
+
+    virtual double Compute(const Vector &x, Vector &gradient)
+      {
+      Vector Mx_d = M.MultiplyByVector(x) + d;
+      gradient = M.MultiplyByVector(Mx_d) * 2.0;
+      return dot_product(Mx_d, Mx_d);
+      }
+
+    };
+
+  // In this problem, the objective and the constraints have the quadratic form
+  //     x^t * A * x + b^t * x + c
+  // with very sparse A and b
+  //
+  // This data structure holds the A, b and c for the main objective and the constraints
+  struct HessianData 
+    {
+    // Quadratic parameters of each of the constraints
+    std::vector<QuadraticForm> qf_C;
+
+    // Quadratic parameters of the objective function
+    SymmetricQuadraticForm qf_F;
+
+    // Hessian of the augmented lagrangian (cached for computations)
+    ImmutableSparseMatrix<double> HL_init, HL;
+    };
 
 
   static void ComputeAugmentedLagrangianConstraints(
@@ -465,6 +539,206 @@ public:
           }
         }
       }
+    }
+
+  /** Compute the Augmented Lagrangian and its derivative using precomputed quantities */
+  static double ComputeAugmentedLagrangianAndGradient(
+    CMRep *model, const Vector &qt, Vector &d_AL__d_qt, Vector &C, Vector &lambda, double mu, HessianData *H)
+    {
+    // Initialize the outputs with the f/grad of the function f
+    double AL = H->qf_F.Compute(qt, d_AL__d_qt); 
+
+    // Vector containing the gradient of the constraint - to be reused
+    Vector grad_Cj(qt.size(), 0.0);
+
+    // Iterate over the constraints
+    for(int j = 0; j < H->qf_C.size(); j++)
+      {
+      // Reference to the current quadratic form
+      QuadraticForm &Z = H->qf_C[j];
+
+      // Compute the constraint and its gradient
+      C[j] = Z.Compute(qt, grad_Cj);
+
+      // Add to the overall objective
+      AL += C[j] * (C[j] * mu / 2 - lambda[j]);
+
+      // Add to the overall gradient
+      d_AL__d_qt += grad_Cj * (mu * C[j] - lambda[j]);
+      }
+
+    return AL;
+    }
+
+
+  /** Compute the Augmented Lagrangian, its derivative and its Hessian using precomputed quantities */
+  static double ComputeAugmentedLagrangianJet(
+    CMRep *model, const Vector &qt, Vector &d_AL__d_qt, Vector &C, Vector &lambda, double mu, HessianData *H)
+    {
+    // Get a reference to the Hessian of the Lagrangian
+    ImmutableSparseMatrix<double> &HL = H->HL;
+
+    // Initialize the outputs with the Jet of the function f
+    double AL = H->qf_F.Compute(qt, d_AL__d_qt); 
+    HL = H->HL_init;
+
+    // Vector containing the gradient of the constraint - to be reused
+    Vector grad_Cj(qt.size(), 0.0);
+
+    // Iterate over the constraints
+    for(int j = 0; j < H->qf_C.size(); j++)
+      {
+      // Reference to the current quadratic form
+      QuadraticForm &Z = H->qf_C[j];
+
+      // Compute the constraint and its gradient
+      C[j] = Z.Compute(qt, grad_Cj);
+
+      // Add to the overall objective
+      AL += C[j] * (C[j] * mu / 2 - lambda[j]);
+
+      // Add to the overall gradient
+      d_AL__d_qt += grad_Cj * (mu * C[j] - lambda[j]);
+
+      // Update the Hessian of the lagrangian
+      HL.AddScaledMatrix(Z.A, mu * C[j] - lambda[j]);
+
+      // Update with a scaled outer product
+      HL.AddScaledOuterProduct(grad_Cj, grad_Cj, mu);
+      }
+
+    return AL;
+    }
+
+
+
+
+
+
+
+  /** 
+   * Helper function to compute index into the sparse matrix
+   */
+  static unsigned int IB(CMRep *model, unsigned int i_vtx, unsigned int i_dim)
+    {
+    return i_vtx * 3 + i_dim;
+    }
+
+  static unsigned int IM(CMRep *model, unsigned int i_vtx, unsigned int i_dim)
+    {
+    return model->nv * 3 + i_vtx * 3 + i_dim;
+    }
+
+  /** 
+   * This function precomputes different terms used to compute the Hessian that 
+   * do not change between iterations (exploiting wide use of quadratic functions
+   * in the objective
+   */
+  static void PrecomputeHessianData(CMRep *model, CMRep *target, HessianData *data)
+    {
+    // Dimensions of all the sparse matrices
+    unsigned int np = model->nv + model->nmv;
+    unsigned int k = np * 3;
+
+    // Number of the constraints
+    unsigned int nc = GetNumberOfConstraintsPerTimepoint(model), ic = 0;
+
+    // Initialize the data
+    data->qf_C.resize(nc);
+
+    // Handle the boundary point ortho constraints
+    for(int j = 0; j < model->nv; j++)
+      {
+      // Iterate over the two tangent vectors at each vertex
+      for(int d = 0; d < 2; d++, ic++)
+        {
+        // Initialize the Hessian for this constraint
+        vnl_sparse_matrix<double> H_Cj(k, k);
+
+        for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+          {
+          for(int a = 0; a < 3; a++)
+            {
+            unsigned int ib_mov = IB(model, it.Column(), a);
+            unsigned int ib_j = IB(model, j, a);
+            unsigned int im_j = IM(model, model->bnd_mi(j), a);
+            
+            H_Cj(ib_mov, ib_j) += it.Value(); 
+            H_Cj(ib_j, ib_mov) += it.Value();
+            H_Cj(ib_mov, im_j) -= it.Value();
+            H_Cj(im_j, ib_mov) -= it.Value();
+            }
+          }
+
+        // Set the A matrix, the b and c are zeros
+        data->qf_C[ic].Initialize(H_Cj, Vector(k, 0.0), 0.0);
+        }
+      }
+
+    // Handle the spoke equal length constraints
+    for(int i = 0; i < model->med_bi.size(); i++)
+      {
+      int b0 = model->med_bi[i][0];
+      if(model->med_bi[i].size() > 1)
+        {
+        for(int j = 1; j < model->med_bi[i].size(); j++, ic++)
+          {
+          // Initialize the Hessian for this constraint
+          vnl_sparse_matrix<double> H_Cj(k, k);
+
+          int bj = model->med_bi[i][j];
+          for(int a = 0; a < 3; a++)
+            {
+            unsigned int ib_0 = IB(model, b0, a);
+            unsigned int ib_j = IB(model, bj, a);
+            unsigned int im = IM(model, i, a);
+
+            H_Cj(ib_j, ib_j) = 2.0;
+            H_Cj(im, ib_j) = -2.0;
+            H_Cj(ib_j, im) = -2.0;
+
+            H_Cj(ib_0, ib_0) = -2.0;
+            H_Cj(im, ib_0) = 2.0;
+            H_Cj(ib_0, im) = 2.0;
+            }
+
+          data->qf_C[ic].Initialize(H_Cj, Vector(k, 0.0), 0.0);
+          }
+        }
+      }
+
+    // Handle the objective function - its Hessian is the identify over the boundary vertices
+    vnl_sparse_matrix<double> M_f(k, k);
+    Vector d_f(k, 0.0);
+
+    for(int j = 0; j < model->nv; j++)
+      {
+      for(int a = 0; a < 3; a++)
+        {
+        unsigned int ib = IB(model, j, a);
+        M_f(ib,ib) = 1.0;
+        d_f[ib] = - target->bnd_vtx(j, a);
+        }
+      }
+
+    data->qf_F.Initialize(M_f, d_f);
+
+
+    // Initialize the Hessian matrix for the whole problem
+    vnl_sparse_matrix<double> H_L(k, k);
+    for(int j = 0; j < k; j++)
+      {
+      for(ImmutableSparseMatrix<double>::RowIterator it = data->qf_F.A.Row(j); !it.IsAtEnd(); ++it)
+        H_L(j, it.Column()) = it.Value();
+
+      for(int i = 0; i < nc; i++)
+        for(ImmutableSparseMatrix<double>::RowIterator it = data->qf_C[i].A.Row(j); !it.IsAtEnd(); ++it)
+          H_L(j, it.Column()) = 0.0;
+      }
+
+    data->HL_init.SetFromVNL(H_L);
+    data->HL = data->HL_init;
+    printf("Hessian has dimension %d x %d with %d non-empty values\n", k, k, (int) data->HL.GetNumberOfSparseValues());
     }
 
   static void ExportTimepoint(CMRep *model, 
@@ -727,6 +1001,276 @@ protected:
 };
 
 
+
+
+/**
+ * This one does geodesic shooting, constraints at the end
+ */
+template <class Traits>
+class PointMatchingWithEndpointConstraintsAugLagObjective : public vnl_cost_function
+{
+public:
+
+  typedef vnl_matrix_ref<double> MatrixRef;
+  typedef vnl_vector_ref<double> VectorRef;
+  typedef CMRep::Matrix Matrix;
+  typedef CMRep::Vector Vector;
+  typedef PointSetHamiltonianSystem<double, 3> HSystem;
+
+  PointMatchingWithEndpointConstraintsAugLagObjective(
+    const AugLagMedialFitParameters &in_param, 
+    CMRep *in_model, CMRep *in_target)
+    : model(in_model), target(in_target), param(in_param), 
+      nvtx(Traits::GetNumberOfActiveVertices(in_model)),
+      nvar_t(Traits::GetNumberOfActiveVertices(in_model) * 3), 
+      vnl_cost_function(Traits::GetNumberOfActiveVertices(in_model) * 3)
+    {
+    // Compute the initial p0-vector. 
+    p0_init.set_size(nvar_t);
+    Traits::ComputeInitialControl(model, target, p0_init, param.nt);
+
+    // Initialize the initial landmarks
+    q0.set_size(nvtx, 3);
+    Traits::ComputeInitialLandmarks(model, q0);
+
+    // Compute constant terms of Hessian
+    Traits::PrecomputeHessianData(model, target, &hess_data);
+
+    // Initialize the hamiltonian system
+    hsys = new HSystem(q0, param.sigma, param.nt);
+
+    // Initialize the p0 and various derivatives
+    p0.set_size(nvtx, 3);
+    q1.set_size(nvtx, 3);
+    p1.set_size(nvtx, 3);
+    d_g__d_p0.set_size(nvtx, 3);
+    d_g__d_q1.set_size(nvtx, 3);
+
+    // Initialize mu based on parameters
+    mu = param.mu_init;
+
+    // The number of constraints per timepoint and total
+    nc_t = Traits::GetNumberOfConstraintsPerTimepoint(model);
+
+    // Initialize the constraints matrices
+    C.set_size(nc_t); C.fill(0.0);
+
+    // Initialize the lambdas
+    lambda.set_size(nc_t); lambda.fill(0.0);
+
+    // Verbosity
+    verbose = false;
+    }
+
+  /** Destructor */
+  ~PointMatchingWithEndpointConstraintsAugLagObjective() 
+    {
+    delete hsys;
+    }
+
+  /** Get suitable x for initialization */
+  Vector get_xinit() const { return p0_init; }
+
+  /** Get number of variables */
+  unsigned int get_nvar() const { return p0_init.size(); }
+
+  void set_verbose(bool flag) { this->verbose = flag; }
+
+  /** Compute the objective function */
+  virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
+    {
+    // TODO: this copy-in is a waste of time and space
+    p0.copy_in(x.data_block());
+
+    // Initialize the array of objective function derivatives w.r.t. q_t
+    d_g__d_q1.fill(0.0);
+
+    // Initialize the various components of the objective function
+    double m_distsq = 0, m_kinetic = 0, m_barrier = 0, m_lag = 0, m_total = 0;
+
+    // Perform forward flow using the control u
+    m_kinetic = hsys->FlowHamiltonian(p0, q1, p1);
+
+    /*
+
+    // Compute the goodness of fit metric using the terminal points
+    m_distsq = Traits::ComputeAugmentedLagrangianObjective(model, target, q1, d_g__d_q1);
+
+    // Compute the constraint violations
+    Traits::ComputeAugmentedLagrangianConstraints(model, q1, d_g__d_q1, C, lambda, mu);
+
+    // Compute the contributions of the constraints to the AL objective
+    m_barrier = C.squared_magnitude();
+    m_lag = dot_product(C, lambda);
+
+    */
+
+    // Use the matrix-based computation model
+    VectorRef q1_flat(nvar_t, q1.data_block());
+    VectorRef d_g__d_q1_flat(nvar_t, d_g__d_q1.data_block());
+
+    // Compute the AL and gradient
+    double AL = Traits::ComputeAugmentedLagrangianAndGradient(model, q1_flat, d_g__d_q1_flat, C, lambda, mu, &hess_data);
+
+    // Compute the separate contributions of the constraints to the AL objective (for output)
+    m_barrier = C.squared_magnitude();
+    m_lag = dot_product(C, lambda);
+    m_distsq = AL - ( (mu / 2) * m_barrier - m_lag );
+
+    // Compute total objective with the kinetic energy
+    m_total = AL + m_kinetic * param.w_kinetic;
+
+    if(f)
+      *f = m_total;
+
+    if(g)
+      {
+      if(verbose)
+        {
+        printf("Mu = %8.6f  |Lam| = %8.6f  DstSq = %8.6f  Kin = %8.6f  Bar = %8.6f  Lag = %8.6f  ETot = %12.8f\n",
+          mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, m_total);
+        }
+
+      // Flow the gradient backward
+      d_g__d_p0.fill(0.0);
+
+      Matrix dummy(nvtx, 3, 0.0);
+      hsys->FlowGradientBackward(d_g__d_q1, dummy, d_g__d_p0);
+
+      // Add in the kinetic energy gradient
+      hsys->ComputeHamiltonianJet(q0, p0, false);
+      for(unsigned int a = 0; a < 3; a++)
+        for(unsigned int k = 0; k < nvtx; k++)
+          d_g__d_p0(k, a) += param.w_kinetic * hsys->GetHp(a)[k];
+
+      // Compute the final gradient
+      unsigned int ig = 0;
+      for(int i = 0; i < q0.rows(); i++)
+        for(int a = 0; a < 3; a++, ig++)
+          (*g)[ig] = d_g__d_p0(i,a);
+      }
+    }
+
+  // Perform an Allassonniere iteration
+  void iter_Allassonniere(const CMRep::Vector &x)
+    {
+    /*
+    // These matrices store the Jacobians of q1 and p1 wrt p0
+    Matrix Dq1[VDim][VDim], Dp1[VDim][VDim];
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      for(unsigned int b = 0; b < VDim; b++)
+        {
+        grad_p[a][b].set_size(nvar_t,nvar_t);
+        grad_q[a][b].set_size(nvar_t,nvar_t);
+        }
+      }
+
+    // Perform flow with Jacobian computations
+    double H = hsys.FlowHamiltonianWithGradient(p0, q1, p1, grad_q, grad_p);
+
+    // 
+
+    */
+
+    }
+
+  // Update the lambdas
+  void update_lambdas()
+    {
+    lambda -= mu * C;
+    }
+
+  void SetMu(double mu) { this->mu = mu; }
+
+  double Mu() const { return mu; }
+
+  void Export(const char *fn_pattern)
+    {
+    // Iterate over time
+    for(int t = 0; t < param.nt; t++)
+      {
+      const Matrix &qt = hsys->GetQt(t);
+
+      char fn[4096];
+      sprintf(fn, fn_pattern, t);
+      Traits::ExportTimepoint(model, qt, C, lambda, fn);
+      }
+    }
+
+protected:
+
+  CMRep *model, *target;
+  const AugLagMedialFitParameters &param;
+
+  // Number of variables per time-step and total
+  unsigned int nvtx, nvar_t;
+
+  // Number of constraints per time-step and total
+  unsigned int nc_t;
+
+  // The vector of lagrange multipliers
+  CMRep::Vector lambda, p0_init;
+
+  // Inputs to the geodesic shooting
+  Matrix q0, q1, p1;
+
+  // Values of the constraints
+  CMRep::Vector C;
+
+  // The hamiltonian system
+  HSystem *hsys;
+
+  // Hessian data
+  typename Traits::HessianData hess_data;
+
+  // Matrix array used to store the control
+  typename HSystem::Matrix p0, d_g__d_q1, d_g__d_p0;
+
+  // Mu
+  double mu;
+
+  // Verbosity
+  bool verbose;
+};
+
+
+template <class TObjective>
+void DerivativeCheck(TObjective &obj, CMRep::Vector &x, int iter)
+{
+  obj.set_verbose(false);
+  printf("******* ANALYTIC GRADIENT TEST (ITER %d) *******\n", iter);
+  vnl_random rndy;
+
+  double eps = 1e-6;
+  typename CMRep::Vector test_grad(x.size());
+  double f_test;
+  obj.compute(x, &f_test, &test_grad);
+  for(int k = 0; k < 16; k++)
+    {
+    int i = rndy.lrand32(0, x.size());
+    typename CMRep::Vector xtest = x;
+    double f1, f2;
+    xtest[i] = x[i] - eps;
+    obj.compute(xtest, &f1, NULL);
+
+    xtest[i] = x[i] + eps;
+    obj.compute(xtest, &f2, NULL);
+
+    printf("i = %04d,   AG = %12.8f,  NG = %12.8f,  Del = %12.8f\n", 
+      i, test_grad[i], (f2 - f1) / (2 * eps), 
+      fabs(test_grad[i] - (f2-f1)/(2*eps)));
+    }
+
+  // Perform optimization
+  obj.set_verbose(true);
+}
+
+
+
+
+
+
 int main(int argc, char *argv[])
 {
   // Read the template and target meshes
@@ -776,39 +1320,9 @@ int main(int argc, char *argv[])
     for(int it = 0; it < 10; it++)
       {
       // Inner iteration loop
+      DerivativeCheck(obj, x_opt, it);
       
       // Uncomment this code to test derivative computation
-      obj.set_verbose(false);
-      printf("******* ANALYTIC GRADIENT TEST (ITER %d) *******\n", it);
-      vnl_random rndy;
-
-      double eps = 1e-6;
-      typename CMRep::Vector test_grad(x_opt.size());
-      double f_test;
-      obj.compute(x_opt, &f_test, &test_grad);
-      for(int k = 0; k < 16; k++)
-        {
-        int i = rndy.lrand32(0, x_opt.size());
-        typename CMRep::Vector xtest = x_opt;
-        double f1, f2;
-        xtest[i] = x_opt[i] - eps;
-        obj.compute(xtest, &f1, NULL);
-
-        xtest[i] = x_opt[i] + eps;
-        obj.compute(xtest, &f2, NULL);
-
-        int nv = (m_template.nv + m_template.nmv);
-        int i_t = i / (nv * 3);
-        int i_v = (i - i_t * (nv * 3)) / 3;
-        int i_d = i % 3;
-        printf("t = %02d, i = %04d, d = %d    AG = %12.8f,  NG = %12.8f,  Del = %12.8f\n", 
-          i_t, i_v, i_d, test_grad[i], (f2 - f1) / (2 * eps), 
-          fabs(test_grad[i] - (f2-f1)/(2*eps)));
-        }
-
-      // Perform optimization
-      obj.set_verbose(true);
-
       // Create an optimization
       vnl_lbfgsb optimizer(obj);
       // vnl_conjugate_gradient optimizer(obj);
@@ -816,7 +1330,50 @@ int main(int argc, char *argv[])
       optimizer.set_x_tolerance(1e-4);
       optimizer.set_g_tolerance(1e-6);
       optimizer.set_trace(true);
-      optimizer.set_max_function_evals(200);
+      optimizer.set_max_function_evals(param.mu_update_freq);
+
+      // vnl_conjugate_gradient optimizer(cost_fn);
+      optimizer.minimize(x_opt);
+
+      // Update the lambdas
+      obj.update_lambdas();
+
+      // Update the mu
+      obj.SetMu(obj.Mu() * param.mu_scale);
+
+      // Export the meshes
+      char fn_dir[4096], fn_pattern[4096];
+      sprintf(fn_dir, "/tmp/testau_iter_%02d", it);
+      sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
+      vtksys::SystemTools::MakeDirectory(fn_dir);
+      obj.Export(fn_pattern);
+      }
+    }
+  else
+    {
+    typedef PointMatchingWithEndpointConstraintsAugLagObjective<TraitsType> ObjectiveType;
+    ObjectiveType obj(param, &m_template, &m_target);
+
+    // The current iterate -- start with zero momentum
+    CMRep::Vector x_opt = obj.get_xinit();
+
+    // Actually initialize with the distance to the target points
+
+    // Outer iteration loop
+    for(int it = 0; it < 10; it++)
+      {
+      // Inner iteration loop
+      DerivativeCheck(obj, x_opt, it);
+      
+      // Uncomment this code to test derivative computation
+      // Create an optimization
+      vnl_lbfgsb optimizer(obj);
+      // vnl_conjugate_gradient optimizer(obj);
+      optimizer.set_f_tolerance(1e-9);
+      optimizer.set_x_tolerance(1e-4);
+      optimizer.set_g_tolerance(1e-6);
+      optimizer.set_trace(true);
+      optimizer.set_max_function_evals(param.mu_update_freq);
 
       // vnl_conjugate_gradient optimizer(cost_fn);
       optimizer.minimize(x_opt);

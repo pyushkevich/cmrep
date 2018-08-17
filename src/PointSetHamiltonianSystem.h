@@ -102,6 +102,8 @@ public:
   void FlowGradientBackward(
     const Vector alpha[VDim], const Vector beta[VDim], Vector result[VDim]);
 
+  void FlowGradientBackward(
+    const Matrix &alpha, const Matrix &beta, Matrix &result);
 
 
 

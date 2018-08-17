@@ -227,6 +227,9 @@ public:
   // Set the matrix to identity
   void SetIdentity(size_t n);
 
+  // Scale by a constant
+  void Scale(TVal c);
+
   // Compute the matrix product C = A * B
   static void Multiply(Self &C, const Self &A, const Self &B);
 
@@ -235,6 +238,12 @@ public:
 
   // Compute the matrix product c = A^t * b
   Vec MultiplyTransposeByVector(const Vec &b) const;
+
+  // Add another matrix with scaling
+  void AddScaledMatrix(const Self &B, TVal scale);
+
+  // Add an outer product of two vectors, scaled by a scalar
+  void AddScaledOuterProduct(const Vec &A, const Vec &B, double scale);
 
   // This method initializes the matrix A^t A (it simply creates the 
   // structure of the matrix for future fast computations)
