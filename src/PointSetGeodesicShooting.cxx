@@ -625,7 +625,15 @@ PointSetShootingProblem<TFloat, VDim>
 
     // Perform singular value decomposition on the Hessian matrix, zeroing
     // out the singular values below 1.0 (TODO: use a relative threshold?)
-    vnl_svd<TFloat> svd(DG, 1.0);
+    vnl_svd<TFloat> svd(DG, -0.001);
+
+    int nnz = 0;
+    for(int i = 0; i < svd.W().rows(); i++)
+      if(svd.W()(i,i) != 0.0)
+        nnz++;
+
+    printf("SVD min: %12.8f, max: %12.8f, nnz: %d, rank: %d\n", 
+      svd.sigma_min(), svd.sigma_max(), nnz, svd.rank());
 
     // Compute inv(DG) * G
     Vector del_p0_vec = - svd.solve(G);

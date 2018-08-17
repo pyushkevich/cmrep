@@ -28,6 +28,7 @@
 #include <vnl/algo/vnl_lbfgsb.h>
 #include <vnl/algo/vnl_conjugate_gradient.h>
 #include <vnl/vnl_random.h>
+#include "vnl/algo/vnl_svd.h"
 
 class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
@@ -280,6 +281,7 @@ struct AugLagMedialFitParameters
   // Schedule for mu
   double mu_init, mu_scale;
   unsigned int mu_update_freq;
+  unsigned int newton_iter;
 
   // Interpolation mode or fitting mode?
   bool interp_mode;
@@ -287,7 +289,7 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.6), mu_update_freq(60),
+      mu_init(0.1), mu_scale(1.6), mu_update_freq(10), newton_iter(10),
       interp_mode(false)  {}
 };
 
@@ -726,14 +728,39 @@ public:
 
     // Initialize the Hessian matrix for the whole problem
     vnl_sparse_matrix<double> H_L(k, k);
+
+    // Append the entries from the main objective Hessian
     for(int j = 0; j < k; j++)
-      {
       for(ImmutableSparseMatrix<double>::RowIterator it = data->qf_F.A.Row(j); !it.IsAtEnd(); ++it)
         H_L(j, it.Column()) = it.Value();
 
-      for(int i = 0; i < nc; i++)
-        for(ImmutableSparseMatrix<double>::RowIterator it = data->qf_C[i].A.Row(j); !it.IsAtEnd(); ++it)
-          H_L(j, it.Column()) = 0.0;
+    // Append the entries for each constraint
+    for(int i = 0; i < nc; i++)
+      {
+      // We need not just the Hessian of Cj but also the entries from H^T H because of the
+      // outer product computation. The easiest is to determine all the unique rows of j and
+      // all all combinations
+      std::vector<int> nzrows;
+
+      for(int j = 0; j < k; j++)
+        {
+        // This is the iterator
+        ImmutableSparseMatrix<double>::RowIterator it = data->qf_C[i].A.Row(j);
+        if(it.Size())
+          {
+          // Add this row to the list of nz rows
+          nzrows.push_back(j);
+
+          // Add the non-zero entries from the Hessian
+          for(; !it.IsAtEnd(); ++it)
+            H_L(j, it.Column()) += 0.0;
+          }
+        }
+
+      // Add all the cross-product entries
+      for(int a = 0; a < nzrows.size(); a++)
+        for(int b = 0; b < nzrows.size(); b++)
+          H_L(nzrows[a],nzrows[b]) += 0.0;
       }
 
     data->HL_init.SetFromVNL(H_L);
@@ -1110,7 +1137,8 @@ public:
     VectorRef d_g__d_q1_flat(nvar_t, d_g__d_q1.data_block());
 
     // Compute the AL and gradient
-    double AL = Traits::ComputeAugmentedLagrangianAndGradient(model, q1_flat, d_g__d_q1_flat, C, lambda, mu, &hess_data);
+    double AL = Traits::ComputeAugmentedLagrangianAndGradient(
+      model, q1_flat, d_g__d_q1_flat, C, lambda, mu, &hess_data);
 
     // Compute the separate contributions of the constraints to the AL objective (for output)
     m_barrier = C.squared_magnitude();
@@ -1151,28 +1179,169 @@ public:
       }
     }
 
-  // Perform an Allassonniere iteration
-  void iter_Allassonniere(const CMRep::Vector &x)
+
+  // Compute the Allassonniere transversality term G
+  void ComputeTransversality(CMRep::Vector &x, Vector &G)
     {
-    /*
-    // These matrices store the Jacobians of q1 and p1 wrt p0
-    Matrix Dq1[VDim][VDim], Dp1[VDim][VDim];
-    for(unsigned int a = 0; a < VDim; a++)
+    // TODO: this copy-in is a waste of time and space
+    p0.copy_in(x.data_block());
+
+    // Initialize the array of objective function derivatives w.r.t. q_t
+    d_g__d_q1.fill(0.0);
+
+    // Perform flow with Jacobian computations
+    double m_kinetic = hsys->FlowHamiltonian(p0, q1, p1);
+
+    // Compute the Hessian of the Augmented Lagrangian objective w.r.t. q1
+    VectorRef q1_flat(nvar_t, q1.data_block());
+    VectorRef d_g__d_q1_flat(nvar_t, d_g__d_q1.data_block());
+    double AL = Traits::ComputeAugmentedLagrangianAndGradient(
+      model, q1_flat, d_g__d_q1_flat, C, lambda, mu, &hess_data);
+
+    // Multiply the Hessian by the Jacobian of q (a bit ugly)
+    G.set_size(nvar_t);
+
+    // Iterate over the rows of the AL Hessian
+    for(unsigned int i = 0; i < nvar_t; i++)
       {
-      for(unsigned int b = 0; b < VDim; b++)
+      // Get the column in Dq1 corresponding to j
+      unsigned int vtx_i = i / 3, dim_i = i % 3;
+
+      // Compute transversality measure G
+      G[i] = p1(vtx_i, dim_i) * param.w_kinetic + d_g__d_q1_flat(i);
+      }
+    }
+
+  // Compute the Allassonniere transversality terms G and DG 
+  void ComputeTransversalityAndJacobian(CMRep::Vector &x, Vector &G, Matrix &DG)
+    {
+    // TODO: this copy-in is a waste of time and space
+    p0.copy_in(x.data_block());
+
+    // Initialize the array of objective function derivatives w.r.t. q_t
+    d_g__d_q1.fill(0.0);
+
+    // These matrices store the Jacobians of q1 and p1 wrt p0
+    Matrix Dq1[3][3], Dp1[3][3];
+    for(unsigned int a = 0; a < 3; a++)
+      {
+      for(unsigned int b = 0; b < 3; b++)
         {
-        grad_p[a][b].set_size(nvar_t,nvar_t);
-        grad_q[a][b].set_size(nvar_t,nvar_t);
+        Dq1[a][b].set_size(nvtx,nvtx);
+        Dp1[a][b].set_size(nvtx,nvtx);
         }
       }
 
     // Perform flow with Jacobian computations
-    double H = hsys.FlowHamiltonianWithGradient(p0, q1, p1, grad_q, grad_p);
+    double m_kinetic = hsys->FlowHamiltonianWithGradient(p0, q1, p1, Dq1, Dp1);
 
-    // 
+    // Compute the Hessian of the Augmented Lagrangian objective w.r.t. q1
+    VectorRef q1_flat(nvar_t, q1.data_block());
+    VectorRef d_g__d_q1_flat(nvar_t, d_g__d_q1.data_block());
+    double AL = Traits::ComputeAugmentedLagrangianJet(
+      model, q1_flat, d_g__d_q1_flat, C, lambda, mu, &hess_data);
 
-    */
+    // Multiply the Hessian by the Jacobian of q (a bit ugly)
+    DG.set_size(nvar_t, nvar_t);
+    G.set_size(nvar_t);
+    ImmutableSparseMatrix<double> &HL = hess_data.HL;
 
+    // Iterate over the rows of the AL Hessian
+    for(unsigned int i = 0; i < nvar_t; i++)
+      {
+      // Get the column in Dq1 corresponding to j
+      unsigned int vtx_i = i / 3, dim_i = i % 3;
+
+      // Compute transversality measure G
+      G[i] = p1(vtx_i, dim_i) * param.w_kinetic + d_g__d_q1_flat(i);
+
+      for(unsigned int j = 0; j < nvar_t; j++)
+        {
+        // Get the column in Dq1 corresponding to j
+        unsigned int vtx_j = j / 3, dim_j = j % 3;
+
+        // We are computing DG(i, j)
+        double DG_i_j = Dp1[dim_i][dim_j](vtx_i, vtx_j) * param.w_kinetic;
+
+        for(ImmutableSparseMatrix<double>::RowIterator it = HL.Row(i); !it.IsAtEnd(); ++it)
+          {
+          // Get the row in Dq1 corresponding to k
+          unsigned int k = it.Column();
+          unsigned int vtx_k = k / 3, dim_k = k % 3;
+
+          // Multiply and add
+          DG_i_j += it.Value() * Dq1[dim_k][dim_j](vtx_k, vtx_j);
+          }
+
+        DG(i,j) = DG_i_j;
+        }
+      }
+
+    // Print the current state
+    if(verbose)
+      {
+      double m_barrier = C.squared_magnitude();
+      double m_lag = dot_product(C, lambda);
+      double m_distsq = AL - ( (mu / 2) * m_barrier - m_lag );
+      double m_total = AL + m_kinetic * param.w_kinetic;
+
+      printf("Mu = %8.6f  |Lam| = %8.6f  DstSq = %8.6f  Kin = %8.6f  Bar = %8.6f  Lag = %8.6f  ETot = %12.8f\n",
+        mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, m_total);
+      }
+    }
+
+  // Perform an Allassonniere iteration
+  void iter_Allassonniere(CMRep::Vector &x)
+    {
+    // Transversality terms
+    Matrix DG;
+    Vector G;
+
+
+    // Compute transversality at x
+    this->ComputeTransversalityAndJacobian(x, G, DG);
+
+    // Apply random perturbation to x
+
+    // DERIVATIVE CHECK
+    vnl_random rndy;
+    double eps = 1e-6;
+
+    for(int k = 0; k < 16; k++)
+      {
+      int i = rndy.lrand32(0, x.size());
+      Vector xtest = x;
+      Vector G1, G2;
+      xtest[i] = x[i] - eps;
+      this->ComputeTransversality(xtest, G1);
+
+      xtest[i] = x[i] + eps;
+      this->ComputeTransversality(xtest, G2);
+
+      Vector dG_i = (G2-G1)/(2.0*eps);
+
+      printf("i = %04d,   |AG| = %12.8f,  |NG| = %12.8f,  |Del| = %12.8f\n", 
+        i, DG.get_column(i).inf_norm(), dG_i.inf_norm(), (DG.get_column(i) - dG_i).inf_norm());
+      }
+    /*
+    */ 
+
+    // Perform singular value decomposition on the Hessian matrix, zeroing
+    // out the singular values below 1.0 (TODO: use a relative threshold?)
+    vnl_svd<double> svd(DG, -0.001);
+    int nnz = 0;
+    for(int i = 0; i < svd.W().rows(); i++)
+      if(svd.W()(i,i) != 0.0)
+        nnz++;
+
+    printf("SVD min: %12.8f, max: %12.8f, nnz: %d, rank: %d\n", 
+      svd.sigma_min(), svd.sigma_max(), nnz, svd.rank());
+
+    // Compute inv(DG) * G
+    Vector del_p0_vec = - svd.solve(G);
+
+    // Subtract from x
+    x += 0.1 * del_p0_vec;
     }
 
   // Update the lambdas
@@ -1377,6 +1546,10 @@ int main(int argc, char *argv[])
 
       // vnl_conjugate_gradient optimizer(cost_fn);
       optimizer.minimize(x_opt);
+
+      // Now do some iterations of Allassonniere
+      for(int i = 0; i < param.newton_iter; i++)
+        obj.iter_Allassonniere(x_opt);
 
       // Update the lambdas
       obj.update_lambdas();
