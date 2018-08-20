@@ -148,16 +148,23 @@ PointSetHamiltonianSystem<TFloat, VDim>
 ::ComputeHamiltonianAndGradientThreaded(const Matrix &q, const Matrix &p)
 {
   // Launch the threads
-  std::vector<std::thread> threads;
-  for(int i = 0; i < td.size(); i++)
+  if(td.size() > 1)
     {
-    threads.push_back(std::thread(
-        &Self::ComputeHamiltonianAndGradientThreadedWorker, this, &q, &p, i));
-    }
+    std::vector<std::thread> threads;
+    for(int i = 0; i < td.size(); i++)
+      {
+      threads.push_back(std::thread(
+          &Self::ComputeHamiltonianAndGradientThreadedWorker, this, &q, &p, i));
+      }
 
-  // Join the threads
-  for(int i = 0; i < td.size(); i++)
-    threads[i].join();
+    // Join the threads
+    for(int i = 0; i < td.size(); i++)
+      threads[i].join();
+    }
+  else
+    {
+    ComputeHamiltonianAndGradientThreadedWorker(&q, &p, 0);
+    }
 
   // Compile the results
   TFloat H = 0.0;
@@ -453,16 +460,24 @@ PointSetHamiltonianSystem<TFloat, VDim>
     }
 
   // Launch the threads
-  std::vector<std::thread> threads;
-  for(int i = 0; i < td.size(); i++)
+  if(td.size() > 1)
     {
-    threads.push_back(std::thread(
-        &Self::ApplyHamiltonianHessianToAlphaBetaThreadedWorker, this, &q, &p, alpha, beta, i));
+    std::vector<std::thread> threads;
+    for(int i = 0; i < td.size(); i++)
+      {
+      threads.push_back(std::thread(
+          &Self::ApplyHamiltonianHessianToAlphaBetaThreadedWorker, this, &q, &p, alpha, beta, i));
+      }
+
+    // Join the threads
+    for(int i = 0; i < td.size(); i++)
+      threads[i].join();
+    }
+  else
+    {
+    ApplyHamiltonianHessianToAlphaBetaThreadedWorker(&q, &p, alpha, beta, 0);
     }
 
-  // Join the threads
-  for(int i = 0; i < td.size(); i++)
-    threads[i].join();
 
   // Accumulate the d_alpha and d_beta from threads
   for(int i = 0; i < td.size(); i++)

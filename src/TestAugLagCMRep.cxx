@@ -31,6 +31,8 @@
 #include <vnl/algo/vnl_svd.h>
 #include <vnl/algo/vnl_brent_minimizer.h>
 
+#include <nlopt.h>
+
 class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
 public:
@@ -293,8 +295,8 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.01), mu_scale(1.6), gradient_iter(6000), newton_iter(100),
-      interp_mode(false), check_deriv(true)  {}
+      mu_init(0.1), mu_scale(1.0), gradient_iter(600), newton_iter(0),
+      interp_mode(false), check_deriv(false)  {}
 };
 
 
@@ -1130,6 +1132,9 @@ public:
   /** Get suitable x for initialization */
   Vector get_xinit() const { return p0_init; }
 
+  /** Get the current constraint values */
+  const Vector &GetC() const { return C; }
+
   /** Get number of variables */
   unsigned int get_nvar() const { return p0_init.size(); }
 
@@ -1361,7 +1366,7 @@ public:
 
     // Perform singular value decomposition on the Hessian matrix, zeroing
     // out the singular values below 1.0 (TODO: use a relative threshold?)
-    vnl_svd<double> svd(DG, -0.001);
+    vnl_svd<double> svd(DG, -0.0001);
     int nnz = 0;
     for(int i = 0; i < svd.W().rows(); i++)
       if(svd.W()(i,i) != 0.0)
@@ -1475,8 +1480,29 @@ void DerivativeCheck(TObjective &obj, CMRep::Vector &x, int iter)
 }
 
 
+/** ------------- NLOPT SUPPORT -------------------*/
 
+/**
+ * This function wraps around a VNL objective function for interfacing with NLOPT
+ */
+double nlopt_vnl_func(unsigned n, const double *x, double *grad, void *my_func_data)
+{
+  vnl_cost_function *vnl_cf = static_cast<vnl_cost_function *>(my_func_data);
+  vnl_vector_ref<double> x_vec(n, const_cast<double *>(x));
+  double f = 0.0;
+  
+  if(grad)
+    {
+    vnl_vector_ref<double> grad_vec(n, grad);
+    vnl_cf->compute(x_vec, &f, &grad_vec);
+    }
+  else
+    {
+    vnl_cf->compute(x_vec, &f, NULL);
+    }
 
+  return f;
+}
 
 
 int main(int argc, char *argv[])
@@ -1568,7 +1594,16 @@ int main(int argc, char *argv[])
     // The current iterate -- start with zero momentum
     CMRep::Vector x_opt = obj.get_xinit();
 
-    // Actually initialize with the distance to the target points
+    // Compute the initial value of mu using the Birgin and Martinez heuristics
+    double f_current;
+    obj.compute(x_opt, &f_current, NULL);
+    double ssq_con = obj.GetC().squared_magnitude();
+    double max_con = obj.GetC().inf_norm();
+    double mu = std::max(1e-6, std::min(10.0, 2 * fabs(f_current) / ssq_con));
+    double ICM = 1e100;
+
+    // Set the initial mu
+    obj.SetMu(mu);
 
     // Outer iteration loop
     for(int it = 0; it < 10; it++)
@@ -1576,29 +1611,46 @@ int main(int argc, char *argv[])
       // Inner iteration loop
       if(param.check_deriv)
         DerivativeCheck(obj, x_opt, it);
-      
-      // Uncomment this code to test derivative computation
-      // Create an optimization
-      vnl_lbfgsb optimizer(obj);
-      // vnl_conjugate_gradient optimizer(obj);
+
+      // Few iterations of CGD (because NLOPT goes nuts)
+      vnl_conjugate_gradient optimizer(obj);
       optimizer.set_f_tolerance(1e-9);
       optimizer.set_x_tolerance(1e-4);
       optimizer.set_g_tolerance(1e-6);
       optimizer.set_trace(true);
-      optimizer.set_max_function_evals(param.gradient_iter);
-
-      // vnl_conjugate_gradient optimizer(cost_fn);
+      optimizer.set_max_function_evals(5);
       optimizer.minimize(x_opt);
 
+      // Perform the inner optimization
+      nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
+      nlopt_set_min_objective(opt, nlopt_vnl_func, &obj);
+      nlopt_set_xtol_rel(opt, 1e-4);
+      nlopt_set_maxeval(opt, param.gradient_iter);
+      double f_opt;
+      int rc;
+      if ((rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt)) < 0) 
+        {
+        printf("nlopt failed %d!\n",rc);
+        }
+      nlopt_destroy(opt);
+      
       // Now do some iterations of Allassonniere
-      for(int i = 0; i < param.newton_iter; i++)
-        obj.iter_Allassonniere(x_opt);
+      // for(int i = 0; i < param.newton_iter; i++)
+      //   obj.iter_Allassonniere(x_opt);
+      
+      printf("*** End of inner iteration loop %d ***\n", it);
 
       // Update the lambdas
       obj.update_lambdas();
 
+
       // Update the mu
-      obj.SetMu(obj.Mu() * param.mu_scale);
+      double newICM = obj.GetC().inf_norm();
+      printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", newICM, ICM);
+      if(newICM > 0.5 * ICM)
+        mu *= 10.0;
+      obj.SetMu(mu);
+      ICM = newICM;
 
       // Export the meshes
       char fn_dir[4096], fn_pattern[4096];

@@ -185,6 +185,15 @@ IF(OpenGL_FOUND)
 
 ENDIF(OpenGL_FOUND)
 
+
+
+OPTION(USE_NLOPT "Use the NLOPT optimization library" OFF)
+IF(USE_NLOPT)
+  FIND_PACKAGE(NLOPT REQUIRED)
+  INCLUDE_DIRECTORIES(${NLOPT_INCLUDE_DIRS})
+ENDIF(USE_NLOPT)
+
+
 #  ${CMREP_SOURCE_DIR}/extras/afront/tmp/
 
 # Include subdirectories
@@ -322,12 +331,14 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
     submodules/greedy/src/lddmm_data.cxx)
   TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
 
-  ADD_EXECUTABLE(alcmrep_test
-    src/TestAugLagCMRep.cxx
-    src/MeshTraversal.cxx
-    src/PointSetOptimalControlSystem.cxx
-    src/PointSetHamiltonianSystem.cxx)
-  TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS})
+  IF(NLOPT_FOUND)
+    ADD_EXECUTABLE(alcmrep_test
+      src/TestAugLagCMRep.cxx
+      src/MeshTraversal.cxx
+      src/PointSetOptimalControlSystem.cxx
+      src/PointSetHamiltonianSystem.cxx)
+    TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS} ${NLOPT_LIBRARIES})
+  ENDIF(NLOPT_FOUND)
 
 ENDIF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
 
