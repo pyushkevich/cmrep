@@ -28,7 +28,8 @@
 #include <vnl/algo/vnl_lbfgsb.h>
 #include <vnl/algo/vnl_conjugate_gradient.h>
 #include <vnl/vnl_random.h>
-#include "vnl/algo/vnl_svd.h"
+#include <vnl/algo/vnl_svd.h>
+#include <vnl/algo/vnl_brent_minimizer.h>
 
 class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
@@ -280,17 +281,20 @@ struct AugLagMedialFitParameters
   
   // Schedule for mu
   double mu_init, mu_scale;
-  unsigned int mu_update_freq;
+  unsigned int gradient_iter;
   unsigned int newton_iter;
 
   // Interpolation mode or fitting mode?
   bool interp_mode;
 
+  // Do we do derivative checks?
+  bool check_deriv;
+
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.6), mu_update_freq(10), newton_iter(10),
-      interp_mode(false)  {}
+      mu_init(0.01), mu_scale(1.6), gradient_iter(6000), newton_iter(100),
+      interp_mode(false), check_deriv(false)  {}
 };
 
 
@@ -665,10 +669,10 @@ public:
             unsigned int ib_j = IB(model, j, a);
             unsigned int im_j = IM(model, model->bnd_mi(j), a);
             
-            H_Cj(ib_mov, ib_j) += it.Value(); 
-            H_Cj(ib_j, ib_mov) += it.Value();
-            H_Cj(ib_mov, im_j) -= it.Value();
-            H_Cj(im_j, ib_mov) -= it.Value();
+            H_Cj(ib_mov, ib_j) -= it.Value(); 
+            H_Cj(ib_j, ib_mov) -= it.Value();
+            H_Cj(ib_mov, im_j) += it.Value();
+            H_Cj(im_j, ib_mov) += it.Value();
             }
           }
 
@@ -830,7 +834,35 @@ public:
     }
 };
 
+template <class TMainObjective>
+class BrentObjective : public vnl_cost_function
+{
+  typedef CMRep::Vector Vector;
 
+public:
+  BrentObjective(const Vector &x, const Vector &grad, TMainObjective *obj)
+    : vnl_cost_function(1)
+    {
+    this->grad = grad;
+    this->obj = obj;
+    this->x = x;
+    }
+
+  double f(const vnl_vector<double>& alpha_vec)
+     { 
+     double alpha = alpha_vec[0];
+     Vector xa = x + alpha * grad;
+     double f=0.0;
+     obj->compute(xa, &f, NULL);
+
+     printf("Alpha: %12.4f,   f: %12.4f\n", alpha, f);
+     return f;
+     }
+
+  TMainObjective *obj;
+  Vector grad;
+  Vector x;
+};
 
 template <class Traits>
 class PointMatchingWithTimeConstraintsAugLagObjective : public vnl_cost_function
@@ -1304,27 +1336,28 @@ public:
     // Apply random perturbation to x
 
     // DERIVATIVE CHECK
-    vnl_random rndy;
-    double eps = 1e-6;
-
-    for(int k = 0; k < 16; k++)
+    if(param.check_deriv)
       {
-      int i = rndy.lrand32(0, x.size());
-      Vector xtest = x;
-      Vector G1, G2;
-      xtest[i] = x[i] - eps;
-      this->ComputeTransversality(xtest, G1);
+      vnl_random rndy;
+      double eps = 1e-6;
 
-      xtest[i] = x[i] + eps;
-      this->ComputeTransversality(xtest, G2);
+      for(int k = 0; k < 16; k++)
+        {
+        int i = rndy.lrand32(0, x.size());
+        Vector xtest = x;
+        Vector G1, G2;
+        xtest[i] = x[i] - eps;
+        this->ComputeTransversality(xtest, G1);
 
-      Vector dG_i = (G2-G1)/(2.0*eps);
+        xtest[i] = x[i] + eps;
+        this->ComputeTransversality(xtest, G2);
 
-      printf("i = %04d,   |AG| = %12.8f,  |NG| = %12.8f,  |Del| = %12.8f\n", 
-        i, DG.get_column(i).inf_norm(), dG_i.inf_norm(), (DG.get_column(i) - dG_i).inf_norm());
+        Vector dG_i = (G2-G1)/(2.0*eps);
+
+        printf("i = %04d,   |AG| = %12.8f,  |NG| = %12.8f,  |Del| = %12.8f\n", 
+          i, DG.get_column(i).inf_norm(), dG_i.inf_norm(), (DG.get_column(i) - dG_i).inf_norm());
+        }
       }
-    /*
-    */ 
 
     // Perform singular value decomposition on the Hessian matrix, zeroing
     // out the singular values below 1.0 (TODO: use a relative threshold?)
@@ -1340,8 +1373,14 @@ public:
     // Compute inv(DG) * G
     Vector del_p0_vec = - svd.solve(G);
 
+    // Perform Brent iterations
+    std::cout << "Brent iterations" << std::endl;
+    BrentObjective<PointMatchingWithEndpointConstraintsAugLagObjective> brent_obj(x, del_p0_vec, this);
+    vnl_brent_minimizer brent(brent_obj);
+    double alpha = brent.minimize(0.1);
+
     // Subtract from x
-    x += 0.1 * del_p0_vec;
+    x += alpha * del_p0_vec;
     }
 
   // Update the lambdas
@@ -1479,6 +1518,7 @@ int main(int argc, char *argv[])
     {
     typedef PointMatchingWithTimeConstraintsAugLagObjective<TraitsType> ObjectiveType;
     ObjectiveType obj(param, &m_template, &m_target);
+    obj.set_verbose(true);
 
     // The current iterate -- start with zero momentum
     CMRep::Vector x_opt = obj.get_xinit();
@@ -1489,7 +1529,8 @@ int main(int argc, char *argv[])
     for(int it = 0; it < 10; it++)
       {
       // Inner iteration loop
-      DerivativeCheck(obj, x_opt, it);
+      if(param.check_deriv)
+        DerivativeCheck(obj, x_opt, it);
       
       // Uncomment this code to test derivative computation
       // Create an optimization
@@ -1499,7 +1540,7 @@ int main(int argc, char *argv[])
       optimizer.set_x_tolerance(1e-4);
       optimizer.set_g_tolerance(1e-6);
       optimizer.set_trace(true);
-      optimizer.set_max_function_evals(param.mu_update_freq);
+      optimizer.set_max_function_evals(param.gradient_iter);
 
       // vnl_conjugate_gradient optimizer(cost_fn);
       optimizer.minimize(x_opt);
@@ -1522,6 +1563,7 @@ int main(int argc, char *argv[])
     {
     typedef PointMatchingWithEndpointConstraintsAugLagObjective<TraitsType> ObjectiveType;
     ObjectiveType obj(param, &m_template, &m_target);
+    obj.set_verbose(true);
 
     // The current iterate -- start with zero momentum
     CMRep::Vector x_opt = obj.get_xinit();
@@ -1532,7 +1574,8 @@ int main(int argc, char *argv[])
     for(int it = 0; it < 10; it++)
       {
       // Inner iteration loop
-      DerivativeCheck(obj, x_opt, it);
+      if(param.check_deriv)
+        DerivativeCheck(obj, x_opt, it);
       
       // Uncomment this code to test derivative computation
       // Create an optimization
@@ -1542,7 +1585,7 @@ int main(int argc, char *argv[])
       optimizer.set_x_tolerance(1e-4);
       optimizer.set_g_tolerance(1e-6);
       optimizer.set_trace(true);
-      optimizer.set_max_function_evals(param.mu_update_freq);
+      optimizer.set_max_function_evals(param.gradient_iter);
 
       // vnl_conjugate_gradient optimizer(cost_fn);
       optimizer.minimize(x_opt);

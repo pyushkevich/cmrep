@@ -669,6 +669,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
           BlasInterface<TFloat>::add_AB_to_C(Hpp[a][c], grad_p[c][b], gupd_q[a][b]); 
           BlasInterface<TFloat>::add_AtB_to_C(Hqp[c][a], grad_q[c][b], gupd_q[a][b]); 
 
+
           // gupd_p[a][b] += Hqp[a][c] * grad_p[c][b] + Hqq[a][c] * grad_q[c][b];
           // gupd_q[a][b] += Hpp[a][c] * grad_p[c][b] + Hqp[c][a].transpose() * grad_q[c][b];
           }
