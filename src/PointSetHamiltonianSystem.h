@@ -16,6 +16,8 @@ public:
 
   typedef vnl_vector_fixed<TFloat, VDim> VecD;
 
+  typedef PointSetHamiltonianSystem<TFloat, VDim> Self;
+
   /**
    * Constructor - set basic parameters of the system and allocate
    * all of the necessary matrices
@@ -33,6 +35,13 @@ public:
    * Get the number of time steps
    */
   unsigned int GetN() const { return N; }
+
+  /**
+   * Multi-threaded computation of the Hamiltonian and derivatives. For now it
+   * does not support hessian computation
+   */
+  TFloat ComputeHamiltonianAndGradientThreaded(const Matrix &q, const Matrix &p);
+  
 
   /**
    * Compute the Hamiltonian and its derivatives for given p/q. The
@@ -55,6 +64,10 @@ public:
       const Vector alpha[VDim], const Vector beta[VDim],
       Vector d_alpha[VDim], Vector d_beta[VDim]);
 
+  void ApplyHamiltonianHessianToAlphaBetaThreaded(
+      const Matrix &q, const Matrix &p,
+      const Vector alpha[VDim], const Vector beta[VDim],
+      Vector d_alpha[VDim], Vector d_beta[VDim]);
 
   /** This is an equivalent function that also carries passive points z */
   void ApplyHamiltonianHessianToAlphaBetaGamma(
@@ -150,12 +163,35 @@ protected:
   // Gradient of the Hamiltonian components: Hq and Hp
   Vector Hp[VDim], Hq[VDim];
 
+  // Multi-threaded quantities
+  struct ThreadData 
+    {
+    // List of rows handled by this thread
+    std::vector<unsigned int> rows;
+    TFloat H;
+    Vector Hp[VDim], Hq[VDim];
+    Vector d_alpha[VDim], d_beta[VDim];
+    };
+
+  // Data associated with each thread
+  std::vector<ThreadData> td;
+
   // Hessian of the Hamiltonian components: Hqq, Hqp, Hpp
   // matrices Hqq and Hpp are symmetric
   Matrix Hqq[VDim][VDim], Hqp[VDim][VDim], Hpp[VDim][VDim];
 
   // Streamlines - paths of the landmarks over time
   std::vector<Matrix> Qt, Pt;
+
+  // Set up multi-threaded variables
+  void SetupMultiThreaded();
+
+  // Multi-threaded worker functions
+  void ComputeHamiltonianAndGradientThreadedWorker(const Matrix *q, const Matrix *p, unsigned int id); 
+  void ApplyHamiltonianHessianToAlphaBetaThreadedWorker(
+    const Matrix *q, const Matrix *p, const Vector alpha[], const Vector beta[], unsigned int id);
+
+
 };
 
 

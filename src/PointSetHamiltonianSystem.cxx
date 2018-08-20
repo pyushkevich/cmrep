@@ -1,6 +1,7 @@
 #include "PointSetHamiltonianSystem.h"
 #include <vnl/vnl_fastops.h>
 #include <iostream>
+#include <thread>
 
 template <class TFloat, unsigned int VDim>
 PointSetHamiltonianSystem<TFloat, VDim>
@@ -27,8 +28,156 @@ PointSetHamiltonianSystem<TFloat, VDim>
       this->Hpp[a][b].set_size(k,k);
       }
     }
+
+  SetupMultiThreaded();
 }
 
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ComputeHamiltonianAndGradientThreadedWorker(const Matrix *q, const Matrix *p, unsigned int id)
+{
+  // Gaussian factor, i.e., K(z) = exp(f * z)
+  TFloat f = -0.5 / (sigma * sigma);
+
+  // Get references to this thread's data
+  ThreadData &tdi = td[id];
+
+  // Initialize hamiltonian for the subset of indices worked on by the thread
+  tdi.H = 0.0;
+
+  // Initialize the output arrays (TODO: move this into initialization)
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    tdi.Hp[a].fill(0.0);
+    tdi.Hq[a].fill(0.0);
+    }
+
+  // Loop over all points
+  for(unsigned int i : tdi.rows)
+    {
+    // Get a pointer to pi for faster access?
+    const TFloat *pi = p->data_array()[i], *qi = q->data_array()[i];
+
+    // The diagonal terms
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      tdi.H += 0.5 * pi[a] * pi[a];
+      tdi.Hp[a](i) += pi[a];
+      }
+
+    // The off-diagonal terms
+    for(unsigned int j = i+1; j < k; j++)
+      {
+      const TFloat *pj = p->data_array()[j], *qj = q->data_array()[j];
+
+      // Vector Qi-Qj
+      VecD dq;
+
+      // Dot product of Pi and Pj
+      TFloat pi_pj = 0.0;
+
+      // Compute above quantities
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        dq[a] = qi[a] - qj[a];
+        pi_pj += pi[a] * pj[a];
+        }
+
+      // Compute the Gaussian and its derivatives
+      TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+
+      // Accumulate the Hamiltonian
+      tdi.H += pi_pj * g;
+
+      // Accumulate the derivatives
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        // First derivatives
+        tdi.Hq[a](i) += 2 * pi_pj * g1 * dq[a];
+        tdi.Hp[a](i) += g * pj[a];
+
+        tdi.Hq[a](j) -= 2 * pi_pj * g1 * dq[a];
+        tdi.Hp[a](j) += g * pi[a];
+        }
+      } // loop over j
+    } // loop over i
+
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::SetupMultiThreaded()
+{
+  // Split the indices among threads
+  unsigned int n_threads = std::thread::hardware_concurrency();
+  td.resize(n_threads);
+ 
+  // Assign lines in pairs, one at the top of the symmetric matrix K and
+  // one at the bottom of K. The loop below will not assign the middle
+  // line when there is an odd number of points (e.g., line 7 when there are 15)
+  for(int i = 0; i < k/2; i++)
+    {
+    int i_thread = i % n_threads;
+    td[i_thread].rows.push_back(i);
+    td[i_thread].rows.push_back((k-1) - i);
+    }
+
+  // Handle the middle line for odd number of vertices
+  if(k % 2 == 1)
+    td[(k / 2) % n_threads].rows.push_back(k/2);
+
+  // Allocate the per-thread arrays
+  for(int i = 0; i < n_threads; i++)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      td[i].Hp[a] = Vector(k, 0.0);
+      td[i].Hq[a] = Vector(k, 0.0);
+      td[i].d_alpha[a] = Vector(k, 0.0);
+      td[i].d_beta[a] = Vector(k, 0.0);
+      }
+    }
+}
+
+template <class TFloat, unsigned int VDim>
+TFloat
+PointSetHamiltonianSystem<TFloat, VDim>
+::ComputeHamiltonianAndGradientThreaded(const Matrix &q, const Matrix &p)
+{
+  // Launch the threads
+  std::vector<std::thread> threads;
+  for(int i = 0; i < td.size(); i++)
+    {
+    threads.push_back(std::thread(
+        &Self::ComputeHamiltonianAndGradientThreadedWorker, this, &q, &p, i));
+    }
+
+  // Join the threads
+  for(int i = 0; i < td.size(); i++)
+    threads[i].join();
+
+  // Compile the results
+  TFloat H = 0.0;
+  for(int a = 0; a < VDim; a++)
+    {
+    Hq[a].fill(0.0); Hp[a].fill(0.0);
+    }
+
+  for(int i = 0; i < td.size(); i++)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      Hq[a] += td[i].Hq[a]; 
+      Hp[a] += td[i].Hp[a]; 
+      }
+    H += td[i].H;
+    }
+
+  return H;
+}
 
 template <class TFloat, unsigned int VDim>
 TFloat
@@ -74,7 +223,6 @@ PointSetHamiltonianSystem<TFloat, VDim>
       }
 
     // TODO: you should be able to do this computation on half the matrix, it's symmetric!
-    #pragma omp parallel for
     for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *pj = p.data_array()[j], *qj = q.data_array()[j];
@@ -184,6 +332,146 @@ PointSetHamiltonianSystem<TFloat, VDim>
         }
       }
 
+    }
+}
+
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ApplyHamiltonianHessianToAlphaBetaThreadedWorker(
+  const Matrix *q, const Matrix *p, 
+  const Vector alpha[], const Vector beta[],
+  unsigned int id)
+{
+  TFloat f = -0.5 / (sigma * sigma);
+
+  // Get references to this thread's data
+  ThreadData &tdi = td[id];
+
+  // Initialize the output arrays (TODO: move this into initialization)
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    tdi.d_alpha[a].fill(0.0);
+    tdi.d_beta[a].fill(0.0);
+    }
+
+  // Loop over all points
+  for(unsigned int i : tdi.rows)
+    {
+    // Get a pointer to pi for faster access?
+    const TFloat *pi = p->data_array()[i], *qi = q->data_array()[i];
+
+    // TODO: you should be able to do this computation on half the matrix, it's symmetric!
+    for(unsigned int j = i+1; j < k; j++)
+      {
+      const TFloat *pj = p->data_array()[j], *qj = q->data_array()[j];
+
+      // Vector Qi-Qj
+      VecD dq;
+
+      // Dot product of Pi and Pj
+      TFloat pi_pj = 0.0;
+
+      // Compute above quantities
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        dq[a] = qi[a] - qj[a];
+        pi_pj += pi[a] * pj[a];
+        }
+
+      // Compute the Gaussian and its derivatives
+      TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+
+      /*
+       * d_beta[a] = alpha[b] * Hpp[b][a] =
+       *
+       * d_beta[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hpp[a][b][i][j] - beta[a][i] * Hqp[a][b][i][j] );
+       *
+       * d_alpha[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hpq[a][b][i][j] - beta[a][i] * Hqq[a][b][i][j] );
+       *
+       * d_alpha[b,j] = Sum_i,a (...
+       *     alpha[a,i] * Hqp[b][a][j][i] - beta[a][i] * Hqq[a][b][i][j] );
+       */
+
+      // Accumulate the derivatives
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+
+        TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
+        TFloat alpha_j_pi_plus_alpha_i_pj = 0.0;
+        TFloat d_beta_ji_a = (beta[a][j] - beta[a][i]);
+
+        for(unsigned int b = 0; b < VDim; b++)
+          {
+          TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
+          TFloat upd = d_beta_ji_a * val_qq;
+
+          // We can take advantage of the symmetry of Hqq.
+          tdi.d_alpha[b][j] -= upd;
+          tdi.d_alpha[b][i] += upd;
+
+          tdi.d_beta[b][j] += d_beta_ji_a * term_2_g1_dqa * pi[b];
+          tdi.d_beta[b][i] += d_beta_ji_a * term_2_g1_dqa * pj[b];
+
+          alpha_j_pi_plus_alpha_i_pj += alpha[b][j] * pi[b] + alpha[b][i] * pj[b];
+          }
+
+        tdi.d_alpha[a][i] += term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+        tdi.d_alpha[a][j] -= term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+
+        tdi.d_beta[a][i] += g * alpha[a][j];
+        tdi.d_beta[a][j] += g * alpha[a][i];
+        }
+      } // loop over j
+
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      tdi.d_beta[a][i] += alpha[a][i];
+      }
+
+    } // loop over i
+}
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ApplyHamiltonianHessianToAlphaBetaThreaded(
+    const Matrix &q, const Matrix &p,
+    const Vector alpha[], const Vector beta[],
+    Vector d_alpha[], Vector d_beta[])
+{
+  // Initialize the arrays to be accumulated
+  for(int a = 0; a < VDim; a++)
+    {
+    d_alpha[a].fill(0.0);
+    d_beta[a].fill(0.0);
+    }
+
+  // Launch the threads
+  std::vector<std::thread> threads;
+  for(int i = 0; i < td.size(); i++)
+    {
+    threads.push_back(std::thread(
+        &Self::ApplyHamiltonianHessianToAlphaBetaThreadedWorker, this, &q, &p, alpha, beta, i));
+    }
+
+  // Join the threads
+  for(int i = 0; i < td.size(); i++)
+    threads[i].join();
+
+  // Accumulate the d_alpha and d_beta from threads
+  for(int i = 0; i < td.size(); i++)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      d_alpha[a] += td[i].d_alpha[a];
+      d_beta[a] += td[i].d_beta[a];
+      }
     }
 }
 
@@ -360,7 +648,28 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(unsigned int t = 1; t < N; t++)
     {
     // Compute the hamiltonian
-    H = ComputeHamiltonianJet(q, p, false);
+    /*
+    double HT = ComputeHamiltonianJet(q, p, false);
+    Vector t_Hp[VDim], t_Hq[VDim];
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      t_Hp[a] = Hp[a]; t_Hq[a] = Hq[a];
+      }
+      */
+
+    H = ComputeHamiltonianAndGradientThreaded(q, p);
+
+    /*
+    if(fabs(HT - H) > 1e-6)
+      printf("delta_H = %f\n", HT - H);
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      if((t_Hq[a] - Hq[a]).inf_norm() > 1e-6)
+        printf("delta_Hq[%d] = %f\n", a, (t_Hq[a] - Hq[a]).inf_norm());
+      if((t_Hp[a] - Hp[a]).inf_norm() > 1e-6)
+      printf("delta_Hp[%d] = %f\n", a, (t_Hp[a] - Hp[a]).inf_norm());
+
+      } */
 
     // Euler update
     #pragma omp parallel for
@@ -489,7 +798,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(int t = N-1; t > 0; t--)
     {
     // Apply Hamiltonian Hessian to get an update in alpha/beta
-    ApplyHamiltonianHessianToAlphaBeta(
+    ApplyHamiltonianHessianToAlphaBetaThreaded(
           Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
 
     // Update the vectors

@@ -294,7 +294,7 @@ struct AugLagMedialFitParameters
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
       mu_init(0.01), mu_scale(1.6), gradient_iter(6000), newton_iter(100),
-      interp_mode(false), check_deriv(false)  {}
+      interp_mode(false), check_deriv(true)  {}
 };
 
 
