@@ -295,8 +295,8 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.0), gradient_iter(600), newton_iter(0),
-      interp_mode(false), check_deriv(false)  {}
+      mu_init(0.1), mu_scale(1.0), gradient_iter(60000), newton_iter(0),
+      interp_mode(false), check_deriv(true)  {}
 };
 
 
@@ -1121,6 +1121,9 @@ public:
 
     // Verbosity
     verbose = false;
+
+    // Iteration counter
+    iter_count = 0;
     }
 
   /** Destructor */
@@ -1134,6 +1137,9 @@ public:
 
   /** Get the current constraint values */
   const Vector &GetC() const { return C; }
+
+  /** Reset the evaluation counter */
+  void ResetCounter() { this->iter_count = 0; }
 
   /** Get number of variables */
   unsigned int get_nvar() const { return p0_init.size(); }
@@ -1192,8 +1198,15 @@ public:
       {
       if(verbose)
         {
-        printf("Mu = %8.6f  |Lam| = %8.6f  DstSq = %8.6f  Kin = %8.6f  Bar = %8.6f  Lag = %8.6f  ETot = %12.8f\n",
-          mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, m_total);
+        VectorRef C_orth(model->nv*2, C.data_block());
+        VectorRef C_spk(C.size() - C_orth.size(), C.data_block() + model->nv * 2);
+        printf(
+          "Iter %05d  "
+          "Mu = %8.6f  |Lam| = %8.6f  DstSq = %8.6f  Kin = %8.6f  "
+          "Bar = %8.6f  Lag = %8.6f  |C_orth| = %8.6f   |C_spk| = %8.6f  ETot = %12.8f\n",
+          iter_count++,
+          mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
+          C_orth.inf_norm(), C_spk.inf_norm(), m_total);
         }
 
       // Flow the gradient backward
@@ -1422,6 +1435,9 @@ protected:
   // Number of constraints per time-step and total
   unsigned int nc_t;
 
+  // Iteration counter
+  unsigned int iter_count;
+
   // The vector of lagrange multipliers
   CMRep::Vector lambda, p0_init;
 
@@ -1624,12 +1640,19 @@ int main(int argc, char *argv[])
       // Perform the inner optimization
       nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
       nlopt_set_min_objective(opt, nlopt_vnl_func, &obj);
-      nlopt_set_xtol_rel(opt, 1e-4);
+      nlopt_set_xtol_rel(opt, 1e-5);
+      nlopt_set_ftol_rel(opt, 1e-5);
       nlopt_set_maxeval(opt, param.gradient_iter);
       double f_opt;
-      int rc;
-      if ((rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt)) < 0) 
+      int rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt);
+      switch(rc)
         {
+      case NLOPT_SUCCESS: printf("NLOPT: Success!\n"); break;
+      case NLOPT_STOPVAL_REACHED: printf("NLOPT: Reached f_stopval!\n"); break;
+      case NLOPT_FTOL_REACHED: printf("NLOPT: Reached f_tol!\n"); break;
+      case NLOPT_XTOL_REACHED: printf("NLOPT: Reached x_tol!\n"); break;
+      case NLOPT_MAXEVAL_REACHED: printf("NLOPT: Reached max evaluations!\n"); break;
+      default:
         printf("nlopt failed %d!\n",rc);
         }
       nlopt_destroy(opt);
@@ -1645,8 +1668,9 @@ int main(int argc, char *argv[])
 
 
       // Update the mu
+      obj.compute(x_opt, &f_current, NULL);
       double newICM = obj.GetC().inf_norm();
-      printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", newICM, ICM);
+      printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", ICM, newICM);
       if(newICM > 0.5 * ICM)
         mu *= 10.0;
       obj.SetMu(mu);
