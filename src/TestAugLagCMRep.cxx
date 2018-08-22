@@ -311,7 +311,7 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.0), gradient_iter(60000), newton_iter(0),
+      mu_init(0.1), mu_scale(1.0), gradient_iter(60), newton_iter(0),
       interp_mode(false), check_deriv(true)  {}
 };
 
@@ -457,7 +457,7 @@ public:
     }
 
   // Backpropagate 
-  void Backpropagate(
+  void ComputeAdjoint(
     const Matrix &qb, const Matrix &Nb, const Vector &Rm,
     double d_obj__d_v, double d_obj__d_fv,
     Matrix &d_obj__d_qb, Matrix &d_obj__d_Nb, Vector &d_obj__d_Rm)
@@ -560,7 +560,6 @@ public:
         }
       }
 
-    std::cout << "Number of wedgelets: " << wedglets.size() << std::endl;
     this->vol_image = vol_image;
     }
 
@@ -575,19 +574,21 @@ public:
       n++;
       }
 
+    printf("Dice... n = %d  Volume = %12.8f  Integral = %12.8f  ImageVol = %12.8f\n",n,sum_v,sum_fv,vol_image);
     return 2.0 * sum_fv / (sum_v + vol_image);
     }
 
-  void Backpropagate(
+  void ComputeAdjoint(
     const Matrix &qb, const Matrix &Nb, const Vector &Rm,
+    double d_obj__d_dice,
     Matrix &d_obj__d_qb, Matrix &d_obj__d_Nb, Vector &d_obj__d_Rm)
     {
-    double d_obj__d_fv_i = 2.0 / (sum_v + vol_image);
-    double d_obj__d_v_i = - 2.0 * sum_fv / ((sum_v + vol_image) * (sum_v + vol_image));
+    double d_obj__d_fv_i = d_obj__d_dice * 2.0 / (sum_v + vol_image);
+    double d_obj__d_v_i = - d_obj__d_dice * 2.0 * sum_fv / ((sum_v + vol_image) * (sum_v + vol_image));
 
     for(auto &w : wedglets)
       {
-      w.Backpropagate(qb, Nb, Rm, d_obj__d_v_i, d_obj__d_fv_i, d_obj__d_qb, d_obj__d_Nb, d_obj__d_Rm);
+      w.ComputeAdjoint(qb, Nb, Rm, d_obj__d_v_i, d_obj__d_fv_i, d_obj__d_qb, d_obj__d_Nb, d_obj__d_Rm);
       }
     }
 
@@ -621,7 +622,7 @@ void TestWedgelet(CMRep *model)
 
   // Compute function and gradient of fv
   wdg.Compute(qb,nb,rm,v,fv);
-  wdg.Backpropagate(qb,nb,rm,1.0,1.0,d_qb,d_nb,d_rm);
+  wdg.ComputeAdjoint(qb,nb,rm,1.0,1.0,d_qb,d_nb,d_rm);
 
   // Numeric differentiation
   double eps = 1e-6;
@@ -825,7 +826,7 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
   double t0 = clock();
   double dice = dicer.Compute(qb,nb,rm);
   printf("Dice = %12.4f computed in %12.8f ms \n", dice, (clock() - t0) * 1000 / CLOCKS_PER_SEC);
-  dicer.Backpropagate(qb,nb,rm,d_qb,d_nb,d_rm);
+  dicer.ComputeAdjoint(qb,nb,rm,1.0,d_qb,d_nb,d_rm);
   printf("Dice forward + backward computed in %12.8f ms \n", (clock() - t0) * 1000 / CLOCKS_PER_SEC);
 
   // Numeric differentiation
@@ -955,6 +956,7 @@ double DiceOverlapWithImage(
 /**
  * Specific implementation of constraints with slack variables N and R
  */
+template <class TImageFunction>
 class PointBasedMediallyConstrainedFittingTraits
 {
 public:
@@ -964,6 +966,38 @@ public:
   typedef vnl_matrix<unsigned int> IdxMatrix;
   typedef vnl_matrix_ref<double> MatrixRef;
   typedef vnl_vector_ref<double> VectorRef;
+
+  // Target data represents terms that attract the model
+  struct TargetData
+    {
+    CMRep *target_model;
+    TImageFunction *image_function;
+    double w_target_model, w_image_function;
+    };
+
+  // Components of the variable vector (X)
+  struct XComponents
+    {
+    MatrixRef u_bnd, u_med, N_bnd;
+    VectorRef R_med;
+
+    XComponents(CMRep *model, double *p) :
+      u_bnd(model->nv,  3,  p),
+      u_med(model->nmv, 3,  p + model->nv * 3),
+      N_bnd(model->nv,  3,  p + model->nv * 3 + model->nmv * 3),
+      R_med(model->nmv,     p + model->nv * 6 + model->nmv * 3) { }
+    };
+
+  // Components of the variable + Q vector (Y)
+  struct YComponents : public XComponents
+    {
+    MatrixRef q_bnd, q_med;
+
+    YComponents(CMRep *model, double *p) :
+      XComponents(model, p),
+      q_bnd(model->nv,  3,  p + model->nv * 6 + model->nmv * 4),
+      q_med(model->nmv, 3,  p + model->nv * 9 + model->nmv * 4) {}
+    };
 
   // Get the number of vertices controling diffeomorphic transformation
   static int GetNumberOfActiveVertices(CMRep *model)
@@ -998,29 +1032,23 @@ public:
 
   // Initialize the optimization variable for a timepoint. The input vector x contains the 
   // variables for just the current timepoint
-  static void ComputeInitialization(CMRep *model, CMRep *target, Vector &x, unsigned int nt)
+  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt)
     {
     // Get a pointer to the storage for timepoint t
-    double *p = const_cast<double *>(x.data_block());
-
-    // Extract the different bits and pieces from x
-    MatrixRef u_bnd(model->nv, 3, p);   p += u_bnd.size();
-    MatrixRef u_med(model->nmv, 3, p);  p += u_med.size();
-    MatrixRef N(model->nv, 3, p);       p += N.size();
-    VectorRef R(model->nmv, p);         p += R.size();
+    XComponents xcmp(model, x.data_block());
 
     // The initial momentum
-    u_bnd.update((target->bnd_vtx - model->bnd_vtx) / nt, 0, 0);
-    u_med.update((target->med_vtx - model->med_vtx) / nt, 0, 0);
+    xcmp.u_bnd.update((target->target_model->bnd_vtx - model->bnd_vtx) / nt, 0, 0);
+    xcmp.u_med.update((target->target_model->med_vtx - model->med_vtx) / nt, 0, 0);
 
     // Normals and radii are set to be that of initial timepoint
     for(int i = 0; i < model->nv; i++)
       {
       // N * R is just normalized vector from medial to boundary
       Vector Ni = model->bnd_vtx.get_row(i) - model->med_vtx.get_row(model->bnd_mi[i]);
-      R[model->bnd_mi[i]] = Ni.magnitude();
+      xcmp.R_med[model->bnd_mi[i]] = Ni.magnitude();
       Ni.normalize();
-      N.set_row(i, Ni);
+      xcmp.N_bnd.set_row(i, Ni);
       }
     }
 
@@ -1056,10 +1084,14 @@ public:
    * in both x and qt
    */
   static double ComputeAugmentedLagrangianJet(
-    CMRep *model, const Vector &Y, Vector &d_AL__d_Y,
+    CMRep *model, TargetData *target, const Vector &Y, Vector &d_AL__d_Y,
     Vector &C, Vector &lambda, double mu, HessianData *H, 
     bool need_hessian)
     {
+    // Break the input and output vectors into components
+    YComponents Ycmp(model, const_cast<double *>(Y.data_block()));
+    YComponents d_Ycmp(model, d_AL__d_Y.data_block());
+
     // Get a reference to the Hessian of the Lagrangian
     ImmutableSparseMatrix<double> &HL = H->HL;
     if(need_hessian)
@@ -1067,6 +1099,14 @@ public:
 
     // Initialize the outputs with the f/grad of the function f
     double AL = H->qf_F.Compute(Y, d_AL__d_Y);
+
+    // Compute the Dice overlap
+    AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.N_bnd, Ycmp.R_med));
+
+    // Compute the adjoint of the Dice overlap
+    target->image_function->ComputeAdjoint(
+      Ycmp.q_bnd, Ycmp.N_bnd, Ycmp.R_med, -target->w_image_function,
+      d_Ycmp.q_bnd, d_Ycmp.N_bnd, d_Ycmp.R_med);
 
     // Vector containing the gradient of the constraint - to be reused
     Vector grad_Cj(Y.size(), 0.0);
@@ -1122,7 +1162,7 @@ public:
    * do not change between iterations (exploiting wide use of quadratic functions
    * in the objective
    */
-  static void PrecomputeHessianData(CMRep *model, CMRep *target, HessianData *data)
+  static void PrecomputeHessianData(CMRep *model, const TargetData *target, HessianData *data)
     {
     // Create index arrays into the input variable Y (includes x's and q's)
     // at the end, k holds total number of input variables
@@ -1205,17 +1245,20 @@ public:
     vnl_sparse_matrix<double> M_f(k, k);
     Vector d_f(k, 0.0);
 
+    double w_target_model_sqrt = sqrt(target->w_target_model);
     for(int j = 0; j < model->nv; j++)
       {
       for(int a = 0; a < 3; a++)
         {
         unsigned int i_qb_j = i_qb(j, a);
-        M_f(i_qb_j,i_qb_j) = 1.0;
-        d_f[i_qb_j] = - target->bnd_vtx(j, a);
+        M_f(i_qb_j,i_qb_j) = w_target_model_sqrt;
+        d_f[i_qb_j] = - target->target_model->bnd_vtx(j, a) * w_target_model_sqrt;
         }
       }
 
     data->qf_F.Initialize(M_f, d_f);
+
+    // TODO: initialize the Hessian entries for the Dice objective
 
 
     // Initialize the Hessian matrix for the whole problem
@@ -1295,13 +1338,7 @@ public:
     const Vector &C, const Vector &lambda, const char *fname)
     {
     // Get the references to all the data in vector Y
-    double *p = const_cast<double *>(Y.data_block());
-    MatrixRef u_bnd(model->nv, 3, p);   p += u_bnd.size();
-    MatrixRef u_med(model->nmv, 3, p);  p += u_med.size();
-    MatrixRef N(model->nv, 3, p);       p += N.size();
-    VectorRef R(model->nmv, p);         p += R.size();
-    MatrixRef q_bnd(model->nv, 3, p);   p += q_bnd.size();
-    MatrixRef q_med(model->nmv, 3, p);  p += q_med.size();
+    YComponents ycmp(model, const_cast<double *>(Y.data_block()));
 
     // Create a copy of the mesh in the model
     vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
@@ -1319,11 +1356,11 @@ public:
     arr_rad->SetName("Radius");
 
     // Update the points
-    for(int i = 0; i < q_bnd.rows(); i++)
+    for(int i = 0; i < ycmp.q_bnd.rows(); i++)
       {
-      pd->GetPoints()->SetPoint(i, q_bnd(i,0), q_bnd(i,1), q_bnd(i,2));
-      arr_nrm->SetTuple3(i, N(i,0), N(i,1), N(i,2));
-      arr_rad->SetTuple1(i, R(model->bnd_mi[i]));
+      pd->GetPoints()->SetPoint(i, ycmp.q_bnd(i,0), ycmp.q_bnd(i,1), ycmp.q_bnd(i,2));
+      arr_nrm->SetTuple3(i, ycmp.N_bnd(i,0), ycmp.N_bnd(i,1), ycmp.N_bnd(i,2));
+      arr_rad->SetTuple1(i, ycmp.R_med(model->bnd_mi[i]));
       }
 
     pd->GetPointData()->SetNormals(arr_nrm);
@@ -1606,8 +1643,10 @@ public:
   typedef CMRep::Vector Vector;
   typedef PointSetHamiltonianSystem<double, 3> HSystem;
 
+  typedef typename Traits::TargetData TargetData;
+
   PointMatchingWithEndpointConstraintsAugLagObjective(
-    const AugLagMedialFitParameters &in_param, CMRep *in_model, CMRep *in_target)
+    const AugLagMedialFitParameters &in_param, CMRep *in_model, TargetData *in_target)
     : model(in_model), target(in_target), param(in_param)
     {
     // Set the problem size variables
@@ -1723,7 +1762,7 @@ public:
 
     // Compute the AL and gradient
     double AL = Traits::ComputeAugmentedLagrangianJet(
-      model, Y, d_AL__d_Y, C, lambda, mu, &hess_data, false);
+      model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, false);
 
 
     // Compute the separate contributions of the constraints to the AL objective (for output)
@@ -1977,7 +2016,13 @@ public:
 
 protected:
 
-  CMRep *model, *target;
+  // The cm-rep template
+  CMRep *model;
+
+  // The data fed into the objective function
+  TargetData *target;
+
+  // Parameters of optimization
   const AugLagMedialFitParameters &param;
 
   // Number of variables per time-step and total
@@ -2124,9 +2169,14 @@ int main(int argc, char *argv[])
     TestDice(&m_template, idf, idf.GetVolume(), 1e-4);
     }
 
+  // Initialize the Dice overlap computer
+  typedef DiceOverlapComputation<ImageDiceFunction> DiceOverlapType;
+  DiceOverlapType dicer(&m_template, 5, idf.GetVolume(), idf);
+
+  // Define the traits for the AL objective
+  typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
 
 
-  typedef PointBasedMediallyConstrainedFittingTraits TraitsType;
   if(param.interp_mode)
     {
     /* // TIME VARYING NOT DONE YET
@@ -2177,7 +2227,15 @@ int main(int argc, char *argv[])
   else
     {
     typedef PointMatchingWithEndpointConstraintsAugLagObjective<TraitsType> ObjectiveType;
-    ObjectiveType obj(param, &m_template, &m_target);
+
+    // Set up the target data
+    TraitsType::TargetData td;
+    td.w_target_model = 0.0;
+    td.w_image_function = 100.0;
+    td.target_model = &m_target;
+    td.image_function = &dicer;
+
+    ObjectiveType obj(param, &m_template, &td);
     obj.set_verbose(true);
 
     // The current iterate -- start with zero momentum
