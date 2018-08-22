@@ -8,6 +8,7 @@
 #include "PointSetOptimalControlSystem.h"
 #include "PointSetHamiltonianSystem.h"
 #include "SparseMatrix.h"
+#include "FastLinearInterpolator.h"
 
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
@@ -20,6 +21,10 @@
 #include <vtkSmartPointer.h>
 #include <vtkCell.h>
 #include <vtksys/SystemTools.hxx>
+
+#include <itkImage.h>
+#include <itkImageFileReader.h>
+#include <itkSmoothingRecursiveGaussianImageFilter.h>
 
 #include <vnl_matrix.h>
 #include <vnl_vector.h>
@@ -555,17 +560,19 @@ public:
         }
       }
 
+    std::cout << "Number of wedgelets: " << wedglets.size() << std::endl;
     this->vol_image = vol_image;
     }
 
   double Compute(const Matrix &qb, const Matrix &Nb, const Vector &Rm)
     {
-    sum_v = 0.0, sum_fv = 0.0;
+    sum_v = 0.0, sum_fv = 0.0; int n = 0;
     for(auto &w : wedglets)
       {
       double v, fv;
       w.Compute(qb, Nb, Rm, v, fv);
       sum_v += v; sum_fv += fv;
+      n++;
       }
 
     return 2.0 * sum_fv / (sum_v + vol_image);
@@ -680,87 +687,167 @@ void TestWedgelet(CMRep *model)
     d_rm.inf_norm(), d_rm_n.inf_norm(),(d_rm-d_rm_n).inf_norm());
 }
 
+class ImageDiceFunction 
+{
+public:
+  typedef itk::Image<double, 3> ImageType;
+  typedef FastLinearInterpolator<ImageType, double, 3> InterpolatorType;
+
+  ImageDiceFunction(const char *fname, double sigma)
+    {
+    // Read input image
+    typedef itk::ImageFileReader<ImageType> ReaderType;
+    ReaderType::Pointer reader = ReaderType::New();
+    reader->SetFileName(fname);
+    reader->Update();
+    m_InputImage = reader->GetOutput();
+
+    // Apply Gaussian smoothing
+    typedef itk::SmoothingRecursiveGaussianImageFilter<ImageType, ImageType> GaussianFilter;
+    typename GaussianFilter::Pointer fltSmooth = GaussianFilter::New();
+    fltSmooth->SetInput(m_InputImage);
+    fltSmooth->SetSigma(sigma);
+    fltSmooth->Update();
+    m_SmoothedImage = fltSmooth->GetOutput();
+
+    // Compute the volume of the image
+    m_Volume = 0.0;
+    for(size_t i = 0; i < m_SmoothedImage->GetPixelContainer()->Size(); i++)
+      m_Volume += m_SmoothedImage->GetBufferPointer()[i];
+    for(size_t d = 0; d < 3; d++)
+      m_Volume *= m_SmoothedImage->GetSpacing()[d];
+
+    // Create interpolator
+    m_Interp = new InterpolatorType(m_SmoothedImage);
+
+    // Compute the transformation from physical space to voxel space
+    ComputeVoxelSpaceToNiftiSpaceTransform(m_SmoothedImage);
+    }
+
+  ~ImageDiceFunction()
+    {
+    delete m_Interp;
+    }
+
+  typedef vnl_vector_fixed<double, 3> Vec3;
+
+  double Compute(const Vec3 &X, Vec3 &grad)
+    {
+    double f = 0.0;
+    double *g = grad.data_block();
+
+    // Map x to voxel coordinates
+    Vec3 x_vox = m_A_RAS_to_IJK * X + m_b_RAS_to_IJK;
+    Vec3 grad_vox(0.0);
+    double *grad_vox_p = grad_vox.data_block();
+
+    // Interpolate
+    InterpolatorType::InOut rc = 
+      m_Interp->InterpolateWithGradient(x_vox.data_block(), &f, &grad_vox_p);
+
+    // Map gradient back to physical space
+    grad = m_A_RAS_to_IJK * grad_vox;
+
+    if(rc == InterpolatorType::OUTSIDE)
+      grad.fill(0.0);
+
+    return f; 
+    }
+
+  double GetVolume() const { return m_Volume; }
+
+  // Helper function to map from ITK coordiante space to RAS space
+  void ComputeVoxelSpaceToNiftiSpaceTransform(ImageType *image)
+    {
+    // Generate intermediate terms
+    vnl_matrix<double> m_dir, m_ras_matrix;
+    vnl_diag_matrix<double> m_scale, m_lps_to_ras;
+    vnl_vector<double> v_origin, v_ras_offset;
+
+    // Compute the matrix
+    m_dir = image->GetDirection().GetVnlMatrix();
+    m_scale.set(image->GetSpacing().GetVnlVector());
+    m_lps_to_ras.set(vnl_vector<double>(3, 1.0));
+    m_lps_to_ras[0] = -1;
+    m_lps_to_ras[1] = -1;
+    m_A_IJK_to_RAS = m_lps_to_ras * m_dir * m_scale;
+
+    // Compute the vector
+    v_origin = image->GetOrigin().GetVnlVector();
+    m_b_IJK_to_RAS = m_lps_to_ras * v_origin;
+
+    // Invert this transform
+    m_A_RAS_to_IJK = vnl_matrix_inverse<double>(m_A_IJK_to_RAS);
+    m_b_RAS_to_IJK = - m_A_RAS_to_IJK * m_b_IJK_to_RAS;
+    }
+
+protected:
+  ImageType::Pointer m_InputImage, m_SmoothedImage;
+  InterpolatorType *m_Interp;
+  double m_Volume;
+
+  vnl_matrix_fixed<double, 3, 3> m_A_RAS_to_IJK, m_A_IJK_to_RAS;
+  vnl_vector_fixed<double, 3> m_b_RAS_to_IJK, m_b_IJK_to_RAS;
+};
 
 
-void TestDice(CMRep *model)
+template <class TFunction>
+void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
 {
   typedef vnl_matrix<double> Matrix;
   typedef vnl_vector<double> Vector;
+  typedef vnl_matrix_ref<double> MatrixRef;
+  typedef vnl_vector_ref<double> VectorRef;
 
-  Matrix qb = model->bnd_vtx;
-  Matrix nb = model->bnd_nrm;
-  Vector rm = model->med_R;
+  // Storage for variables
+  unsigned int k = model->bnd_vtx.size() * 2 + model->med_R.size();
+  Vector y(k, 0.0), d_y(k, 0.0);
 
-  TestFunction tf;
-  DiceOverlapComputation<TestFunction> dicer(model, 5, 4.0, tf);
+  double *py = y.data_block();
+  MatrixRef qb(model->nv, 3, py);   py += qb.size();
+  MatrixRef nb(model->nv, 3, py);   py += nb.size();
+  VectorRef rm(model->nmv, py);  
+  
+  double *pdy = d_y.data_block();
+  MatrixRef d_qb(model->nv, 3, pdy);   pdy += qb.size();
+  MatrixRef d_nb(model->nv, 3, pdy);   pdy += nb.size();
+  VectorRef d_rm(model->nmv, pdy);  
+  
+  // Assign variables
+  qb.update(model->bnd_vtx);
+  nb.update(model->bnd_nrm);
+  rm.update(model->med_R);
 
-  Matrix d_qb = qb * 0.0, d_nb = nb * 0.0; 
-  Vector d_rm = rm * 0.0;
-  Matrix d_qb_n = qb * 0.0, d_nb_n = nb * 0.0;
-  Vector d_rm_n = rm * 0.0;
+  // Create dicer
+  DiceOverlapComputation<TFunction> dicer(model, 5, img_vol, tf);
 
   // Compute function and gradient of fv
-  printf("Doing Dice\n");
+  double t0 = clock();
   double dice = dicer.Compute(qb,nb,rm);
-  printf("Dice forward done\n");
+  printf("Dice = %12.4f computed in %12.8f ms \n", dice, (clock() - t0) * 1000 / CLOCKS_PER_SEC);
   dicer.Backpropagate(qb,nb,rm,d_qb,d_nb,d_rm);
-  printf("Dice backward done\n");
+  printf("Dice forward + backward computed in %12.8f ms \n", (clock() - t0) * 1000 / CLOCKS_PER_SEC);
 
   // Numeric differentiation
-  double eps = 1e-6;
-  for(int i = 0; i < qb.rows(); i++)
+  vnl_random rndy;
+  for(int i = 0; i < 20; i++)
     {
-    for(int a = 0; a < 3; a++)
-      {
-      qb(i,a) += eps;
-      double f1 = dicer.Compute(qb,nb,rm);
+    int j = rndy.lrand32(0, y.size());
+    double y_init = y[j];
 
-      qb(i,a) -= 2 * eps;
-      double f2 = dicer.Compute(qb,nb,rm);
-
-      qb(i,a) += eps;
-
-      d_qb_n(i,a) = (f1 - f2) / (2 * eps);
-      }
-    }
-
-  for(int i = 0; i < nb.rows(); i++)
-    {
-    for(int a = 0; a < 3; a++)
-      {
-      nb(i,a) += eps;
-      double f1 = dicer.Compute(qb,nb,rm);
-
-      nb(i,a) -= 2 * eps;
-      double f2 = dicer.Compute(qb,nb,rm);
-
-      nb(i,a) += eps;
-
-      d_nb_n(i,a) = (f1 - f2) / (2 * eps);
-      }
-    }
-
-  for(int i = 0; i < rm.size(); i++)
-    {
-    rm[i] += eps;
+    y[j] = y_init + eps;
     double f1 = dicer.Compute(qb,nb,rm);
 
-    rm[i] -= 2 * eps;
+    y[j] = y_init - eps;
     double f2 = dicer.Compute(qb,nb,rm);
 
-    rm[i] += eps;
+    y[j] = y_init;
 
-    d_rm_n[i] = (f1 - f2) / (2 * eps);
+    double d_f__d_yj_num = (f1 - f2) / (2 * eps);
+
+    printf("Dice Test: Var: %4d  An: %16.12f  Nu: %16.12f  Del: %16.12f\n", 
+      j, d_y[j], d_f__d_yj_num, fabs(d_y[j] - d_f__d_yj_num));
     }
-
-  printf("QB  An: %16.12f  Nu: %16.12f  Del: %16.12f\n", 
-    d_qb.absolute_value_max(), d_qb_n.absolute_value_max(),(d_qb-d_qb_n).absolute_value_max());
-
-  printf("NB  An: %16.12f  Nu: %16.12f  Del: %16.12f\n", 
-    d_nb.absolute_value_max(), d_nb_n.absolute_value_max(),(d_nb-d_nb_n).absolute_value_max());
-
-  printf("RM  An: %16.12f  Nu: %16.12f  Del: %16.12f\n", 
-    d_rm.inf_norm(), d_rm_n.inf_norm(),(d_rm-d_rm_n).inf_norm());
 }
 
 
@@ -2009,7 +2096,7 @@ int main(int argc, char *argv[])
   // Read the template and target meshes
   if(argc < 3)
     {
-    std::cerr << "Usage: " << argv[0] << " template.vtk target.vtk" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " template.vtk target.nii.gz target.vtk" << std::endl;
     return -1;
     }
 
@@ -2017,14 +2104,27 @@ int main(int argc, char *argv[])
   CMRep m_template;
   m_template.ReadVTK(argv[1]);
 
+  // Read the target image file
+  ImageDiceFunction idf(argv[2], 0.2);
+
   // Reat the target mesh
   CMRep m_target;
-  m_target.ReadVTK(argv[2]);
-
-  TestDice(&m_template);
+  m_target.ReadVTK(argv[3]);
 
   // Time to set up the objective function
   AugLagMedialFitParameters param;
+
+  if(param.check_deriv)
+    {
+    printf("Testing Dice derivatives with analytic function\n");
+    TestFunction test_fun;
+    TestDice(&m_template, test_fun, 1.0);
+
+    printf("Testing Dice derivatives with actual image\n");
+    TestDice(&m_template, idf, idf.GetVolume(), 1e-4);
+    }
+
+
 
   typedef PointBasedMediallyConstrainedFittingTraits TraitsType;
   if(param.interp_mode)
