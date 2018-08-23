@@ -13,7 +13,8 @@ using namespace std;
 void
 SubdivisionSurface
 ::SetOddVertexWeights(MutableSparseMatrix &W, size_t ivc,
-                      const MeshLevel *parent, size_t t, size_t v)
+                      const MeshLevel *parent, size_t t, size_t v,
+                      bool flat_mode)
 {
   // Weight constants
   const static double W_INT_EDGE_CONN = 3.0 / 8.0;
@@ -25,7 +26,7 @@ SubdivisionSurface
 
   // Find out if this is a boundary vertex. Since the child triangle is a center
   // triangle, we must check if the parent triangle has a neighbor accross edge v
-  if(tp.neighbors[v] != NOID)
+  if(tp.neighbors[v] != NOID && !flat_mode)
   {
     // Get the neighbor of the parent triangle
     const Triangle &topp = parent->triangles[tp.neighbors[v]];
@@ -45,17 +46,26 @@ SubdivisionSurface
   }
 }
 
+
 /**
  * This method should be called for child-level triangles whose index in the
  * parent triangle matches the vertex id (v).
  */
 void SubdivisionSurface
 ::SetEvenVertexWeights(MutableSparseMatrix &W, size_t ivc, 
-                       const MeshLevel *parent, size_t ivp)
+                       const MeshLevel *parent, size_t ivp,
+                       bool flat_mode)
 {
   // Weight constants
   const static double W_BND_EDGE_CONN = 1.0 / 8.0;
   const static double W_BND_SELF = 3.0 / 4.0;
+
+  // Handle flat mode first
+  if(flat_mode)
+    {
+    W(ivc, ivp) = 1.0;
+    return;
+    }
 
   // Get the vertex object for this vertex
   EdgeWalkAroundVertex it(parent, ivp);
@@ -105,7 +115,7 @@ SubdivisionSurface
 
 
 void SubdivisionSurface::SubdivideSelected(
-  const MeshLevel *parent, MeshLevel *child, std::set<size_t> tsel)
+  const MeshLevel *parent, MeshLevel *child, std::set<size_t> tsel, bool flat_mode)
 {
   cout << "Sub with " << tsel.size() << " selected triangles" << endl;
 
@@ -191,12 +201,12 @@ void SubdivisionSurface::SubdivideSelected(
 
   // Visit each of the even vertices, assigning it an id and weights
   for(i = 0; i < nvParent; i++)
-    SetEvenVertexWeights(W, i, parent, i);
+    SetEvenVertexWeights(W, i, parent, i, flat_mode);
 
   // Visit the odd vertices 
   for(i = 0; i < ntParent; i++) for(j = 0; j < 3; j++)
     if(split[i][j] != NOID && W.empty_row(split[i][j]))
-      SetOddVertexWeights(W, split[i][j], parent, i, j);
+      SetOddVertexWeights(W, split[i][j], parent, i, j, flat_mode);
 
   // Copy the sparse matrix into immutable form
   child->weights.SetFromVNL(W);
@@ -211,7 +221,7 @@ void SubdivisionSurface::SubdivideSelected(
   child->ComputeWalks();
 }
 
-void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
+void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child, bool flat_mode)
 {
   // Get the numbers of triangles before and after
   size_t ntParent = parent->triangles.size();
@@ -285,7 +295,7 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
         size_t ivc = child->triangles[4*i+j].vertices[j];
         size_t ivp = parent->triangles[i].vertices[j];
         assert(ivc == ivp); 
-        SetEvenVertexWeights(W, ivc, parent, ivp);
+        SetEvenVertexWeights(W, ivc, parent, ivp, flat_mode);
         }
       }
     }
@@ -300,7 +310,7 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
         {
         RecursiveAssignVertexLabel(child, 4*i+3, j, child->nVertices++);
         size_t ivc = child->triangles[4*i+3].vertices[j];
-        SetOddVertexWeights(W, ivc, parent, i, j);
+        SetOddVertexWeights(W, ivc, parent, i, j, flat_mode);
         }
       }
     }
@@ -320,7 +330,7 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child)
 
 void
 SubdivisionSurface::
-RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n)
+RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n, bool flat_mode)
 {
   // N has to be greater than 1
   if(n == 0)
@@ -336,7 +346,7 @@ RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n)
   }
   
   else if(n == 1)
-  { Subdivide(src, dst); return; }
+  { Subdivide(src, dst, flat_mode); return; }
 
   // Create an array of intermedial mesh levels
   MeshLevel *temp = new MeshLevel[n - 1];
@@ -345,12 +355,12 @@ RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n)
   const MeshLevel *parent = src;
   for(size_t i = 0; i < n-1; i++)
   {
-    Subdivide(parent, temp + i);
+    Subdivide(parent, temp + i, flat_mode);
     parent = temp + i;
   }
 
   // Subdivide the last level
-  Subdivide(parent, dst);
+  Subdivide(parent, dst, flat_mode);
 
   // Delete the intermediates
   delete[] temp;
@@ -379,7 +389,7 @@ GetBoundaryTriangles(const MeshLevel *src)
 
 void
 SubdivisionSurface::
-RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n)
+RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n, bool flat_mode)
 {
   // N has to be greater than 1
   if(n == 0)
@@ -396,7 +406,7 @@ RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n)
   
   else if(n == 1)
     { 
-    SubdivideSelected(src, dst, GetBoundaryTriangles(src)); 
+    SubdivideSelected(src, dst, GetBoundaryTriangles(src), flat_mode); 
     return; 
     }
 
@@ -407,12 +417,12 @@ RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n)
   const MeshLevel *parent = src;
   for(size_t i = 0; i < n-1; i++)
   {
-    SubdivideSelected(parent, temp + i, GetBoundaryTriangles(parent));
+    SubdivideSelected(parent, temp + i, GetBoundaryTriangles(parent), flat_mode);
     parent = temp + i;
   }
 
   // Subdivide the last level
-  SubdivideSelected(parent, dst, GetBoundaryTriangles(parent));
+  SubdivideSelected(parent, dst, GetBoundaryTriangles(parent), flat_mode);
 
   // Delete the intermediates
   delete[] temp;

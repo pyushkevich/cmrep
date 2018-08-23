@@ -35,24 +35,24 @@ public:
   };
 
   /** Subdivide a mesh level once */
-  static void Subdivide(const MeshLevel *src, MeshLevel *dst);
+  static void Subdivide(const MeshLevel *src, MeshLevel *dst, bool flat_mode = false);
 
   /** Subdivide selected triangles on the mesh */
   static void SubdivideSelected(
-    const MeshLevel *parent, MeshLevel *child, std::set<size_t> tsel);
+    const MeshLevel *parent, MeshLevel *child, std::set<size_t> tsel, bool flat_mode = false);
 
   /**
    * Subdivide a mesh level n times. The intermediate levels will be
    * discarded.
    */
-  static void RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n);
+  static void RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n, bool flat_mode = false);
 
   
   /**
    * Recursive subdivision, but applied only to the triangles along the boundary
    * of the mesh.
    */
-  static void RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n);
+  static void RecursiveSubdivideBoundary(const MeshLevel *src, MeshLevel *dst, size_t n, bool flat_mode = false);
 
   /** Import a mesh from a VTK mesh */
   static void ImportLevelFromVTK(vtkPolyData *, MeshLevel &dest);
@@ -91,12 +91,12 @@ private:
   // Set the weights for an even vertex
   static void SetEvenVertexWeights(
     MutableSparseMatrix &W, size_t ivc, 
-    const MeshLevel *parent, size_t ivp);
+    const MeshLevel *parent, size_t ivp, bool flat_mode);
 
   // Set the weights for an odd vertex
   static void SetOddVertexWeights(
     MutableSparseMatrix &W, size_t ivc,
-    const MeshLevel *parent, size_t t, size_t v);
+    const MeshLevel *parent, size_t t, size_t v, bool flat_mode);
 
   // Get boundary triangles
   static std::set<size_t> GetBoundaryTriangles(const MeshLevel *src);

@@ -9,6 +9,8 @@
 #include "PointSetHamiltonianSystem.h"
 #include "SparseMatrix.h"
 #include "FastLinearInterpolator.h"
+#include "MedialAtomGrid.h"
+#include "SubdivisionSurface.h"
 
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
@@ -35,6 +37,7 @@
 #include <vnl/vnl_random.h>
 #include <vnl/algo/vnl_svd.h>
 #include <vnl/algo/vnl_brent_minimizer.h>
+
 
 #include <nlopt.h>
 
@@ -393,8 +396,6 @@ double TriangleAreaAndGradient(
 }
 
 
-#include "MedialAtomGrid.h"
-#include "SubdivisionSurface.h"
 
 template <class TFunction>
 class MeshFunctionVolumeIntegral
@@ -414,7 +415,16 @@ public:
     B.SetAsRoot();
 
     // Set up the child mesh
-    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level);
+    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level, true);
+
+    vtkSmartPointer<vtkPolyData> test = vtkPolyData::New();
+    SubdivisionSurface::ApplySubdivision(model->bnd_vtk, test, S);
+    vtkSmartPointer<vtkPolyDataWriter> w = vtkPolyDataWriter::New();
+    w->SetInputData(test);
+    w->SetFileName("/tmp/subflat.vtk");
+    w->Update();
+
+
 
     // Allocate the array of samples
     samples.resize((n_layers + 1) * S.nVertices);
@@ -2210,6 +2220,9 @@ int main(int argc, char *argv[])
   CMRep m_target;
   m_target.ReadVTK(argv[3]);
 
+  // The starting mu
+  double start_mu = atof(argv[4]);
+
   // Time to set up the objective function
   AugLagMedialFitParameters param;
 
@@ -2304,7 +2317,7 @@ int main(int argc, char *argv[])
     double ICM = 1e100;
 
     // Override initial mu...
-    mu = 5;
+    mu = start_mu;
 
     // Set the initial mu
     obj.SetMu(mu);
