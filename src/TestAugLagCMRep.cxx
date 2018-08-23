@@ -393,204 +393,291 @@ double TriangleAreaAndGradient(
 }
 
 
-/** 
- * A data structure used to compute the Dice overlap and similar metrics from
- * images and their derivatives. A wedgelet corresponds to an interior triangle
- * somewhere between the boundary surface and the medial surface. It has some
- * implied thickness. It can be sampled at the center or at a bunch of points
- */
+#include "MedialAtomGrid.h"
+#include "SubdivisionSurface.h"
+
 template <class TFunction>
-class Wedgelet
+class MeshFunctionVolumeIntegral
 {
 public:
-  
   typedef vnl_matrix<double> Matrix;
   typedef vnl_vector<double> Vector;
 
-  // Barycentric coordinates of 15 sample locations on the triangle
-  static double sample_bary[15][3];
-
-  // Weights of the 15 sample locations
-  static double sample_wgt[15];
-
-  // Initialize the common properties
-  Wedgelet(CMRep *model, unsigned int n_wedges,
-           unsigned int i_triangle, int i_wedge, 
-           TFunction &in_func) : func(in_func)
+  MeshFunctionVolumeIntegral(CMRep *model, unsigned int n_layers, unsigned int sub_level, TFunction &f)
+    : func(f)
     {
-    // Assign inputs
     this->model = model;
-    this->n_wedges = n_wedges;
-    this->i_triangle = i_triangle;
-    this->i_wedge = i_wedge;
+    this->n_layers = n_layers;
 
-    // Get the boundary and medial indices of the triangle vertices
-    auto tb = model->bnd_tri.triangles[i_triangle];
-    ib_A = tb.vertices[0],      ib_B = tb.vertices[1],      ib_C = tb.vertices[2];
-    im_A = model->bnd_mi[ib_A], im_B = model->bnd_mi[ib_B], im_C = model->bnd_mi[ib_C]; 
+    // Set up the parent level mesh
+    *((TriangleMesh *)(&B)) = model->bnd_tri;
+    B.SetAsRoot();
 
-    // How far along the normal are we
-    l = (1.0 * i_wedge) / n_wedges;
+    // Set up the child mesh
+    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level);
 
-    // This is a scaling factor for volume computation for this triangle
-    w_w = (i_wedge == 0 || i_wedge == n_wedges) ? 0.5 / n_wedges : 1.0 / n_wedges;
+    // Allocate the array of samples
+    samples.resize((n_layers + 1) * S.nVertices);
+
+    // Allocate the subdivided boundary and medial vertices
+    qb_sub.set_size(S.nVertices, 3);
+    qm_sub.set_size(S.nVertices, 3);
+    d_obj__d_qb_sub.set_size(S.nVertices, 3);
+    d_obj__d_qm_sub.set_size(S.nVertices, 3);
+
+    // Initialize the triangles of the wedges. The quadrilateral faces must be divided into
+    // triangles and this is done in such a way that adjacent wedges have the same triangles,
+    // so that there is no overlap between wedge triangulations and no holes. 
+    for(unsigned int k = 0; k < n_layers; k++)
+      {
+      for(auto &tri : S.triangles)
+        {
+        // Create a wedge
+        Wedge W;
+
+        // Lambda to get the index of a sample
+        auto si = [&](unsigned int l, unsigned int t) { return S.nVertices * l + t; };
+
+        // Indices of the six vertices of this wedge
+        unsigned int A = W.V[0] = si(k  , tri.vertices[0]);
+        unsigned int B = W.V[1] = si(k  , tri.vertices[1]);
+        unsigned int C = W.V[2] = si(k  , tri.vertices[2]);
+        unsigned int D = W.V[3] = si(k+1, tri.vertices[0]);
+        unsigned int E = W.V[4] = si(k+1, tri.vertices[1]);
+        unsigned int F = W.V[5] = si(k+1, tri.vertices[2]);
+
+        // Lambda to set a row in a wedge
+        auto set_row = [&](unsigned int row, unsigned int v1, unsigned int v2, unsigned int v3) 
+          { W.T(row,0) = v1; W.T(row,1) = v2, W.T(row,2) = v3; };
+
+        // The triangles at the top and bottom of the wedge
+        set_row(0, A, B, C);
+        set_row(1, D, F, E);
+
+        // The remaining triangles - here we use the ordering of the samples to get consistent 
+        // splitting of quad faces
+        if(A < C)
+          { set_row(2, A, C, F); set_row(3, A, F, D); }
+        else
+          { set_row(2, C, F, D); set_row(3, C, D, A); }
+
+        if(C < B)
+          { set_row(4, C, B, E); set_row(5, C, E, F); }
+        else
+          { set_row(4, B, E, F); set_row(5, B, F, C); }
+
+        if(B < A)
+          { set_row(6, B, A, D); set_row(7, B, D, E); }
+        else
+          { set_row(6, A, D, E); set_row(7, A, E, B); }
+
+        // Append the wedge
+        wedges.push_back(W);
+        }
+      }
     }
 
-  // Compute the function weighted by the wedgelet area
-  void Compute(const Matrix &qb, const Matrix &qm, double &out_v, double &out_fv)
+  void Compute(const Matrix &qb, const Matrix &qm, double &v, double &fv)
     {
-    // Compute the corners of the sampling triangle
-    R_A = 0.0, R_B = 0.0, R_C = 0.0;
-    for(unsigned int a = 0; a < 3; a++)
+    // Apply subdivision to outer meshes qb and qm
+    qb_sub.fill(0.0); qm_sub.fill(0.0);
+    for(unsigned int i = 0; i < S.nVertices; i++)
       {
-      A[a] = qb(ib_A,a) * (1.0 - l) + qm(im_A,a) * l;
-      B[a] = qb(ib_B,a) * (1.0 - l) + qm(im_B,a) * l;
-      C[a] = qb(ib_C,a) * (1.0 - l) + qm(im_C,a) * l;
+      for(auto it = S.weights.Row(i); !it.IsAtEnd(); ++it)
+        {
+        double w = it.Value();
+        unsigned int j = it.Column(), j_med = model->bnd_mi[j];
 
-      R_A += (qb(ib_A,a) - qm(im_A,a)) * (qb(ib_A,a) - qm(im_A,a));
-      R_B += (qb(ib_B,a) - qm(im_B,a)) * (qb(ib_B,a) - qm(im_B,a));
-      R_C += (qb(ib_C,a) - qm(im_C,a)) * (qb(ib_C,a) - qm(im_C,a));
+        for(unsigned int a = 0; a < 3; a++)
+          {
+          qb_sub(i,a) += qb(j, a) * w;
+          qm_sub(i,a) += qm(j_med, a) * w;
+          }
+        }
       }
 
-    // TODO: is this the best way to compute R_S? 
-    R_A = sqrt(R_A); R_B = sqrt(R_B); R_C = sqrt(R_C);
-
-    // Compute the normal and area of the triangle
-    N = 0.25 * vnl_cross_3d(B - A, C - A);
-    area = 2.0 * N.magnitude();
-
-    // Sample the triangle at the sample locations
-    f = 0.0;
-    for(unsigned int i_sample = 0; i_sample < 15; i_sample++)
+    // Compute the samples and sample the function at each location
+    for(unsigned int k = 0, is = 0; k <= n_layers; k++)
       {
-      Vec3 S = 
-        A * sample_bary[i_sample][0] + 
-        B * sample_bary[i_sample][1] + 
-        C * sample_bary[i_sample][2];
+      double l = k * 1.0 / n_layers;
+      for(unsigned int i = 0; i < S.nVertices; i++)
+        {
+        // Get the current sample
+        Sample &s = samples[is++];
 
-      double f_sample = func.Compute(S, grad_F[i_sample]); 
-      f += sample_wgt[i_sample] * f_sample;
+        // Compute the sample's location
+        for(unsigned int a = 0; a < 3; a++)
+          s.x[a] = qb_sub(i,a) * (1-l) + qm_sub(i,a) * l;
+
+        // Compute the function and gradient
+        s.f = func.Compute(s.x, s.grad_f);
+
+        // Set the volume element of the sample to zero
+        s.vol_elt = 0.0;
+        }
       }
 
-    // Sample this triangle at the center. TODO: in the future, we can sample the triangle
-    // at multiple locations using different barycentric coordinates
-    R_avg = (R_A + R_B + R_C) / 3.0;
+    // Iterate over the wedges to compute volume
+    for(auto &W : wedges)
+      {
+      // Volume is computed using triple scalar products (divergence formula)
+      W.vol = 0.0;
+      for(unsigned int t = 0; t < 8; t++)
+        {
+        const Vec3 &P = samples[W.T[t][0]].x;
+        const Vec3 &Q = samples[W.T[t][1]].x;
+        const Vec3 &R = samples[W.T[t][2]].x;
+        W.vol += ScalarTripleProduct(P, Q - P, R - P) / 6.0;
+        }
 
-    // Evaluate the function at S
-    v = (R_avg * w_w * area);
-    fv = f * v;
+      // Assign an equal portion of the volume to each of the six vertices
+      for(unsigned int v = 0; v < 6; v++)
+        samples[W.V[v]].vol_elt += W.vol / 6.0;
+      }
 
-    out_v = v;
-    out_fv = fv;
+    // Integrate the volume and the function value
+    v = 0.0; fv = 0.0;
+    for(auto &s : samples)
+      {
+      v += s.vol_elt;
+      fv += s.f * s.vol_elt;
+      }
     }
 
-  // Backpropagate 
   void ComputeAdjoint(
-    const Matrix &qb, const Matrix &qm,
+    const Matrix &qb, const Matrix &qm, 
     double d_obj__d_v, double d_obj__d_fv,
     Matrix &d_obj__d_qb, Matrix &d_obj__d_qm)
     {
-    double d_obj__d_f = d_obj__d_fv * v;
-    d_obj__d_v += d_obj__d_fv * f;
-
-    Vec3 d_area__d_A = vnl_cross_3d(N, C - B) / area; 
-    Vec3 d_area__d_B = vnl_cross_3d(N, A - C) / area;
-    Vec3 d_area__d_C = vnl_cross_3d(N, B - A) / area;
-
-    Vec3 d_obj__d_A = (d_obj__d_v * R_avg * w_w) * d_area__d_A;
-    Vec3 d_obj__d_B = (d_obj__d_v * R_avg * w_w) * d_area__d_B;
-    Vec3 d_obj__d_C = (d_obj__d_v * R_avg * w_w) * d_area__d_C;
-    for(int i_sample = 0; i_sample < 15; i_sample++)
+    for(auto &s : samples)
       {
-      double w = d_obj__d_f * sample_wgt[i_sample];
-      d_obj__d_A += (w * sample_bary[i_sample][0]) * grad_F[i_sample];
-      d_obj__d_B += (w * sample_bary[i_sample][1]) * grad_F[i_sample];
-      d_obj__d_C += (w * sample_bary[i_sample][2]) * grad_F[i_sample];
+      // Compute the derivative of the objective wrt each sample's volume element
+      s.d_obj__d_vol_elt = d_obj__d_v + s.f * d_obj__d_fv;
+
+      // Initialize the derivative of the objective with respect to the sample
+      s.d_obj__d_x = s.vol_elt * d_obj__d_fv * s.grad_f;
       }
 
-    double d_obj__d_RAsq = (d_obj__d_v * w_w * area) / (3.0 * R_A);
-    double d_obj__d_RBsq = (d_obj__d_v * w_w * area) / (3.0 * R_B);
-    double d_obj__d_RCsq = (d_obj__d_v * w_w * area) / (3.0 * R_C);
-
-    for(int a = 0; a < 3; a++)
+    for(auto &W : wedges)
       {
-      double r_term_A = d_obj__d_RAsq * (qb(ib_A, a) - qm(im_A, a));
-      double r_term_B = d_obj__d_RBsq * (qb(ib_B, a) - qm(im_B, a));
-      double r_term_C = d_obj__d_RCsq * (qb(ib_C, a) - qm(im_C, a));
+      // For each wedge, compute the derivative of the objective wrt its volume
+      double d_obj__d_vol = 0;
+      for(unsigned int v = 0; v < 6; v++)
+        d_obj__d_vol += samples[W.V[v]].d_obj__d_vol_elt;
+      d_obj__d_vol /= 6.0;
 
-      d_obj__d_qb(ib_A, a) += (1.0 - l) * d_obj__d_A(a) + r_term_A;
-      d_obj__d_qb(ib_B, a) += (1.0 - l) * d_obj__d_B(a) + r_term_B;
-      d_obj__d_qb(ib_C, a) += (1.0 - l) * d_obj__d_C(a) + r_term_C;
+      // Now compute the derivative of the volume with respect to each vertex
+      for(unsigned int t = 0; t < 8; t++)
+        {
+        const Vec3 &P = samples[W.T[t][0]].x;
+        const Vec3 &Q = samples[W.T[t][1]].x;
+        const Vec3 &R = samples[W.T[t][2]].x;
+        Vec3 &dP = samples[W.T[t][0]].d_obj__d_x;
+        Vec3 &dQ = samples[W.T[t][1]].d_obj__d_x;
+        Vec3 &dR = samples[W.T[t][2]].d_obj__d_x;
 
-      d_obj__d_qm(im_A, a) += l * d_obj__d_A(a) - r_term_A;
-      d_obj__d_qm(im_B, a) += l * d_obj__d_B(a) - r_term_B;
-      d_obj__d_qm(im_C, a) += l * d_obj__d_C(a) - r_term_C;
+        // Compute the adjoint of the scalar triple product, which just consists
+        // of the cross-products of pairs of the vectors
+        dP += vnl_cross_3d(Q, R) * d_obj__d_vol / 6.0;
+        dQ += vnl_cross_3d(R, P) * d_obj__d_vol / 6.0;
+        dR += vnl_cross_3d(P, Q) * d_obj__d_vol / 6.0;
+        }
+      }
+
+    // Now compute the derivative of the objective with respect to the subdivided 
+    // vertex coordinates
+    d_obj__d_qb_sub.fill(0.0); d_obj__d_qm_sub.fill(0.0);
+
+    for(unsigned int k = 0, is = 0; k <= n_layers; k++)
+      {
+      double l = k * 1.0 / n_layers;
+      for(unsigned int i = 0; i < S.nVertices; i++)
+        {
+        // Get the current sample
+        Sample &s = samples[is++];
+
+        // Map its contribution to the subdivision surfaces
+        for(unsigned int a = 0; a < 3; a++)
+          {
+          d_obj__d_qb_sub(i,a) += (1 - l) * s.d_obj__d_x[a];
+          d_obj__d_qm_sub(i,a) += l * s.d_obj__d_x[a];
+          }
+        }
+      }
+
+    // Finally, map the contributions back to the original vertices
+    d_obj__d_qb.fill(0.0); d_obj__d_qm.fill(0.0);
+
+    for(unsigned int i = 0; i < S.nVertices; i++)
+      {
+      for(auto it = S.weights.Row(i); !it.IsAtEnd(); ++it)
+        {
+        double w = it.Value();
+        unsigned int j = it.Column(), j_med = model->bnd_mi[j];
+
+        for(unsigned int a = 0; a < 3; a++)
+          {
+          d_obj__d_qb(j,a)      += d_obj__d_qb_sub(i,a) * w;
+          d_obj__d_qm(j_med, a) += d_obj__d_qm_sub(i,a) * w;
+          }
+        }
       }
     }
 
-
 protected:
-
+  typedef SubdivisionSurface::MeshLevel MeshLevel;
   typedef vnl_vector_fixed<double, 3> Vec3;
 
-  // The model we refer to 
+  // The model
   CMRep *model;
 
-  // The function we refer to 
+  // Number of layers
+  unsigned int n_layers;
+
+  // Base layers (input mesh resolution) and subdivided layers
+  MeshLevel B, S;
+
+  // Function being integrated
   TFunction &func;
 
-  // Where we are relative to the model
-  unsigned int n_wedges, i_triangle, i_wedge;
+  // Subdivided boundary layer and medial layer
+  Matrix qb_sub, qm_sub, d_obj__d_qb_sub, d_obj__d_qm_sub;
 
-  // The indices of the three vertices of the triangle
-  unsigned int ib_A, ib_B, ib_C, im_A, im_B, im_C;
+  // Array of samples from the objective function
+  struct Sample
+    {
+    Vec3 x, grad_f, d_obj__d_x;
+    double f;
+    double vol_elt, d_obj__d_vol_elt;
+    };
 
-  // The triangle verts and normal vector (used in area computation)
-  Vec3 A, B, C, N, grad_F[15];
+  // A flat list of samples (stored in layer-major order)
+  std::vector<Sample> samples;
 
-  // Area of the triangle
-  double area;
+  // A wedge
+  struct Wedge 
+    {
+    // A wedge constitutes eight triangles, each one references a sample
+    vnl_matrix_fixed<unsigned int, 8, 3> T;
 
-  // Radius at the sample point
-  double R_A, R_B, R_C, R_avg;
+    // Also store the vertices of the wedge, each one references a sample
+    unsigned int V[6];
 
-  // Where we are along the spoke, how much volume we assign ourselves
-  double l, w_w;
+    // Volume of the wedge
+    double vol;
 
-  // Intermediate quantities
-  double f, v, fv;
+    // Partial derivatives of the wedge w.r.t. six vertices
+    Vec3 d_V__d_x[2][3];
+    };
+
+  // A flat list of wedges (stored in layer-major order)
+  std::vector<Wedge> wedges;
 };
 
-template <class TFunction>
-double
-Wedgelet<TFunction>
-::sample_bary[15][3] = {
-    { 1.0,  0.0,  0.0  }, 
-    { 0.0,  1.0,  0.0  },
-    { 0.0,  0.0,  1.0  },
-    { 0.5,  0.5,  0.0  },
-    { 0.5,  0.0,  0.5  },
-    { 0.0,  0.5,  0.5  },
-    { 0.75, 0.25, 0.0  },
-    { 0.25, 0.75, 0.0  },
-    { 0.75, 0.0,  0.25 },
-    { 0.25, 0.0,  0.75 },
-    { 0.0,  0.75, 0.25 },
-    { 0.0,  0.25, 0.75 },
-    { 0.5,  0.25, 0.25 },
-    { 0.25, 0.5,  0.25 },
-    { 0.25, 0.25, 0.5  }};
 
-template <class TFunction>
-double
-Wedgelet<TFunction>
-::sample_wgt[15] = {
-    1.0 / 48, 1.0 / 48, 1.0 / 48, 
-    3.0 / 48, 3.0 / 48, 3.0 / 48, 
-    3.0 / 48, 3.0 / 48, 3.0 / 48, 
-    3.0 / 48, 3.0 / 48, 3.0 / 48, 
-    6.0 / 48, 6.0 / 48, 6.0 / 48 };
-
+/**
+ * A function for testing Dice computations on exact data
+ */
 struct TestFunction
 {
   typedef vnl_vector_fixed<double, 3> Vec3;
@@ -612,35 +699,18 @@ public:
   typedef vnl_matrix<double> Matrix;
   typedef vnl_vector<double> Vector;
 
-  DiceOverlapComputation(CMRep *model, unsigned int n_wedges, double vol_image, TFunction &in_func)
-    : func(in_func)
+  DiceOverlapComputation(
+    CMRep *model, unsigned int n_wedges, unsigned int sub_level, 
+    double vol_image, TFunction &in_func)
+    : integrator(model, n_wedges, sub_level, in_func)
     {
-    // In this implementation we operate on triangles in order to have a better handle
-    // on area and less complicated derivative as well
-    for(unsigned int i = 0; i < model->bnd_tri.triangles.size(); i++)
-      {
-      for(unsigned int i_w = 0; i_w <= n_wedges; i_w++)
-        {
-        wedglets.push_back(WedgeletType(model, n_wedges, i, i_w, func));
-        }
-      }
-
     this->vol_image = vol_image;
     }
 
   double Compute(const Matrix &qb, const Matrix &qm)
     {
-    sum_v = 0.0, sum_fv = 0.0; int n = 0;
-    for(auto &w : wedglets)
-      {
-      double v, fv;
-      w.Compute(qb, qm, v, fv);
-      sum_v += v; sum_fv += fv;
-      n++;
-      }
-
-    // printf("Dice... n = %d  Volume = %12.8f  Integral = %12.8f  ImageVol = %12.8f\n",n,sum_v,sum_fv,vol_image);
-    return 2.0 * sum_fv / (sum_v + vol_image);
+    integrator.Compute(qb, qm, v, fv);
+    return 2.0 * fv / (v + vol_image);
     }
 
   void ComputeAdjoint(
@@ -648,22 +718,16 @@ public:
     double d_obj__d_dice,
     Matrix &d_obj__d_qb, Matrix &d_obj__d_qm)
     {
-    double d_obj__d_fv_i = d_obj__d_dice * 2.0 / (sum_v + vol_image);
-    double d_obj__d_v_i = - d_obj__d_dice * 2.0 * sum_fv / ((sum_v + vol_image) * (sum_v + vol_image));
-
-    for(auto &w : wedglets)
-      {
-      w.ComputeAdjoint(qb, qm, d_obj__d_v_i, d_obj__d_fv_i, d_obj__d_qb, d_obj__d_qm);
-      }
+    double d_obj__d_fv = d_obj__d_dice * 2.0 / (v + vol_image);
+    double d_obj__d_v = - d_obj__d_dice * 2.0 * fv / ((v + vol_image) * (v + vol_image));
+    integrator.ComputeAdjoint(qb, qm, d_obj__d_v, d_obj__d_fv, d_obj__d_qb, d_obj__d_qm);
     }
 
 private:
-  typedef Wedgelet<TFunction> WedgeletType;
-  std::vector<WedgeletType> wedglets;
+  typedef MeshFunctionVolumeIntegral<TFunction> Integrator;
+  Integrator integrator;
 
-  TFunction &func;
-
-  double vol_image, sum_v, sum_fv;
+  double v, fv, vol_image;
 };
 
 
@@ -795,28 +859,41 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
   qb.update(model->bnd_vtx);
   qm.update(model->med_vtx);
 
-  // Create dicer
-  DiceOverlapComputation<TFunction> dicer(model, 5, img_vol, tf);
+  // Dice test
+  MeshFunctionVolumeIntegral<TFunction> dicer(model, 5, 2, tf);
+
+  // Values returned by the Dice test
+  double fv, v;
+
+  // Lambda for performing dice test
+  auto dice_test = [&](double v, double fv) { return 2 * fv / (v + img_vol); };
+  // auto dice_test = [&](double v, double fv) { return v + fv; };
 
   // Compute function and gradient of fv
   double t0 = clock();
-  double dice = dicer.Compute(qb,qm);
-  printf("Dice = %12.4f computed in %12.8f ms \n", dice, (clock() - t0) * 1000 / CLOCKS_PER_SEC);
-  dicer.ComputeAdjoint(qb,qm,1.0,d_qb,d_qm);
-  printf("Dice forward + backward computed in %12.8f ms \n", (clock() - t0) * 1000 / CLOCKS_PER_SEC);
+  dicer.Compute(qb, qm, v, fv);
+  printf("Dice = %12.4f computed in %12.8f ms \n", dice_test(v, fv), (clock() - t0) * 1000 / CLOCKS_PER_SEC);
+
+  // To compute adjoint, we need the adjoint of the Dice function
+  double d_dice__d_fv = 2.0 / (v + img_vol);
+  double d_dice__d_v  = - 2.0 * fv / ((v + img_vol) * (v + img_vol));
+  dicer.ComputeAdjoint(qb,qm,d_dice__d_v,d_dice__d_fv,d_qb,d_qm);
+  printf("Dice adjoint computed in %12.8f ms \n", (clock() - t0) * 1000 / CLOCKS_PER_SEC);
 
   // Numeric differentiation
   vnl_random rndy;
-  for(int i = 0; i < 20; i++)
+  for(int i = 0; i < 50; i++)
     {
     int j = rndy.lrand32(0, y.size());
     double y_init = y[j];
 
     y[j] = y_init + eps;
-    double f1 = dicer.Compute(qb,qm);
+    dicer.Compute(qb,qm,v,fv);
+    double f1 = dice_test(v, fv);
 
     y[j] = y_init - eps;
-    double f2 = dicer.Compute(qb,qm);
+    dicer.Compute(qb,qm,v,fv);
+    double f2 = dice_test(v, fv);
 
     y[j] = y_init;
 
@@ -1014,8 +1091,10 @@ public:
     XComponents xcmp(model, x.data_block());
 
     // The initial momentum
-    xcmp.u_bnd.update((target->target_model->bnd_vtx - model->bnd_vtx) / nt, 0, 0);
-    xcmp.u_med.update((target->target_model->med_vtx - model->med_vtx) / nt, 0, 0);
+    x.fill(0.0);
+    // TODO: restore this?
+    // xcmp.u_bnd.update((target->target_model->bnd_vtx - model->bnd_vtx) / nt, 0, 0);
+    // xcmp.u_med.update((target->target_model->med_vtx - model->med_vtx) / nt, 0, 0);
 
     // Normals and radii are set to be that of initial timepoint
     for(int i = 0; i < model->nv; i++)
@@ -2146,7 +2225,7 @@ int main(int argc, char *argv[])
 
   // Initialize the Dice overlap computer
   typedef DiceOverlapComputation<ImageDiceFunction> DiceOverlapType;
-  DiceOverlapType dicer(&m_template, 5, idf.GetVolume(), idf);
+  DiceOverlapType dicer(&m_template, 5, 2, idf.GetVolume(), idf);
 
   // Define the traits for the AL objective
   typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
