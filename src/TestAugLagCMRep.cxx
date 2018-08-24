@@ -1148,29 +1148,29 @@ public:
    * point. The same applies to the Hessian - it is a matrix containing second derivatives
    * in both x and qt
    */
-  static double ComputeAugmentedLagrangianJet(
+  static double ComputeAugmentedLagrangianAndGradient(
     CMRep *model, TargetData *target, const Vector &Y, Vector &d_AL__d_Y,
-    Vector &C, Vector &lambda, double mu, HessianData *H, 
-    bool need_hessian)
+    Vector &C, Vector &lambda, double mu, HessianData *H,
+    unsigned int t, unsigned int nt)
     {
     // Break the input and output vectors into components
     YComponents Ycmp(model, const_cast<double *>(Y.data_block()));
     YComponents d_Ycmp(model, d_AL__d_Y.data_block());
 
-    // Get a reference to the Hessian of the Lagrangian
-    ImmutableSparseMatrix<double> &HL = H->HL;
-    if(need_hessian)
-      HL = H->HL_init;
+    // The objective function is only computed at the last timepoint
+    double AL = 0.0;
+    if(t == nt - 1)
+      {
+      // Initialize the outputs with the f/grad of the function f
+      AL += H->qf_F.Compute(Y, d_AL__d_Y);
 
-    // Initialize the outputs with the f/grad of the function f
-    double AL = H->qf_F.Compute(Y, d_AL__d_Y);
+      // Compute the Dice overlap
+      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
 
-    // Compute the Dice overlap
-    AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
-
-    // Compute the adjoint of the Dice overlap
-    target->image_function->ComputeAdjoint(
-      Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+      // Compute the adjoint of the Dice overlap
+      target->image_function->ComputeAdjoint(
+        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+      }
 
     // Vector containing the gradient of the constraint - to be reused
     Vector grad_Cj(Y.size(), 0.0);
@@ -1189,16 +1189,6 @@ public:
 
       // Add to the overall gradient
       d_AL__d_Y += grad_Cj * (mu * C[j] - lambda[j]);
-
-      // TODO: check that this is all correct
-      if(need_hessian)
-        {
-        // Update the Hessian of the augmented lagrangian
-        HL.AddScaledMatrix(Z.A, mu * C[j] - lambda[j]);
-
-        // Update with a scaled outer product
-        HL.AddScaledOuterProduct(grad_Cj, grad_Cj, mu);
-        }
       }
 
     return AL;
@@ -1492,8 +1482,6 @@ public:
   Vector x;
 };
 
-#ifdef __ALTEST_TIMEVARYING__
-
 template <class Traits>
 class PointMatchingWithTimeConstraintsAugLagObjective
 {
@@ -1541,6 +1529,7 @@ public:
     // There is a control (and constraints) at every time point
     u.resize(param.nt, Matrix(nvtx, 3));
     d_g__d_qt.resize(param.nt, Matrix(nvtx, 3));
+    d_g__d_ut.resize(param.nt, Matrix(nvtx, 3));
 
     // Initialize mu based on parameters
     mu = param.mu_init;
@@ -1625,54 +1614,67 @@ public:
     // Perform forward flow using the control u
     m_kinetic = ocsys->Flow(u);
 
-    // Compute the goodness of fit metric using the terminal points
-    MatrixRef q1(nvtx, 3, const_cast<double *>(ocsys->GetQt(param.nt-1).data_block()));
-    MatrixRef d_g__d_qt1(nvtx, 3, d_g__d_qt[param.nt - 1].data_block());
-    m_distsq = Traits::ComputeAugmentedLagrangianObjective(model, target, q1, d_g__d_qt1);
-
-      Y.copy_in(x.data_block() + nvar_t * t);
+    // Initialize the augmented lagrangian to zero
+    double AL = 0.0;
 
     // Compute the constraint violations
     for(int t = 0; t < param.nt; t++)
       {
+      // Place the u coefficients and the slack variables into vector Y
+      VectorRef xt(nvar_t, const_cast<double *>(x.data_block()) + nvar_t * t);
+      Y.update(xt);
+
+      // Place the coordinates qt at the end of Y
+      VectorRef qt_flat(nvtx * 3, const_cast<double *>(ocsys->GetQt(t).data_block()));
+      Y.update(qt_flat, nvar_t);
+
       // Get the references to C and lambda for the current timepoint
       VectorRef Ct(nc_t, C.data_block() + nc_t * t);
       VectorRef lambda_t(nc_t, lambda.data_block() + nc_t * t);
 
-      // Compute the constraints and gradients
-      Traits::ComputeAugmentedLagrangianConstraints(model, ocsys->GetQt(t), d_g__d_qt[t], Ct, lambda_t, mu);
+      // Compute the objective, constraints and gradients for the current timepoint
+      d_AL__d_Y.fill(0.0);
+      AL += Traits::ComputeAugmentedLagrangianAndGradient(
+        model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, t, param.nt);
+
+      // Copy the derivatives with respect to qt into the appropriate array
+      d_g__d_qt[t].update(MatrixRef(nvtx, 3, Y.data_block() + nvar_t));
+
+      // Copy the derivatives with respect to ut and slack variables into output gradient
+      if(g)
+        {
+        VectorRef gt(nvar_t, g->data_block() + nvar_t * t);
+        gt.update(VectorRef(nvar_t, Y.data_block()));
+        }
       }
 
     // Compute the contributions of the constraints to the AL objective
     m_barrier = C.squared_magnitude();
     m_lag = dot_product(C, lambda);
+    m_distsq = AL - ( (mu / 2) * m_barrier - m_lag );
 
-    // Compute total objective
-    m_total = m_kinetic * param.w_kinetic 
-      + m_distsq 
-      + (mu / 2) * m_barrier
-      - m_lag;
+    // Compute total objective with the kinetic energy
+    m_total = AL + m_kinetic * param.w_kinetic;
 
     if(f)
       *f = m_total;
 
     if(g)
       {
+      // Print status
       if(verbose)
-        {
-        printf("Mu = %8.6f  |Lam| = %8.6f  DstSq = %8.6f  Kin = %8.6f  Bar = %8.6f  Lag = %8.6f  ETot = %12.8f\n",
-          mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, m_total);
-        }
+        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total);
 
       // Flow the gradient backward
       ocsys->FlowBackward(u, d_g__d_qt, param.w_kinetic, d_g__d_ut);
 
-      // Compute the final gradient
-      unsigned int ig = 0;
+      // Update the gradient based on the backward flow
       for(int t = 0; t < param.nt; t++)
-        for(int i = 0; i < q0.rows(); i++)
-          for(int a = 0; a < 3; a++, ig++)
-            (*g)[ig] = d_g__d_ut[t](i,a);
+        {
+        VectorRef g_ut(nvtx * 3, g->data_block() + nvar_t * t);
+        VectorRef del_g_ut(nvtx * 3, d_g__d_ut[t].data_block());
+        g_ut += del_g_ut;
+        }
       }
     }
 
@@ -1686,24 +1688,38 @@ public:
 
   double Mu() const { return mu; }
 
-  void Export(const char *fn_pattern)
+  void Export(const CMRep::Vector &x, const char *fn_pattern)
     {
     // Iterate over time
     for(int t = 0; t < param.nt; t++)
       {
-      const Matrix &qt = ocsys->GetQt(t);
+      // Place the u coefficients and the slack variables into vector Y
+      VectorRef xt(nvar_t, const_cast<double *>(x.data_block()) + nvar_t * t);
+      Y.update(xt);
+
+      // Place the coordinates qt at the end of Y
+      VectorRef qt_flat(nvtx * 3, const_cast<double *>(ocsys->GetQt(t).data_block()));
+      Y.update(qt_flat, nvar_t);
+
+      // Get the references to C and lambda for the current timepoint
       VectorRef Ct(nc_t, C.data_block() + nc_t * t);
       VectorRef lambda_t(nc_t, lambda.data_block() + nc_t * t);
 
       char fn[4096];
       sprintf(fn, fn_pattern, t);
-      Traits::ExportTimepoint(model, qt, Ct, lambda_t, fn);
+      Traits::ExportTimepoint(model, Y, Ct, lambda_t, fn);
       }
     }
 
 protected:
 
-  CMRep *model, *target;
+  // The cm-rep template
+  CMRep *model;
+
+  // The data fed into the objective function
+  TargetData *target;
+
+  // Parameters of optimization
   const AugLagMedialFitParameters &param;
 
   // Number of variables per time-step and total
@@ -1713,29 +1729,32 @@ protected:
   unsigned int nc_t, nc_total;
 
   // The vector of lagrange multipliers
-  CMRep::Vector lambda, x_init;
+  CMRep::Vector C, lambda, x_init;
 
   // Inputs to the geodesic shooting
-  Matrix q0, q1, p1;
+  Matrix q0;
 
-  // Values of the constraints
-  CMRep::Vector C;
+  // Vector Y holds ut, slack variables, and qt all in a single storage
+  Vector Y, d_AL__d_Y;
 
   // The hamiltonian system
   OCSystem *ocsys;
 
+  // Hessian data
+  typename Traits::HessianData hess_data;
+
   // Matrix array used to store the control
-  OCSystem::MatrixArray u, d_g__d_qt, d_g__d_ut, d_ke__d_ut;
+  OCSystem::MatrixArray u, d_g__d_qt, d_g__d_ut;
 
   // Mu
   double mu;
 
   // Verbosity
   bool verbose;
+ 
+  // Iteration counter
+  unsigned int iter_count;
 };
-
-#endif // __ALTEST_TIMEVARYING__
-
 
 
 /**
@@ -1870,8 +1889,8 @@ public:
     d_AL__d_Y.fill(0.0);
 
     // Compute the AL and gradient
-    double AL = Traits::ComputeAugmentedLagrangianJet(
-      model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, false);
+    double AL = Traits::ComputeAugmentedLagrangianAndGradient(
+      model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, param.nt - 1, param.nt);
 
 
     // Compute the separate contributions of the constraints to the AL objective (for output)
@@ -2105,7 +2124,7 @@ public:
 
   double Mu() const { return mu; }
 
-  void Export(const char *fn_pattern)
+  void Export(const CMRep::Vector &x, const char *fn_pattern)
     {
     Vector Yt = Y;
     MatrixRef qt(nvtx, 3, Yt.data_block() + nvar_t);
@@ -2245,6 +2264,87 @@ double nlopt_vnl_func(unsigned n, const double *x, double *grad, void *my_func_d
 }
 
 
+template <class TObjective>
+void optimize_auglag(
+  TObjective &obj, const AugLagMedialFitParameters &param, double start_mu)
+{
+  // The current iterate -- start with zero momentum
+  CMRep::Vector x_opt = obj.get_xinit();
+
+  // Compute the initial value of mu using the Birgin and Martinez heuristics
+  double f_current;
+  obj.compute(x_opt, &f_current, NULL);
+  double ssq_con = obj.GetC().squared_magnitude();
+  double max_con = obj.GetC().inf_norm();
+  double mu = std::max(1e-6, std::min(10.0, 2 * fabs(f_current) / ssq_con));
+  double ICM = 1e100;
+
+  // Override initial mu...
+  mu = start_mu;
+
+  // Set the initial mu
+  obj.SetMu(mu);
+
+  // Outer iteration loop
+  for(int it = 0; it < 10; it++)
+    {
+    // Inner iteration loop
+    if(param.check_deriv)
+      DerivativeCheck(obj, x_opt, it);
+
+    // Few iterations of CGD (because NLOPT goes nuts)
+    vnl_func_wrapper<TObjective> obj_vnl(obj);
+    vnl_conjugate_gradient optimizer(obj_vnl);
+    optimizer.set_f_tolerance(1e-9);
+    optimizer.set_x_tolerance(1e-4);
+    optimizer.set_g_tolerance(1e-6);
+    optimizer.set_trace(true);
+    optimizer.set_max_function_evals(5);
+    optimizer.minimize(x_opt);
+
+    // Perform the inner optimization
+    nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
+    nlopt_set_min_objective(opt, nlopt_vnl_func, &obj_vnl);
+    nlopt_set_xtol_rel(opt, 1e-5);
+    nlopt_set_ftol_rel(opt, 1e-5);
+    nlopt_set_maxeval(opt, param.gradient_iter);
+    double f_opt;
+    int rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt);
+    switch(rc)
+      {
+    case NLOPT_SUCCESS: printf("NLOPT: Success!\n"); break;
+    case NLOPT_STOPVAL_REACHED: printf("NLOPT: Reached f_stopval!\n"); break;
+    case NLOPT_FTOL_REACHED: printf("NLOPT: Reached f_tol!\n"); break;
+    case NLOPT_XTOL_REACHED: printf("NLOPT: Reached x_tol!\n"); break;
+    case NLOPT_MAXEVAL_REACHED: printf("NLOPT: Reached max evaluations!\n"); break;
+    default: printf("nlopt failed %d!\n",rc);
+      }
+    nlopt_destroy(opt);
+
+    printf("*** End of inner iteration loop %d ***\n", it);
+
+    // Update the lambdas
+    obj.update_lambdas();
+
+    // Update the mu
+    obj.compute(x_opt, &f_current, NULL);
+    double newICM = obj.GetC().inf_norm();
+    printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", ICM, newICM);
+    if(newICM > 0.5 * ICM)
+      mu *= 10.0;
+    obj.SetMu(mu);
+    ICM = newICM;
+
+    // Export the meshes
+    char fn_dir[4096], fn_pattern[4096];
+    sprintf(fn_dir, "/tmp/testau_iter_%02d", it);
+    sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
+    vtksys::SystemTools::MakeDirectory(fn_dir);
+    obj.Export(x_opt, fn_pattern);
+    }
+}
+
+
 int main(int argc, char *argv[])
 {
   // Read the template and target meshes
@@ -2288,151 +2388,30 @@ int main(int argc, char *argv[])
   // Define the traits for the AL objective
   typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
 
+  // Set up the target data
+  TraitsType::TargetData td;
+  td.w_target_model = 0.0;
+  td.w_image_function = 100.0;
+  td.target_model = &m_target;
+  td.image_function = &dicer;
 
   if(param.interp_mode)
     {
-    /* // TIME VARYING NOT DONE YET
+    // Set up the objective function
     typedef PointMatchingWithTimeConstraintsAugLagObjective<TraitsType> ObjectiveType;
-    ObjectiveType obj(param, &m_template, &m_target);
+    ObjectiveType obj(param, &m_template, &td);
     obj.set_verbose(true);
 
-    // The current iterate -- start with zero momentum
-    CMRep::Vector x_opt = obj.get_xinit();
-
-    // Actually initialize with the distance to the target points
-
-    // Outer iteration loop
-    for(int it = 0; it < 10; it++)
-      {
-      // Inner iteration loop
-      if(param.check_deriv)
-        DerivativeCheck(obj, x_opt, it);
-      
-      // Uncomment this code to test derivative computation
-      // Create an optimization
-      vnl_lbfgsb optimizer(obj);
-      // vnl_conjugate_gradient optimizer(obj);
-      optimizer.set_f_tolerance(1e-9);
-      optimizer.set_x_tolerance(1e-4);
-      optimizer.set_g_tolerance(1e-6);
-      optimizer.set_trace(true);
-      optimizer.set_max_function_evals(param.gradient_iter);
-
-      // vnl_conjugate_gradient optimizer(cost_fn);
-      optimizer.minimize(x_opt);
-
-      // Update the lambdas
-      obj.update_lambdas();
-
-      // Update the mu
-      obj.SetMu(obj.Mu() * param.mu_scale);
-
-      // Export the meshes
-      char fn_dir[4096], fn_pattern[4096];
-      sprintf(fn_dir, "/tmp/testau_iter_%02d", it);
-      sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
-      vtksys::SystemTools::MakeDirectory(fn_dir);
-      obj.Export(fn_pattern);
-      } 
-      */
+    // Do the optimization
+    optimize_auglag(obj, param, start_mu);
     }
   else
     {
     typedef PointMatchingWithEndpointConstraintsAugLagObjective<TraitsType> ObjectiveType;
-
-    // Set up the target data
-    TraitsType::TargetData td;
-    td.w_target_model = 0.0;
-    td.w_image_function = 100.0;
-    td.target_model = &m_target;
-    td.image_function = &dicer;
-
     ObjectiveType obj(param, &m_template, &td);
     obj.set_verbose(true);
 
-    // The current iterate -- start with zero momentum
-    CMRep::Vector x_opt = obj.get_xinit();
-
-    // Compute the initial value of mu using the Birgin and Martinez heuristics
-    double f_current;
-    obj.compute(x_opt, &f_current, NULL);
-    double ssq_con = obj.GetC().squared_magnitude();
-    double max_con = obj.GetC().inf_norm();
-    double mu = std::max(1e-6, std::min(10.0, 2 * fabs(f_current) / ssq_con));
-    double ICM = 1e100;
-
-    // Override initial mu...
-    mu = start_mu;
-
-    // Set the initial mu
-    obj.SetMu(mu);
-
-    // Outer iteration loop
-    for(int it = 0; it < 10; it++)
-      {
-      // Inner iteration loop
-      if(param.check_deriv)
-        DerivativeCheck(obj, x_opt, it);
-
-      // Few iterations of CGD (because NLOPT goes nuts)
-      vnl_func_wrapper<ObjectiveType> obj_vnl(obj);
-      vnl_conjugate_gradient optimizer(obj_vnl);
-      optimizer.set_f_tolerance(1e-9);
-      optimizer.set_x_tolerance(1e-4);
-      optimizer.set_g_tolerance(1e-6);
-      optimizer.set_trace(true);
-      optimizer.set_max_function_evals(5);
-      optimizer.minimize(x_opt);
-
-      // Perform the inner optimization
-      nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
-      nlopt_set_min_objective(opt, nlopt_vnl_func, &obj_vnl);
-      nlopt_set_xtol_rel(opt, 1e-5);
-      nlopt_set_ftol_rel(opt, 1e-5);
-      nlopt_set_maxeval(opt, param.gradient_iter);
-      double f_opt;
-      int rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt);
-      switch(rc)
-        {
-      case NLOPT_SUCCESS: printf("NLOPT: Success!\n"); break;
-      case NLOPT_STOPVAL_REACHED: printf("NLOPT: Reached f_stopval!\n"); break;
-      case NLOPT_FTOL_REACHED: printf("NLOPT: Reached f_tol!\n"); break;
-      case NLOPT_XTOL_REACHED: printf("NLOPT: Reached x_tol!\n"); break;
-      case NLOPT_MAXEVAL_REACHED: printf("NLOPT: Reached max evaluations!\n"); break;
-      default:
-        printf("nlopt failed %d!\n",rc);
-        }
-      nlopt_destroy(opt);
-      
-      // Now do some iterations of Allassonniere
-      // for(int i = 0; i < param.newton_iter; i++)
-      //   obj.iter_Allassonniere(x_opt);
-      
-      printf("*** End of inner iteration loop %d ***\n", it);
-
-      // Update the lambdas
-      obj.update_lambdas();
-
-
-      // Update the mu
-      obj.compute(x_opt, &f_current, NULL);
-      double newICM = obj.GetC().inf_norm();
-      printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", ICM, newICM);
-      if(newICM > 0.5 * ICM)
-        mu *= 10.0;
-      obj.SetMu(mu);
-      ICM = newICM;
-
-      // Export the meshes
-      char fn_dir[4096], fn_pattern[4096];
-      sprintf(fn_dir, "/tmp/testau_iter_%02d", it);
-      sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
-      vtksys::SystemTools::MakeDirectory(fn_dir);
-      obj.Export(fn_pattern);
-      }
+    // Do the optimization
+    optimize_auglag(obj, param, start_mu);
     }
-
-
-  // Read the two meshes
-  // vtkSmartPointer<vtkPolyData> m_targ = ReadMesh(argv[2]);
 }
