@@ -313,8 +313,8 @@ struct AugLagMedialFitParameters
 
   // Default initializer
   AugLagMedialFitParameters() 
-    : nt(40), w_kinetic(0.05), sigma(4.0), 
-      mu_init(0.1), mu_scale(1.0), gradient_iter(1600), newton_iter(0),
+    : nt(40), w_kinetic(0.05), sigma(2.0), 
+      mu_init(1), mu_scale(1.0), gradient_iter(1600), newton_iter(0),
       interp_mode(false), check_deriv(true)  {}
 };
 
@@ -1505,11 +1505,13 @@ public:
   typedef CMRep::Vector Vector;
   typedef PointSetOptimalControlSystem<double, 3> OCSystem;
 
+  typedef typename Traits::TargetData TargetData;
+
   PointMatchingWithTimeConstraintsAugLagObjective(
-    const AugLagMedialFitParameters &in_param, CMRep *in_model, CMRep *in_target)
+    const AugLagMedialFitParameters &in_param, CMRep *in_model, TargetData *in_target)
     : model(in_model), target(in_target), param(in_param)
     {
-    // Initialize problem size
+    // Initialize problem size - include slack variables
     nvtx = Traits::GetNumberOfActiveVertices(model);
     nvar_t = nvtx * 3 + Traits::GetNumberOfSlackVariables(model);
     nvar_total = nvar_t * in_param.nt;
@@ -1519,19 +1521,25 @@ public:
     for(int t = 0; t < param.nt; t++)
       {
       VectorRef x_init_t(nvar_t, x_init.data_block() + nvar_t * t);
-      Traits::ComputeInitialization(model, target, u_init_t, param.nt);
+      Traits::ComputeInitialization(model, target, x_init_t, param.nt);
       }
+
+    // Initialize the Y vector, which will hold the input vars and the q1's
+    Y.set_size(nvar_t + nvtx * 3);
+    d_AL__d_Y.set_size(Y.size());
 
     // Initialize the initial landmarks
     q0.set_size(nvtx, 3);
     Traits::ComputeInitialLandmarks(model, q0);
+
+    // Compute constant terms of Hessian
+    Traits::PrecomputeHessianData(model, target, &hess_data);
 
     // Initialize the hamiltonian system
     ocsys = new OCSystem(q0, param.sigma, param.nt);
 
     // There is a control (and constraints) at every time point
     u.resize(param.nt, Matrix(nvtx, 3));
-    d_g__d_ut.resize(param.nt, Matrix(nvtx, 3));
     d_g__d_qt.resize(param.nt, Matrix(nvtx, 3));
 
     // Initialize mu based on parameters
@@ -1549,6 +1557,9 @@ public:
 
     // Verbosity
     verbose = false;
+
+    // Iteration counter
+    iter_count = 0;
     }
 
   /** Destructor */
@@ -1560,21 +1571,53 @@ public:
   /** Get suitable x for initialization */
   Vector get_xinit() const { return x_init; }
 
+  /** Get the current constraint values */
+  const Vector &GetC() const { return C; }
+
+  /** Reset the evaluation counter */
+  void ResetCounter() { this->iter_count = 0; }
+
   /** Get number of variables */
   unsigned int get_nvar() const { return x_init.size(); }
 
   void set_verbose(bool flag) { this->verbose = flag; }
+
+  /** Print the problem status */
+  void iter_print(unsigned int iter, 
+    double m_distsq, double m_kinetic, 
+    double m_barrier, double m_lag, double m_total)
+    {
+    // Get the details of the constraints
+    typename Traits::ConstraintDetail con_detail;
+    Traits::GetConstraintDetails(model, C, con_detail);
+
+    // Combine into a string
+    std::string con_text;
+    char con_buffer[256]; 
+    for(auto ci : con_detail)
+      {
+      sprintf(con_buffer, " |%s| = %8.4f ", ci.first.c_str(), ci.second);
+      con_text += con_buffer;
+      }
+
+    printf(
+      "Iter %05d  "
+      "Mu = %8.4f  |Lam| = %8.4f  DstSq = %8.4f  Kin = %8.4f  "
+      "Bar = %8.4f  Lag = %8.4f %s ETot = %12.8f\n",
+      iter,
+      mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
+      con_text.c_str(), m_total);
+    }
 
   /** Compute the objective function */
   virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
     {
     // TODO: this copy-in is a waste of time and space
     for(int t = 0; t < param.nt; t++)
+      {
       u[t].copy_in(x.data_block() + nvar_t * t);
-
-    // Initialize the array of objective function derivatives w.r.t. q_t
-    for(int t = 0; t < param.nt; t++)
       d_g__d_qt[t].fill(0.0);
+      }
 
     // Initialize the various components of the objective function
     double m_distsq = 0, m_kinetic = 0, m_barrier = 0, m_lag = 0, m_total = 0;
@@ -1586,6 +1629,8 @@ public:
     MatrixRef q1(nvtx, 3, const_cast<double *>(ocsys->GetQt(param.nt-1).data_block()));
     MatrixRef d_g__d_qt1(nvtx, 3, d_g__d_qt[param.nt - 1].data_block());
     m_distsq = Traits::ComputeAugmentedLagrangianObjective(model, target, q1, d_g__d_qt1);
+
+      Y.copy_in(x.data_block() + nvar_t * t);
 
     // Compute the constraint violations
     for(int t = 0; t < param.nt; t++)
