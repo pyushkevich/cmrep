@@ -328,19 +328,76 @@ struct QuadraticForm
   Vector b;
   double c;
 
+  // Sparsemat is not fast enough here because there are so many rows
+  // that are empty. Instead, we can just store a flat list of entries
+  std::vector<unsigned int> A_nz_rows;
+  Vector grad_tmp;
+
   virtual void Initialize(vnl_sparse_matrix<double> &inA, const Vector &in_b, double in_c)
     {
+    // Store the sparse matrix
     A.SetFromVNL(inA);
     b = in_b;
     c = in_c;
+
+    // Create an index of non-empty rows
+    for(unsigned int i = 0; i < inA.rows(); i++)
+      {
+      if(A.Row(i).Size() || b[i] != 0.0)
+        A_nz_rows.push_back(i);
+      }
+
+    // Initialize temporary gradient
+    grad_tmp.set_size(inA.rows());
     }
 
   /** Compute 0.5 x^t A x + b^t x + c */
   virtual double Compute(const Vector &x, Vector &gradient)
     {
-    Vector Ax = A.MultiplyByVector(x);
-    gradient = Ax + b;
-    return dot_product(x, Ax * 0.5 + b) + c;
+    // Perform fast multiplication
+    double f = c;
+    for(auto i : A_nz_rows)
+      {
+      // Compute Ax[i]
+      double Ax_i = 0.0;
+      for(auto it = A.Row(i); !it.IsAtEnd(); ++it)
+        Ax_i += it.Value() * x[it.Column()];
+
+      // Add (Ax + b)[i] to the gradient
+      gradient[i] += Ax_i + b[i];
+
+      // Add up the function value
+      f += x[i] * (Ax_i * 0.5 + b[i]);
+      }
+
+    return f;
+    }
+
+  /** Compute the gradient of AL with respect to this term */
+  virtual double ComputeAL(const Vector &x, double lambda, double mu, double &C, Vector &gradient)
+    {
+    // Perform fast multiplication
+    C = c;
+    for(auto i : A_nz_rows)
+      {
+      // Compute Ax[i]
+      double Ax_i = 0.0;
+      for(auto it = A.Row(i); !it.IsAtEnd(); ++it)
+        Ax_i += it.Value() * x[it.Column()];
+
+      // Add (Ax + b)[i] to the gradient
+      grad_tmp[i] = Ax_i + b[i];
+
+      // Add up the function value
+      C += x[i] * (Ax_i * 0.5 + b[i]);
+      }
+
+    // Compute the gradient
+    double factor = (mu * C - lambda);
+    for(auto i : A_nz_rows)
+      gradient[i] += factor * grad_tmp[i];
+
+    return C * (mu * C / 2 - lambda);
     }
 
   QuadraticForm()
@@ -1071,9 +1128,6 @@ public:
         Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
       }
 
-    // Vector containing the gradient of the constraint - to be reused
-    Vector grad_Cj(Y.size(), 0.0);
-
     // Iterate over the constraints
     for(int j = 0; j < H->qf_C.size(); j++)
       {
@@ -1081,13 +1135,7 @@ public:
       QuadraticForm &Z = H->qf_C[j];
 
       // Compute the constraint and its gradient
-      C[j] = Z.Compute(Y, grad_Cj);
-
-      // Add to the overall objective
-      AL += C[j] * (C[j] * mu / 2 - lambda[j]);
-
-      // Add to the overall gradient
-      d_AL__d_Y += grad_Cj * (mu * C[j] - lambda[j]);
+      AL += Z.ComputeAL(Y, lambda[j], mu, C[j], d_AL__d_Y);
       }
 
     return AL;
