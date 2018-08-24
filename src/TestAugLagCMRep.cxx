@@ -315,7 +315,7 @@ struct AugLagMedialFitParameters
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
       mu_init(1), mu_scale(1.0), gradient_iter(1600), newton_iter(0),
-      interp_mode(false), check_deriv(true)  {}
+      interp_mode(true), check_deriv(true)  {}
 };
 
 
@@ -916,107 +916,6 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
 
 
 /**
- * Integrate function defined in 3D over a model
-template <class TFunction>
-double DiceOverlapWithImage(
-  CMRep *model, const Matrix &qb, const Matrix &Nb, const Vector &Rm,
-  unsigned int n_wedges, unsigned int tri_div, const TFunction &func, 
-  double image_volume)
-{
-  typedef vnl_vector_fixed<double, 3> Vec3;
-
-  // Track total volume and integral of sampled function
-  double v_total = 0.0, f_total = 0.0;
-
-  // In this implementation we operate on triangles in order to have a better handle
-  // on area and less complicated derivative as well
-  for(auto tb : model->bnd_tri)
-    {
-    // Get the boundary and medial indices of the triangle vertices
-    unsigned int ib_A = tb.vertices[0],      ib_B = tb.vertices[1],      ib_C = tb.vertices[2];
-    unsigned int im_A = model->bnd_mi[ib_A], im_B = model->bnd_mi[ib_B], im_C = model->bnd_mi[ib_C]; 
-
-    // Sample along the spoke direction
-    for(unsigned int i_w = 0; i_w <= n_wedges; i_w++)
-      {
-      // How far along the normal are we
-      double l = (1.0 * i_w) / n_wedges;
-
-      // Compute the corners of the sampling triangle
-      Vec3 A = qb.get_row(ib_A) - Nb.get_row(ib_A) * (l * Rm[im_A]); 
-      Vec3 B = qb.get_row(ib_B) - Nb.get_row(ib_B) * (l * Rm[im_B]); 
-      Vec3 C = qb.get_row(ib_C) - Nb.get_row(ib_C) * (l * Rm[im_C]); 
-
-      // Compute the area of the triangle
-      double area = TriangleArea(A, B, C);
-
-      // This is a scaling factor for volume computation for this triangle
-      double w_w = (i_w == 0 || i_w == n_wedges) : 0.5 / n_wedges : 1.0 / n_wedges;
-
-      // Sample this triangle at the center. TODO: in the future, we can sample the triangle
-      // at multiple locations using different barycentric coordinates
-      Vec3 S = (A + B + C) / 3.0;
-      double R_S = (Rm[im_A] + Rm[im_B] + Rm[im_C]) / 3.0;
-
-      // Evaluate the function at S
-      double f = func.Compute(S);
-      double vol_elt = (R_S * w_w * area);
-      v_total += vol_elt;
-      f_total += vol_elt * f;
-      }
-    }
-
-  // Compute the Dice overlap
-  double dice = 2.0 * (f_total) / (v_total + image_volume);
-
-  // Backpropagate this business
-  double w_grad_f_total = 2.0 / (v_total + image_volume);
-  double w_grad_v_total = -2.0 * f_total / ((v_total + image_volume) * (v_total + image_volume));
-
-  // Same loops as before
-  for(auto tb : model->bnd_tri)
-    {
-    // Get the boundary and medial indices of the triangle vertices
-    unsigned int ib_A = tb.vertices[0],      ib_B = tb.vertices[1],      ib_C = tb.vertices[2];
-    unsigned int im_A = model->bnd_mi[ib_A], im_B = model->bnd_mi[ib_B], im_C = model->bnd_mi[ib_C]; 
-
-    // Sample along the spoke direction
-    for(unsigned int i_w = 0; i_w <= n_wedges; i_w++)
-      {
-      // How far along the normal are we
-      double l = (1.0 * i_w) / n_wedges;
-
-      // Compute the corners of the sampling triangle
-      Vec3 A = qb.get_row(ib_A) - Nb.get_row(ib_A) * (l * Rm[im_A]); 
-      Vec3 B = qb.get_row(ib_B) - Nb.get_row(ib_B) * (l * Rm[im_B]); 
-      Vec3 C = qb.get_row(ib_C) - Nb.get_row(ib_C) * (l * Rm[im_C]); 
-
-      // Compute the area of the triangle
-      double area = TriangleArea(A, B, C);
-
-      // This is a scaling factor for volume computation for this triangle
-      double w_w = (i_w == 0 || i_w == n_wedges) : 0.5 / n_wedges : 1.0 / n_wedges;
-
-      // Sample this triangle at the center. TODO: in the future, we can sample the triangle
-      // at multiple locations using different barycentric coordinates
-      Vec3 S = (A + B + C) / 3.0;
-      double R_S = (Rm[im_A] + Rm[im_B] + Rm[im_C]) / 3.0;
-
-      // Evaluate the function at S
-      double f = func.Compute(S);
-      double vol_elt = (R_S * w_w * area);
-      v_total += vol_elt;
-      f_total += vol_elt * f;
-      }
-    }
-
-
-
-}
-*/
-
-
-/**
  * Specific implementation of constraints with slack variables N and R
  */
 template <class TImageFunction>
@@ -1504,6 +1403,10 @@ public:
     nvar_t = nvtx * 3 + Traits::GetNumberOfSlackVariables(model);
     nvar_total = nvar_t * in_param.nt;
 
+    printf("Objective with time constraints\n");
+    printf("  nv = %d, nmv = %d\n", model->nv, model->nmv);
+    printf("  nvar_t = %d, nvar_total = %d\n", nvar_t, nvar_total);
+
     // Compute the initial u-vector. 
     x_init.set_size(nvar_total);
     for(int t = 0; t < param.nt; t++)
@@ -1605,7 +1508,7 @@ public:
     for(int t = 0; t < param.nt; t++)
       {
       u[t].copy_in(x.data_block() + nvar_t * t);
-      d_g__d_qt[t].fill(0.0);
+      d_g__d_ut[t].fill(0.0);
       }
 
     // Initialize the various components of the objective function
@@ -1617,16 +1520,19 @@ public:
     // Initialize the augmented lagrangian to zero
     double AL = 0.0;
 
+    // References into different parts of Y and d_AL__d_Y
+    VectorRef Y_xt(nvar_t,  Y.data_block());
+    MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
+    MatrixRef d_AL__d_Y_qt(nvtx, 3, d_AL__d_Y.data_block() + nvar_t);
+
     // Compute the constraint violations
     for(int t = 0; t < param.nt; t++)
       {
       // Place the u coefficients and the slack variables into vector Y
-      VectorRef xt(nvar_t, const_cast<double *>(x.data_block()) + nvar_t * t);
-      Y.update(xt);
+      Y_xt.copy_in(x.data_block() + nvar_t * t);
 
       // Place the coordinates qt at the end of Y
-      VectorRef qt_flat(nvtx * 3, const_cast<double *>(ocsys->GetQt(t).data_block()));
-      Y.update(qt_flat, nvar_t);
+      Y_qt.update(ocsys->GetQt(t));
 
       // Get the references to C and lambda for the current timepoint
       VectorRef Ct(nc_t, C.data_block() + nc_t * t);
@@ -1635,16 +1541,17 @@ public:
       // Compute the objective, constraints and gradients for the current timepoint
       d_AL__d_Y.fill(0.0);
       AL += Traits::ComputeAugmentedLagrangianAndGradient(
-        model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, t, param.nt);
-
-      // Copy the derivatives with respect to qt into the appropriate array
-      d_g__d_qt[t].update(MatrixRef(nvtx, 3, Y.data_block() + nvar_t));
+        model, target, Y, d_AL__d_Y, Ct, lambda_t, mu, &hess_data, t, param.nt);
 
       // Copy the derivatives with respect to ut and slack variables into output gradient
       if(g)
         {
+        // Copy the derivatives with respect to qt into the appropriate array
+        d_g__d_qt[t].update(d_AL__d_Y_qt);
+
+        // Copy the derivatives wrt u and slack to output gradient
         VectorRef gt(nvar_t, g->data_block() + nvar_t * t);
-        gt.update(VectorRef(nvar_t, Y.data_block()));
+        gt.copy_in(d_AL__d_Y.data_block());
         }
       }
 
