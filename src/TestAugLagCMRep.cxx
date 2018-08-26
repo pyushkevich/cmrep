@@ -12,6 +12,8 @@
 #include "MedialAtomGrid.h"
 #include "SubdivisionSurface.h"
 
+#include "CommandLineHelper.h"
+
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkPolyData.h>
@@ -303,7 +305,7 @@ struct AugLagMedialFitParameters
   // Schedule for mu
   double mu_init, mu_scale;
   unsigned int gradient_iter;
-  unsigned int newton_iter;
+  unsigned int al_iter;
 
   // Interpolation mode or fitting mode?
   bool interp_mode;
@@ -314,8 +316,8 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
-      mu_init(1), mu_scale(1.0), gradient_iter(6000), newton_iter(0),
-      interp_mode(true), check_deriv(true)  {}
+      mu_init(1), mu_scale(1.0), gradient_iter(6000), al_iter(10),
+      interp_mode(false), check_deriv(false)  {}
 };
 
 
@@ -2221,7 +2223,7 @@ double nlopt_vnl_func(unsigned n, const double *x, double *grad, void *my_func_d
 
 template <class TObjective>
 void optimize_auglag(
-  TObjective &obj, const AugLagMedialFitParameters &param, double start_mu)
+  TObjective &obj, const AugLagMedialFitParameters &param)
 {
   // The current iterate -- start with zero momentum
   CMRep::Vector x_opt = obj.get_xinit();
@@ -2235,13 +2237,13 @@ void optimize_auglag(
   double ICM = 1e100;
 
   // Override initial mu...
-  mu = start_mu;
+  mu = param.mu_init;
 
   // Set the initial mu
   obj.SetMu(mu);
 
   // Outer iteration loop
-  for(int it = 0; it < 10; it++)
+  for(int it = 0; it < param.al_iter; it++)
     {
     // Inner iteration loop
     if(param.check_deriv)
@@ -2301,32 +2303,110 @@ void optimize_auglag(
     }
 }
 
+int usage()
+{
+  AugLagMedialFitParameters param;
+  printf(
+    "diff_cmrep: Medial Representations with Diffeomorphic Constraints\n"
+    "Usage: \n"
+    "  diff_cmrep [options]\n"
+    "Inputs and Outputs:\n"
+    "  -m <model.vtk>     : Input template\n"
+    "  -i <image.nii>     : Target binary image to be fitted\n"
+    "  -t <target.vtk>    : Target mesh to be fitted (exclusive of -i)\n"
+    "  -o <out.vtk>       : Output medial mesh\n"
+    "Fitting Parameters:\n"
+    "  -wk <value>        : Weight of the kinetic energy term (%f)\n"
+    "  -mu <value>        : Initial value of the augmented lagrangian mu (%f)\n"
+    "  -ks <value>        : Standard deviation (mm) of Gaussian in flow kernel (%f)\n"
+    "  -n <int> <int>     : Number of aug. lag.  (%d) and inner loop (%d) iterations\n"
+    "  -t <int>           : Number of flow time steps (%d)\n"
+    "  -T                 : Flag, specifies that constraints applied at all time points.\n"
+    "                       When not set, constraints applied at endpoint of flow only.\n"
+    "Debugging Parameters:\n"
+    "  -D                 : Enable derivative checks\n",
+    param.w_kinetic, param.mu_init, param.sigma, 
+    param.al_iter, param.gradient_iter,param.nt);
+
+  return -1;
+}
+
+
 
 int main(int argc, char *argv[])
 {
   // Read the template and target meshes
   if(argc < 3)
+    return usage();
+
+  // Initialize the parameters
+  AugLagMedialFitParameters param;
+
+  // Input filenames
+  std::string fn_model, fn_target_image, fn_target_mesh, fn_output;
+
+  // Read the command-line arguments
+  CommandLineHelper cl(argc, argv);
+  while(!cl.is_at_end())
     {
-    std::cerr << "Usage: " << argv[0] << " template.vtk target.nii.gz target.vtk" << std::endl;
-    return -1;
+    std::string command = cl.read_command();
+    if(command == "-m")
+      {
+      fn_model = cl.read_existing_filename();
+      }
+    else if(command == "-i")
+      {
+      fn_target_image = cl.read_existing_filename();
+      }
+    else if(command == "-t")
+      {
+      fn_target_mesh = cl.read_existing_filename();
+      }
+    else if(command == "-o")
+      {
+      fn_output = cl.read_existing_filename();
+      }
+    else if(command == "-wk")
+      {
+      param.w_kinetic = cl.read_double();
+      }
+    else if(command == "-mu")
+      {
+      param.mu_init = cl.read_double();
+      }
+    else if(command == "-ks")
+      {
+      param.sigma = cl.read_double();
+      }
+    else if(command == "-n")
+      {
+      param.al_iter = cl.read_integer();
+      param.gradient_iter = cl.read_integer();
+      }
+    else if(command == "-t")
+      {
+      param.nt = cl.read_integer();
+      }
+    else if(command == "-T")
+      {
+      param.interp_mode = true;
+      }
+    else if(command == "-D")
+      {
+      param.check_deriv = true;
+      }
     }
 
   // Read the template mesh
   CMRep m_template;
-  m_template.ReadVTK(argv[1]);
+  m_template.ReadVTK(fn_model.c_str());
 
   // Read the target image file
-  ImageDiceFunction idf(argv[2], 0.2);
+  ImageDiceFunction idf(fn_target_image.c_str(), 0.2);
 
-  // Reat the target mesh
+  // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
-  m_target.ReadVTK(argv[3]);
-
-  // The starting mu
-  double start_mu = atof(argv[4]);
-
-  // Time to set up the objective function
-  AugLagMedialFitParameters param;
+  m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str());
 
   if(param.check_deriv)
     {
@@ -2360,7 +2440,7 @@ int main(int argc, char *argv[])
     obj.set_verbose(true);
 
     // Do the optimization
-    optimize_auglag(obj, param, start_mu);
+    optimize_auglag(obj, param);
     }
   else
     {
@@ -2369,6 +2449,6 @@ int main(int argc, char *argv[])
     obj.set_verbose(true);
 
     // Do the optimization
-    optimize_auglag(obj, param, start_mu);
+    optimize_auglag(obj, param);
     }
 }
