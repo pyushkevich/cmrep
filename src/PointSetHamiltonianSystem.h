@@ -6,6 +6,8 @@
 #include <vnl/vnl_vector_fixed.h>
 #include <vector>
 
+namespace ctpl { class thread_pool; }
+
 template <class TFloat, unsigned int VDim>
 class PointSetHamiltonianSystem
 {
@@ -30,6 +32,8 @@ public:
     const Matrix &q0, 
     TFloat sigma,
     unsigned int N);
+
+  ~PointSetHamiltonianSystem();
 
   /** 
    * Get the number of time steps
@@ -176,6 +180,9 @@ protected:
   // Data associated with each thread
   std::vector<ThreadData> td;
 
+  // A thread pool to handle execution
+  ctpl::thread_pool *thread_pool;
+
   // Hessian of the Hamiltonian components: Hqq, Hqp, Hpp
   // matrices Hqq and Hpp are symmetric
   Matrix Hqq[VDim][VDim], Hqp[VDim][VDim], Hpp[VDim][VDim];
@@ -187,9 +194,9 @@ protected:
   void SetupMultiThreaded();
 
   // Multi-threaded worker functions
-  void ComputeHamiltonianAndGradientThreadedWorker(const Matrix *q, const Matrix *p, unsigned int id); 
+  void ComputeHamiltonianAndGradientThreadedWorker(const Matrix *q, const Matrix *p, ThreadData *tdi);
   void ApplyHamiltonianHessianToAlphaBetaThreadedWorker(
-    const Matrix *q, const Matrix *p, const Vector alpha[], const Vector beta[], unsigned int id);
+    const Matrix *q, const Matrix *p, const Vector alpha[], const Vector beta[], ThreadData *tdi);
 
 
 };

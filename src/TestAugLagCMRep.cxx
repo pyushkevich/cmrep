@@ -314,7 +314,7 @@ struct AugLagMedialFitParameters
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
-      mu_init(1), mu_scale(1.0), gradient_iter(1600), newton_iter(0),
+      mu_init(1), mu_scale(1.0), gradient_iter(6000), newton_iter(0),
       interp_mode(true), check_deriv(true)  {}
 };
 
@@ -2258,6 +2258,7 @@ void optimize_auglag(
     optimizer.minimize(x_opt);
 
     // Perform the inner optimization
+    double t_start = clock();
     nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
     nlopt_set_min_objective(opt, nlopt_vnl_func, &obj_vnl);
     nlopt_set_xtol_rel(opt, 1e-5);
@@ -2277,6 +2278,7 @@ void optimize_auglag(
     nlopt_destroy(opt);
 
     printf("*** End of inner iteration loop %d ***\n", it);
+    printf("Elapsed time %12.8f seconds\n", (clock() - t_start) / CLOCKS_PER_SEC);
 
     // Update the lambdas
     obj.update_lambdas();

@@ -6,6 +6,8 @@
 #include <vnl/vnl_vector_fixed.h>
 #include <vector>
 
+namespace ctpl { class thread_pool; }
+
 template <class TFloat, unsigned int VDim>
 class PointSetOptimalControlSystem
 {
@@ -87,6 +89,31 @@ protected:
 
   // Streamlines - paths of the landmarks over time
   std::vector<Matrix> Qt;
+
+    // Multi-threaded quantities
+  struct ThreadData 
+    {
+    // List of rows handled by this thread
+    std::vector<unsigned int> rows;
+    TFloat KE;
+    Vector d_q__d_t[VDim];
+    Vector alpha_U[VDim], alpha_Q[VDim];
+    };
+
+  // Data associated with each thread
+  std::vector<ThreadData> td;
+
+  // A thread pool to handle execution
+  ctpl::thread_pool *thread_pool;
+
+  void SetupMultiThreaded();
+
+  void ComputeEnergyAndVelocityThreadedWorker(
+    const Matrix &q, const Matrix &u, ThreadData *tdi);
+
+  void PropagateAlphaBackwardsThreadedWorker(
+    const Matrix &q, const Matrix &u, 
+    const Vector alpha[], ThreadData *tdi);
 };
 
 

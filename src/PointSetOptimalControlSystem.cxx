@@ -1,6 +1,8 @@
 #include "PointSetOptimalControlSystem.h"
 #include <vnl/vnl_fastops.h>
 #include <iostream>
+#include "ctpl_stl.h"
+#include "exp_approx.h"
 
 template <class TFloat, unsigned int VDim>
 PointSetOptimalControlSystem<TFloat, VDim>
@@ -17,7 +19,48 @@ PointSetOptimalControlSystem<TFloat, VDim>
   // Allocate H derivatives
   for(unsigned int a = 0; a < VDim; a++)
     this->d_q__d_t[a].set_size(k);
+
+  // Set up thread data
+  this->SetupMultiThreaded();
 }
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetOptimalControlSystem<TFloat, VDim>
+::SetupMultiThreaded()
+{
+  unsigned int n_threads = std::thread::hardware_concurrency();
+  td.resize(n_threads);
+
+  // Create the thread pool
+  thread_pool = new ctpl::thread_pool(n_threads);
+ 
+  // Assign lines in pairs, one at the top of the symmetric matrix K and
+  // one at the bottom of K. The loop below will not assign the middle
+  // line when there is an odd number of points (e.g., line 7 when there are 15)
+  for(int i = 0; i < k/2; i++)
+    {
+    int i_thread = i % n_threads;
+    td[i_thread].rows.push_back(i);
+    td[i_thread].rows.push_back((k-1) - i);
+    }
+
+  // Handle the middle line for odd number of vertices
+  if(k % 2 == 1)
+    td[(k / 2) % n_threads].rows.push_back(k/2);
+
+  // Allocate the per-thread arrays
+  for(int i = 0; i < n_threads; i++)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      td[i].d_q__d_t[a] = Vector(k, 0.0);
+      td[i].alpha_U[a] = Vector(k, 0.0);
+      td[i].alpha_Q[a] = Vector(k, 0.0);
+      }
+    }
+}
+
 
 
 template <class TFloat, unsigned int VDim>
@@ -25,20 +68,55 @@ TFloat
 PointSetOptimalControlSystem<TFloat, VDim>
 ::ComputeEnergyAndVelocity(const Matrix &q, const Matrix &u)
 {
+  // Submit the jobs to thread pool
+  std::vector<std::future<void>> futures;
+  for(auto &tdi : td)
+    {
+    futures.push_back(
+      thread_pool->push(
+        [&](int id) { this->ComputeEnergyAndVelocityThreadedWorker(q, u, &tdi); }));
+    }
+
+  // Wait for completion
+  for(auto &f : futures)
+    f.get();
+
+  // Compile the results
+  TFloat KE = 0.0;
+  for(int a = 0; a < VDim; a++)
+    this->d_q__d_t[a].fill(0.0);
+
+  for(auto &tdi : td)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      this->d_q__d_t[a] += tdi.d_q__d_t[a];
+      }
+    KE += tdi.KE;
+    }
+
+  return KE;
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetOptimalControlSystem<TFloat, VDim>
+::ComputeEnergyAndVelocityThreadedWorker(const Matrix &q, const Matrix &u, ThreadData *tdi)
+{
   // Gaussian factor, i.e., K(z) = exp(f * z)
   TFloat f = -0.5 / (sigma * sigma);
 
   // Initialize the velocity vector to zero
   for(unsigned int a = 0; a < VDim; a++)
     {
-    this->d_q__d_t[a].fill(0.0);
+    tdi->d_q__d_t[a].fill(0.0);
     }
 
   // Initialize the kinetic energy
-  TFloat KE = 0.0;
+  tdi->KE = 0.0;
 
   // Loop over all points
-  for(unsigned int i = 0; i < k; i++)
+  for(unsigned int i : tdi->rows)
     {
     // Get a pointer to pi for faster access?
     const TFloat *ui = u.data_array()[i], *qi = q.data_array()[i];
@@ -46,12 +124,11 @@ PointSetOptimalControlSystem<TFloat, VDim>
     // The diagonal terms
     for(unsigned int a = 0; a < VDim; a++)
       {
-      KE += 0.5 * ui[a] * ui[a];
-      d_q__d_t[a](i) += ui[a];
+      tdi->KE += 0.5 * ui[a] * ui[a];
+      tdi->d_q__d_t[a](i) += ui[a];
       }
 
     // Perform symmetric computation
-    #pragma omp parallel for
     for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *uj = u.data_array()[j], *qj = q.data_array()[j];
@@ -70,22 +147,20 @@ PointSetOptimalControlSystem<TFloat, VDim>
         }
 
       // Compute the Gaussian and its derivatives
-      TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      TFloat g = exp_approx(dq.squared_magnitude(), f);
 
       // Accumulate the Hamiltonian
-      KE += ui_uj * g;
+      tdi->KE += ui_uj * g;
 
       // Accumulate the derivatives
       for(unsigned int a = 0; a < VDim; a++)
         {
         // First derivatives
-        d_q__d_t[a](i) += g * uj[a];
-        d_q__d_t[a](j) += g * ui[a];
+        tdi->d_q__d_t[a](i) += g * uj[a];
+        tdi->d_q__d_t[a](j) += g * ui[a];
         }
       } // loop over j
     } // loop over i
-
-  return KE;
 }
 
 
@@ -157,23 +232,57 @@ PointSetOptimalControlSystem<TFloat, VDim>
     const Matrix &q, const Matrix &u,
     const Vector alpha[], 
     Vector alpha_Q[], Vector alpha_U[])
+{ 
+  // Submit the jobs to thread pool
+  std::vector<std::future<void>> futures;
+  for(auto &tdi : td)
+    {
+    futures.push_back(
+      thread_pool->push(
+        [&](int id) { this->PropagateAlphaBackwardsThreadedWorker(q, u, alpha, &tdi); }));
+    }
+
+  // Wait for completion
+  for(auto &f : futures)
+    f.get();
+
+  // Compile the results
+  for(int a = 0; a < VDim; a++)
+    {
+    alpha_Q[a].fill(0.0);
+    alpha_U[a] = alpha[a];
+    }
+
+  for(auto &tdi : td)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      alpha_Q[a] += tdi.alpha_Q[a];
+      alpha_U[a] += tdi.alpha_U[a];
+      }
+    }
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetOptimalControlSystem<TFloat, VDim>
+::PropagateAlphaBackwardsThreadedWorker(
+    const Matrix &q, const Matrix &u,
+    const Vector alpha[], ThreadData *tdi)
 {
   TFloat f = -0.5 / (sigma * sigma);
 
   for(int a = 0; a < VDim; a++)
     {
-    alpha_Q[a].fill(0.0);
-
-    // We must account for the diagonal term
-    alpha_U[a] = alpha[a];
+    tdi->alpha_Q[a].fill(0.0);
+    tdi->alpha_U[a].fill(0.0);
     }
 
-  for(unsigned int i = 0; i < k; i++)
+  for(unsigned int i : tdi->rows)
     {
     // Get a pointer to pi for faster access?
     const TFloat *ui = u.data_array()[i], *qi = q.data_array()[i];
 
-    #pragma omp parallel for
     for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *uj = u.data_array()[j], *qj = q.data_array()[j];
@@ -188,7 +297,8 @@ PointSetOptimalControlSystem<TFloat, VDim>
         }
 
       // Compute the Gaussian and its derivatives
-      TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g;
+      TFloat g, g1;
+      g = exp_approx(dq.squared_magnitude(), f, g1);
 
       // Accumulate the derivatives
       for(unsigned int a = 0; a < VDim; a++)
@@ -201,11 +311,11 @@ PointSetOptimalControlSystem<TFloat, VDim>
           alpha_j_ui_plus_alpha_i_uj += alpha[b][j] * ui[b] + alpha[b][i] * uj[b];
           }
 
-        alpha_Q[a][i] += term_2_g1_dqa * alpha_j_ui_plus_alpha_i_uj;
-        alpha_Q[a][j] -= term_2_g1_dqa * alpha_j_ui_plus_alpha_i_uj;
+        tdi->alpha_Q[a][i] += term_2_g1_dqa * alpha_j_ui_plus_alpha_i_uj;
+        tdi->alpha_Q[a][j] -= term_2_g1_dqa * alpha_j_ui_plus_alpha_i_uj;
 
-        alpha_U[a][i] += g * alpha[a][j];
-        alpha_U[a][j] += g * alpha[a][i];
+        tdi->alpha_U[a][i] += g * alpha[a][j];
+        tdi->alpha_U[a][j] += g * alpha[a][i];
         }
       } // loop over j
     } // loop over i}
