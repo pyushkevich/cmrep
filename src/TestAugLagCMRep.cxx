@@ -307,6 +307,9 @@ struct AugLagMedialFitParameters
   unsigned int gradient_iter;
   unsigned int al_iter;
 
+  // Optimizer tolerances
+  double bfgs_ftol, al_max_con;
+
   // Interpolation mode or fitting mode?
   bool interp_mode;
 
@@ -317,6 +320,7 @@ struct AugLagMedialFitParameters
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
       mu_init(1), mu_scale(1.0), gradient_iter(6000), al_iter(10),
+      bfgs_ftol(1e-5), al_max_con(1e-4),
       interp_mode(false), check_deriv(false)  {}
 };
 
@@ -1075,6 +1079,26 @@ public:
       }
     }
 
+  // Return a vector of bounds on the optimization variables
+  static void ComputeBounds(CMRep *model, Vector &lb, Vector &ub)
+    {
+    // Break up into components
+    XComponents c_lb(model, lb.data_block()), c_ub(model, ub.data_block());
+
+    // Some reasonable 'big value'
+    const double BIGVAL = 1e6;
+
+    // For the momenta there are no really sensible values to set, just want them to be finite
+    c_lb.u_bnd.fill(-BIGVAL); c_ub.u_bnd.fill(BIGVAL);
+    c_lb.u_med.fill(-BIGVAL); c_ub.u_med.fill(BIGVAL);
+
+    // For the normal, it can be constrained within (-1 to 1) for all components
+    c_lb.N_bnd.fill(-1.0); c_ub.N_bnd.fill(1.0);
+
+    // For the radius, can be constrained to be positive
+    c_lb.R_med.fill(0.0); c_ub.R_med.fill(BIGVAL);
+    }
+
   static void ComputeInitialLandmarks(CMRep *model, Matrix &q0)
     {
     q0.update(model->bnd_vtx, 0, 0);
@@ -1330,10 +1354,10 @@ public:
     MatrixRef Ct_N(model->nv, 3, pc);   pc += Ct_N.size();
     MatrixRef Ct_Spk(model->nv, 3, pc); pc += Ct_Spk.size();
 
-    UpdateConstraintDetail(con_info, "C_NrmOrth", Ct_N.get_column(0).inf_norm());
-    UpdateConstraintDetail(con_info, "C_NrmOrth", Ct_N.get_column(1).inf_norm());
-    UpdateConstraintDetail(con_info, "C_NrmUnit", Ct_N.get_column(2).inf_norm());
-    UpdateConstraintDetail(con_info, "C_Spk", Ct_Spk.absolute_value_max());
+    UpdateConstraintDetail(con_info, "C_NO", Ct_N.get_column(0).inf_norm());
+    UpdateConstraintDetail(con_info, "C_NO", Ct_N.get_column(1).inf_norm());
+    UpdateConstraintDetail(con_info, "C_NU", Ct_N.get_column(2).inf_norm());
+    UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.absolute_value_max());
     }
 
 
@@ -1457,12 +1481,17 @@ public:
     printf("  nv = %d, nmv = %d\n", model->nv, model->nmv);
     printf("  nvar_t = %d, nvar_total = %d\n", nvar_t, nvar_total);
 
-    // Compute the initial u-vector. 
+    // Compute the initial u-vector and the bounds;
     x_init.set_size(nvar_total);
+    x_lb.set_size(nvar_total); x_ub.set_size(nvar_total);
     for(int t = 0; t < param.nt; t++)
       {
       VectorRef x_init_t(nvar_t, x_init.data_block() + nvar_t * t);
       Traits::ComputeInitialization(model, target, x_init_t, param.nt);
+
+      VectorRef x_lb_t(nvar_t, x_lb.data_block() + nvar_t * t);
+      VectorRef x_ub_t(nvar_t, x_ub.data_block() + nvar_t * t);
+      Traits::ComputeBounds(model, x_lb_t, x_ub_t);
       }
 
     // Initialize the Y vector, which will hold the input vars and the q1's
@@ -1513,6 +1542,12 @@ public:
   /** Get suitable x for initialization */
   Vector get_xinit() const { return x_init; }
 
+  /** Get the lower bounds for x */
+  Vector get_xlb() const { return x_lb; }
+
+  /** Get the upper bounds for x */
+  Vector get_xub() const { return x_ub; }
+
   /** Get the current constraint values */
   const Vector &GetC() const { return C; }
 
@@ -1527,28 +1562,41 @@ public:
   /** Print the problem status */
   void iter_print(unsigned int iter, 
     double m_distsq, double m_kinetic, 
-    double m_barrier, double m_lag, double m_total)
+    double m_barrier, double m_lag, double m_total, double norm_g)
     {
-    // Get the details of the constraints
+    // We need to pool constraint details over timesteps
     typename Traits::ConstraintDetail con_detail;
-    Traits::GetConstraintDetails(model, C, con_detail);
+    for(unsigned int t = 0; t < param.nt; t++)
+      {
+      // Get the reference to the constraints
+      VectorRef Ct(nc_t, C.data_block() + t * nc_t);
+
+      // Get the details of the constraints
+      typename Traits::ConstraintDetail con_detail_t;
+      Traits::GetConstraintDetails(model, Ct, con_detail_t);
+      if(t == 0)
+        con_detail = con_detail_t;
+      else
+        for(int i = 0; i < con_detail.size(); i++)
+          con_detail[i].second = std::max(con_detail[i].second, con_detail_t[i].second);
+      }
 
     // Combine into a string
     std::string con_text;
     char con_buffer[256]; 
     for(auto ci : con_detail)
       {
-      sprintf(con_buffer, " |%s| = %8.4f ", ci.first.c_str(), ci.second);
+      sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
       con_text += con_buffer;
       }
 
     printf(
-      "Iter %05d  "
-      "Mu = %8.4f  |Lam| = %8.4f  DstSq = %8.4f  Kin = %8.4f  "
-      "Bar = %8.4f  Lag = %8.4f %s ETot = %12.8f\n",
+      "It %-5d "
+      "\u03BC=%6.2f |\u03BB|=%6.2f Obj=%8.4f KE=%8.4f "
+      "Bar=%8.4f Lag=%8.4f%s E=%8.4f |\u2207|=%8.4f\n",
       iter,
       mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
-      con_text.c_str(), m_total);
+      con_text.c_str(), m_total, norm_g);
     }
 
   /** Compute the objective function */
@@ -1618,10 +1666,6 @@ public:
 
     if(g)
       {
-      // Print status
-      if(verbose)
-        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total);
-
       // Flow the gradient backward
       ocsys->FlowBackward(u, d_g__d_qt, param.w_kinetic, d_g__d_ut);
 
@@ -1632,6 +1676,10 @@ public:
         VectorRef del_g_ut(nvtx * 3, d_g__d_ut[t].data_block());
         g_ut += del_g_ut;
         }
+
+      // Print status
+      if(verbose)
+        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm());
       }
     }
 
@@ -1686,7 +1734,7 @@ protected:
   unsigned int nc_t, nc_total;
 
   // The vector of lagrange multipliers
-  CMRep::Vector C, lambda, x_init;
+  CMRep::Vector C, lambda, x_init, x_lb, x_ub;
 
   // Inputs to the geodesic shooting
   Matrix q0;
@@ -1742,6 +1790,10 @@ public:
     x_init.set_size(nvar_t);
     Traits::ComputeInitialization(model, target, x_init, param.nt);
 
+    // Compute the bounds
+    x_lb.set_size(nvar_t); x_ub.set_size(nvar_t);
+    Traits::ComputeBounds(model, x_lb, x_ub);
+
     // Initialize the Y vector, which will hold the input vars and the q1's
     Y.set_size(nvar_t + nvtx * 3);
     d_AL__d_Y.set_size(Y.size());
@@ -1787,6 +1839,12 @@ public:
   /** Get suitable x for initialization */
   Vector get_xinit() const { return x_init; }
 
+  /** Get the lower bounds for x */
+  Vector get_xlb() const { return x_lb; }
+
+  /** Get the upper bounds for x */
+  Vector get_xub() const { return x_ub; }
+
   /** Get the current constraint values */
   const Vector &GetC() const { return C; }
 
@@ -1801,7 +1859,8 @@ public:
   /** Print the problem status */
   void iter_print(unsigned int iter, 
     double m_distsq, double m_kinetic, 
-    double m_barrier, double m_lag, double m_total)
+    double m_barrier, double m_lag, double m_total, 
+    double norm_g)
     {
     // Get the details of the constraints
     typename Traits::ConstraintDetail con_detail;
@@ -1812,17 +1871,17 @@ public:
     char con_buffer[256]; 
     for(auto ci : con_detail)
       {
-      sprintf(con_buffer, " |%s| = %8.4f ", ci.first.c_str(), ci.second);
+      sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
       con_text += con_buffer;
       }
 
     printf(
-      "Iter %05d  "
-      "Mu = %8.4f  |Lam| = %8.4f  DstSq = %8.4f  Kin = %8.4f  "
-      "Bar = %8.4f  Lag = %8.4f %s ETot = %12.8f\n",
+      "It %-5d "
+      "\u03BC=%6.2f |\u03BB|=%6.2f Obj=%8.4f KE=%8.4f "
+      "Bar=%8.4f Lag=%8.4f%s E=%8.4f |\u2207|=%8.4f\n",
       iter,
       mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
-      con_text.c_str(), m_total);
+      con_text.c_str(), m_total, norm_g);
     }
 
 
@@ -1863,9 +1922,6 @@ public:
 
     if(g)
       {
-      // Print status
-      if(verbose)
-        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total);
 
       // Before
       // std::cout << "d_AL__d_Y[0]: " << std::endl << d_AL__d_Y << std::endl;
@@ -1892,6 +1948,11 @@ public:
 
       // Place the final gradient into g
       g->copy_in(d_AL__d_Y.data_block());
+
+      // Print status
+      if(verbose)
+        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm());
+
       }
     }
 
@@ -2120,10 +2181,13 @@ protected:
   unsigned int iter_count;
 
   // The vector of lagrange multipliers
-  CMRep::Vector lambda, x_init;
+  Vector lambda;
+ 
+  // Vector of initial values and bounds
+  Vector x_init, x_lb, x_ub;
 
   // Values of the constraints
-  CMRep::Vector C;
+  Vector C;
 
   // The hamiltonian system
   HSystem *hsys;
@@ -2228,6 +2292,9 @@ void optimize_auglag(
   // The current iterate -- start with zero momentum
   CMRep::Vector x_opt = obj.get_xinit();
 
+  // Also obtain the bounds of the optimization
+  CMRep::Vector x_lb = obj.get_xlb(), x_ub = obj.get_xub();
+
   // Compute the initial value of mu using the Birgin and Martinez heuristics
   double f_current;
   obj.compute(x_opt, &f_current, NULL);
@@ -2251,6 +2318,7 @@ void optimize_auglag(
 
     // Few iterations of CGD (because NLOPT goes nuts)
     vnl_func_wrapper<TObjective> obj_vnl(obj);
+    /*
     vnl_conjugate_gradient optimizer(obj_vnl);
     optimizer.set_f_tolerance(1e-9);
     optimizer.set_x_tolerance(1e-4);
@@ -2258,14 +2326,20 @@ void optimize_auglag(
     optimizer.set_trace(true);
     optimizer.set_max_function_evals(5);
     optimizer.minimize(x_opt);
+    */
 
     // Perform the inner optimization
     double t_start = clock();
     nlopt_opt opt = nlopt_create(NLOPT_LD_LBFGS, x_opt.size());
     nlopt_set_min_objective(opt, nlopt_vnl_func, &obj_vnl);
     nlopt_set_xtol_rel(opt, 1e-5);
-    nlopt_set_ftol_rel(opt, 1e-5);
+    nlopt_set_ftol_rel(opt, param.bfgs_ftol);
     nlopt_set_maxeval(opt, param.gradient_iter);
+
+    // Set the bounds
+    nlopt_set_lower_bounds(opt, x_lb.data_block());
+    nlopt_set_upper_bounds(opt, x_ub.data_block());
+
     double f_opt;
     int rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt);
     switch(rc)
@@ -2289,6 +2363,7 @@ void optimize_auglag(
     obj.compute(x_opt, &f_current, NULL);
     double newICM = obj.GetC().inf_norm();
     printf("Constraint one-norm [before] : %12.4f  [after]: %12.4f\n", ICM, newICM);
+
     if(newICM > 0.5 * ICM)
       mu *= 10.0;
     obj.SetMu(mu);
@@ -2300,6 +2375,13 @@ void optimize_auglag(
     sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
     vtksys::SystemTools::MakeDirectory(fn_dir);
     obj.Export(x_opt, fn_pattern);
+
+    // If the constraint norm is below threshold, terminate
+    if(ICM < param.al_max_con)
+      {
+      printf("Termination condition for Aug. Lag. reached\n");
+      return;
+      }
     }
 }
 
@@ -2319,14 +2401,19 @@ int usage()
     "  -wk <value>        : Weight of the kinetic energy term (%f)\n"
     "  -mu <value>        : Initial value of the augmented lagrangian mu (%f)\n"
     "  -ks <value>        : Standard deviation (mm) of Gaussian in flow kernel (%f)\n"
-    "  -n <int> <int>     : Number of aug. lag.  (%d) and inner loop (%d) iterations\n"
+    "  -n <int> <int>     : Number of aug. lag.  (%d) and inner BFGS (%d) iterations\n"
     "  -t <int>           : Number of flow time steps (%d)\n"
     "  -T                 : Flag, specifies that constraints applied at all time points.\n"
     "                       When not set, constraints applied at endpoint of flow only.\n"
+    "  -ftol <value>      : Relative function tolerance for BFGS (%f).\n"
+    "  -cmax <value>      : Aug. lag. termination condition - stop when max constraint\n"
+    "                       violation is below this value (%f)\n"
     "Debugging Parameters:\n"
     "  -D                 : Enable derivative checks\n",
     param.w_kinetic, param.mu_init, param.sigma, 
-    param.al_iter, param.gradient_iter,param.nt);
+    param.al_iter, param.gradient_iter,param.nt,
+    param.bfgs_ftol, param.al_max_con
+    );
 
   return -1;
 }
@@ -2390,6 +2477,14 @@ int main(int argc, char *argv[])
     else if(command == "-T")
       {
       param.interp_mode = true;
+      }
+    else if(command == "-ftol")
+      {
+      param.bfgs_ftol = cl.read_double();
+      }
+    else if(command == "-cmax")
+      {
+      param.al_max_con = cl.read_double();
       }
     else if(command == "-D")
       {
