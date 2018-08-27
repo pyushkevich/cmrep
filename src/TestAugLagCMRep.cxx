@@ -313,6 +313,9 @@ struct AugLagMedialFitParameters
   // Interpolation mode or fitting mode?
   bool interp_mode;
 
+  // Use slack variables
+  bool use_slack;
+
   // Do we do derivative checks?
   bool check_deriv;
 
@@ -321,7 +324,7 @@ struct AugLagMedialFitParameters
     : nt(40), w_kinetic(0.05), sigma(2.0), 
       mu_init(1), mu_scale(1.0), gradient_iter(6000), al_iter(10),
       bfgs_ftol(1e-5), al_max_con(1e-4),
-      interp_mode(false), check_deriv(false)  {}
+      interp_mode(false), check_deriv(false), use_slack(true)  {}
 };
 
 
@@ -1425,6 +1428,432 @@ public:
     }
 };
 
+
+
+
+/**
+ * Specific implementation of constraints without slack variables
+ */
+template <class TImageFunction>
+class PointBasedMediallyConstrainedWithoutSlackFittingTraits
+{
+public:
+  typedef vnl_vector<double> Vector;
+  typedef vnl_matrix<double> Matrix;
+  typedef vnl_vector<unsigned int> IdxVector;
+  typedef vnl_matrix<unsigned int> IdxMatrix;
+  typedef vnl_matrix_ref<double> MatrixRef;
+  typedef vnl_vector_ref<double> VectorRef;
+
+  // Target data represents terms that attract the model
+  struct TargetData
+    {
+    CMRep *target_model;
+    TImageFunction *image_function;
+    double w_target_model, w_image_function;
+    };
+
+  // Components of the variable vector (X)
+  struct XComponents
+    {
+    MatrixRef u_bnd, u_med;
+
+    XComponents(CMRep *model, double *p) :
+      u_bnd(model->nv,  3,  p),
+      u_med(model->nmv, 3,  p + model->nv * 3) {}
+    };
+
+  // Components of the variable + Q vector (Y)
+  struct YComponents : public XComponents
+    {
+    MatrixRef q_bnd, q_med;
+
+    YComponents(CMRep *model, double *p) :
+      XComponents(model, p),
+      q_bnd(model->nv,  3,  p + model->nv * 3 + model->nmv * 3),
+      q_med(model->nmv, 3,  p + model->nv * 6 + model->nmv * 3) {}
+    };
+
+  // Get the number of vertices controling diffeomorphic transformation
+  static int GetNumberOfActiveVertices(CMRep *model)
+    {
+    return (model->nv + model->nmv);
+    }
+
+  // Get the number of slack variables at a given timepoint. These are variables
+  // involved in optimization but not active vertices in geodesic shooting
+  static int GetNumberOfSlackVariables(CMRep *model)
+    {
+    // For each boundary vertex, we have N (3-vector) and for each medial vertex we have R
+    return 0;
+    }
+
+  // Among all optimization variables, copy the momenta of active vertices into
+  // the vector p.
+  static void GetActiveVertexMomenta(CMRep *model, const Vector &x, unsigned int t, Vector &p)
+    {
+    unsigned int nvar_t = GetNumberOfActiveVertices(model) * 3 + GetNumberOfSlackVariables(model);
+    p.copy_in(x.data_block() + nvar_t * t);
+    }
+
+  static int GetNumberOfConstraintsPerTimepoint(CMRep *model)
+    {
+    // The constraint set:
+    //   - normal orthogonal to the boundary surface (2 * nv_b)
+    //   - normal has unit length (nv_b)
+    //   - M + normal * R = B (3 * nv_b)
+    int nc_t = 2 * model->nv;
+    for(int j = 0; j < model->med_bi.size(); j++)
+      nc_t += model->med_bi[j].size() - 1;
+    return nc_t;
+    }
+
+  // Initialize the optimization variable for a timepoint. The input vector x contains the 
+  // variables for just the current timepoint
+  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt)
+    {
+    // Set the initial control to zero
+    x.fill(0.0);
+    }
+
+  // Return a vector of bounds on the optimization variables
+  static void ComputeBounds(CMRep *model, Vector &lb, Vector &ub)
+    {
+    // Break up into components
+    XComponents c_lb(model, lb.data_block()), c_ub(model, ub.data_block());
+
+    // Some reasonable 'big value'
+    const double BIGVAL = 1e6;
+
+    // For the momenta there are no really sensible values to set, just want them to be finite
+    c_lb.u_bnd.fill(-BIGVAL); c_ub.u_bnd.fill(BIGVAL);
+    c_lb.u_med.fill(-BIGVAL); c_ub.u_med.fill(BIGVAL);
+    }
+
+  static void ComputeInitialLandmarks(CMRep *model, Matrix &q0)
+    {
+    q0.update(model->bnd_vtx, 0, 0);
+    q0.update(model->med_vtx, model->nv, 0);
+    }
+
+  // In this problem, the objective and the constraints have the quadratic form
+  //     x^t * A * x + b^t * x + c
+  // with very sparse A and b
+  //
+  // This data structure holds the A, b and c for the main objective and the constraints
+  struct HessianData 
+    {
+    // Quadratic parameters of each of the constraints
+    std::vector<QuadraticForm> qf_C;
+
+    // Quadratic parameters of the objective function
+    SymmetricQuadraticForm qf_F;
+
+    // Hessian of the augmented lagrangian (cached for computations)
+    ImmutableSparseMatrix<double> HL_init, HL;
+    };
+
+
+  /** 
+   * Compute the Augmented Lagrangian and its derivative using precomputed quantities. 
+   * The input vector Y and the output vector d_AL__d_y refer to the concatenation of
+   * the optimization variables x and the geodesic landmarks qt for the current time
+   * point. The same applies to the Hessian - it is a matrix containing second derivatives
+   * in both x and qt
+   */
+  static double ComputeAugmentedLagrangianAndGradient(
+    CMRep *model, TargetData *target, const Vector &Y, Vector &d_AL__d_Y,
+    Vector &C, Vector &lambda, double mu, HessianData *H,
+    unsigned int t, unsigned int nt)
+    {
+    // Break the input and output vectors into components
+    YComponents Ycmp(model, const_cast<double *>(Y.data_block()));
+    YComponents d_Ycmp(model, d_AL__d_Y.data_block());
+
+    // The objective function is only computed at the last timepoint
+    double AL = 0.0;
+    if(t == nt - 1)
+      {
+      // Initialize the outputs with the f/grad of the function f
+      AL += H->qf_F.Compute(Y, d_AL__d_Y);
+
+      // Compute the Dice overlap
+      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
+
+      // Compute the adjoint of the Dice overlap
+      target->image_function->ComputeAdjoint(
+        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+      }
+
+    // Iterate over the constraints
+    for(int j = 0; j < H->qf_C.size(); j++)
+      {
+      // Reference to the current quadratic form
+      QuadraticForm &Z = H->qf_C[j];
+
+      // Compute the constraint and its gradient
+      AL += Z.ComputeAL(Y, lambda[j], mu, C[j], d_AL__d_Y);
+      }
+
+    return AL;
+    }
+
+
+  static IdxMatrix MakeIndexMatrix(unsigned int rows, unsigned int cols, unsigned int start_idx)
+    {
+    IdxMatrix M(rows, cols);
+    for(int i = 0; i < M.size(); i++)
+      M.data_block()[i] = start_idx + i;
+    return M;
+    }
+
+  static IdxVector MakeIndexVector(unsigned int rows, unsigned int start_idx)
+    {
+    IdxVector M(rows);
+    for(int i = 0; i < M.size(); i++)
+      M.data_block()[i] = start_idx + i;
+    return M;
+    }
+
+  /** 
+   * This function precomputes different terms used to compute the Hessian that 
+   * do not change between iterations (exploiting wide use of quadratic functions
+   * in the objective
+   */
+  static void PrecomputeHessianData(CMRep *model, const TargetData *target, HessianData *data)
+    {
+    // Create index arrays into the input variable Y (includes x's and q's)
+    // at the end, k holds total number of input variables
+    unsigned int k = 0;
+    IdxMatrix i_ub = MakeIndexMatrix(model->nv, 3, k);    k += i_ub.size();
+    IdxMatrix i_um = MakeIndexMatrix(model->nmv, 3, k);   k += i_um.size();
+    IdxMatrix i_qb = MakeIndexMatrix(model->nv, 3, k);    k += i_qb.size();
+    IdxMatrix i_qm = MakeIndexMatrix(model->nmv, 3, k);   k += i_qm.size();
+
+    // Create indices into the constraints (normal constraints and spoke constraints)
+    unsigned int nc = 0, nc_t = GetNumberOfConstraintsPerTimepoint(model);
+    IdxMatrix ic_N   = MakeIndexMatrix(model->nv, 2, nc);  nc += ic_N.size();
+    IdxVector ic_spk = MakeIndexVector(nc_t - nc, nc);     nc += ic_spk.size();
+
+    // Initialize the constraint quadratic data
+    data->qf_C.resize(nc);
+
+    // Handle the boundary point ortho constraints
+    for(int j = 0; j < model->nv; j++)
+      {
+      // Iterate over the two tangent vectors at each vertex
+      for(int d = 0; d < 2; d++)
+        {
+        // Initialize the Hessian for this constraint
+        vnl_sparse_matrix<double> H_Cj(k, k);
+
+        for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+          {
+          for(int a = 0; a < 3; a++)
+            {
+            unsigned int ib_mov = i_qb(it.Column(), a);
+            unsigned int ib_j = i_qb(j, a);
+            unsigned int im_j = i_qm(model->bnd_mi(j), a);
+            
+            H_Cj(ib_mov, ib_j) -= it.Value(); 
+            H_Cj(ib_j, ib_mov) -= it.Value();
+            H_Cj(ib_mov, im_j) += it.Value();
+            H_Cj(im_j, ib_mov) += it.Value();
+            }
+          }
+
+        // Set the A matrix, the b and c are zeros
+        data->qf_C[ic_N(j,d)].Initialize(H_Cj, Vector(k, 0.0), 0.0);
+        }
+      }
+
+    // Handle the spoke equal length constraints
+    for(int i = 0, ic = 0; i < model->med_bi.size(); i++)
+      {
+      int b0 = model->med_bi[i][0];
+      if(model->med_bi[i].size() > 1)
+        {
+        for(int j = 1; j < model->med_bi[i].size(); j++, ic++)
+          {
+          // Initialize the Hessian for this constraint
+          vnl_sparse_matrix<double> H_Cj(k, k);
+
+          int bj = model->med_bi[i][j];
+          for(int a = 0; a < 3; a++)
+            {
+            unsigned int ib_0 = i_qb(b0, a);
+            unsigned int ib_j = i_qb(bj, a);
+            unsigned int im = i_qm(i, a);
+
+            H_Cj(ib_j, ib_j) = 2.0;
+            H_Cj(im, ib_j) = -2.0;
+            H_Cj(ib_j, im) = -2.0;
+
+            H_Cj(ib_0, ib_0) = -2.0;
+            H_Cj(im, ib_0) = 2.0;
+            H_Cj(ib_0, im) = 2.0;
+            }
+
+          data->qf_C[ic_spk[ic]].Initialize(H_Cj, Vector(k, 0.0), 0.0);
+          }
+        }
+      }
+
+    // Handle the objective function - it's a symmetric quadratic form in q_b's 
+    vnl_sparse_matrix<double> M_f(k, k);
+    Vector d_f(k, 0.0);
+
+    double w_target_model_sqrt = sqrt(target->w_target_model);
+    for(int j = 0; j < model->nv; j++)
+      {
+      for(int a = 0; a < 3; a++)
+        {
+        unsigned int i_qb_j = i_qb(j, a);
+        M_f(i_qb_j,i_qb_j) = w_target_model_sqrt;
+        d_f[i_qb_j] = - target->target_model->bnd_vtx(j, a) * w_target_model_sqrt;
+        }
+      }
+
+    data->qf_F.Initialize(M_f, d_f);
+
+    // TODO: initialize the Hessian entries for the Dice objective
+
+
+    // Initialize the Hessian matrix for the whole problem
+    vnl_sparse_matrix<double> H_L(k, k);
+
+    // Append the entries from the main objective Hessian
+    for(int j = 0; j < k; j++)
+      for(ImmutableSparseMatrix<double>::RowIterator it = data->qf_F.A.Row(j); !it.IsAtEnd(); ++it)
+        H_L(j, it.Column()) = it.Value();
+
+    // Append the entries for each constraint
+    for(int i = 0; i < nc; i++)
+      {
+      // We need not just the Hessian of Cj but also the entries from H^T H because of the
+      // outer product computation. The easiest is to determine all the unique rows of j and
+      // all all combinations
+      std::vector<int> nzrows;
+
+      for(int j = 0; j < k; j++)
+        {
+        // This is the iterator
+        ImmutableSparseMatrix<double>::RowIterator it = data->qf_C[i].A.Row(j);
+        if(it.Size())
+          {
+          // Add this row to the list of nz rows
+          nzrows.push_back(j);
+
+          // Add the non-zero entries from the Hessian
+          for(; !it.IsAtEnd(); ++it)
+            H_L(j, it.Column()) += 0.0;
+          }
+        }
+
+      // Add all the cross-product entries
+      for(int a = 0; a < nzrows.size(); a++)
+        for(int b = 0; b < nzrows.size(); b++)
+          H_L(nzrows[a],nzrows[b]) += 0.0;
+      }
+
+    data->HL_init.SetFromVNL(H_L);
+    data->HL = data->HL_init;
+    printf("Hessian has dimension %d x %d with %d non-empty values\n", k, k, (int) data->HL.GetNumberOfSparseValues());
+    }
+
+  typedef std::vector<std::pair<std::string, double> > ConstraintDetail;
+
+  static void UpdateConstraintDetail(ConstraintDetail &con_info, const std::string label, double value)
+    {
+    for(auto p : con_info)
+      {
+      if(p.first == label)
+        {
+        p.second = std::max(value, p.second);
+        return;
+        }
+      }
+    con_info.push_back(std::make_pair(label, value));
+    }
+
+  /**
+   * Get details on different types of constraints and their maximum absolute value
+   */
+  static void GetConstraintDetails(CMRep *model, const Vector &C, ConstraintDetail &con_info)
+    {
+    double *pc = const_cast<double *>(C.data_block());
+    MatrixRef Ct_N(model->nv, 2, pc);   pc += Ct_N.size();
+    VectorRef Ct_Spk(GetNumberOfConstraintsPerTimepoint(model) - Ct_N.size(), pc);
+
+    UpdateConstraintDetail(con_info, "C_NO", Ct_N.absolute_value_max());
+    UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.inf_norm());
+    }
+
+
+  static void ExportTimepoint(CMRep *model, const Vector &Y, 
+    const Vector &C, const Vector &lambda, const char *fname)
+    {
+    // Get the references to all the data in vector Y
+    YComponents ycmp(model, const_cast<double *>(Y.data_block()));
+
+    // Create a copy of the mesh in the model
+    vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
+    pd->DeepCopy(model->bnd_vtk);
+
+    // Update the points
+    for(int i = 0; i < ycmp.q_bnd.rows(); i++)
+      {
+      pd->GetPoints()->SetPoint(i, ycmp.q_bnd(i,0), ycmp.q_bnd(i,1), ycmp.q_bnd(i,2));
+      }
+
+    // Get the constraint values for the current timeslice
+    MatrixRef Ct_orth(model->nv, 2, const_cast<double *>(C.data_block()));
+    VectorRef Ct_spklen(C.size() - 2 * model->nv, const_cast<double *>(C.data_block() + 2 * model->nv));
+
+    // Create a point array for the constraints
+    vtkSmartPointer<vtkFloatArray> arr_con = vtkFloatArray::New();
+    arr_con->SetNumberOfComponents(3);
+    arr_con->SetNumberOfTuples(model->nv);
+
+    // Assign the ortho constraints
+    for(int j = 0; j < model->nv; j++)
+      {
+      arr_con->SetComponent(j, 0, Ct_orth(j, 0));
+      arr_con->SetComponent(j, 1, Ct_orth(j, 1));
+      }
+
+    // Assign the spoke constraints
+    for(int k = 0, m = 0; k < model->med_bi.size(); k++)
+      {
+      if(model->med_bi[k].size() > 1)
+        {
+        int b0 = model->med_bi[k][0];
+        double consum = 0.0;
+        for(int j = 1; j < model->med_bi[k].size(); j++, m++)
+          {
+          int bj = model->med_bi[k][j];
+          arr_con->SetComponent(bj, 2, Ct_spklen[m]);
+          consum += Ct_spklen[m];
+          }
+        arr_con->SetComponent(b0, 2, -consum);
+        }
+      }
+
+    arr_con->SetName("Constraints");
+    pd->GetPointData()->AddArray(arr_con);
+
+    // Write the model
+    vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
+    writer->SetFileName(fname);
+    writer->SetInputData(pd);
+    writer->Update();
+    }
+};
+
+
+
+
+
 template <class TMainObjective>
 class BrentObjective : public vnl_cost_function
 {
@@ -2409,7 +2838,8 @@ int usage()
     "  -cmax <value>      : Aug. lag. termination condition - stop when max constraint\n"
     "                       violation is below this value (%f)\n"
     "Debugging Parameters:\n"
-    "  -D                 : Enable derivative checks\n",
+    "  -D                 : Enable derivative checks\n"
+    "  -noslack           : Use set of constraints without slack variables\n",
     param.w_kinetic, param.mu_init, param.sigma, 
     param.al_iter, param.gradient_iter,param.nt,
     param.bfgs_ftol, param.al_max_con
@@ -2418,6 +2848,42 @@ int usage()
   return -1;
 }
 
+
+template <class TProblemTraits, class TImageFunction>
+int do_optimization(
+  const AugLagMedialFitParameters &param,
+  CMRep *m_template, CMRep *m_target, TImageFunction *dicer)
+
+{
+  // Set up the target data
+  typename TProblemTraits::TargetData td;
+  td.w_target_model = 0.0;
+  td.w_image_function = 100.0;
+  td.target_model = m_target;
+  td.image_function = dicer;
+
+  if(param.interp_mode)
+    {
+    // Set up the objective function
+    typedef PointMatchingWithTimeConstraintsAugLagObjective<TProblemTraits> ObjectiveType;
+    ObjectiveType obj(param, m_template, &td);
+    obj.set_verbose(true);
+
+    // Do the optimization
+    optimize_auglag(obj, param);
+    }
+  else
+    {
+    typedef PointMatchingWithEndpointConstraintsAugLagObjective<TProblemTraits> ObjectiveType;
+    ObjectiveType obj(param, m_template, &td);
+    obj.set_verbose(true);
+
+    // Do the optimization
+    optimize_auglag(obj, param);
+    }
+
+  return 0;
+}
 
 
 int main(int argc, char *argv[])
@@ -2490,6 +2956,10 @@ int main(int argc, char *argv[])
       {
       param.check_deriv = true;
       }
+    else if(command == "-noslack")
+      {
+      param.use_slack = false;
+      }
     }
 
   // Read the template mesh
@@ -2517,33 +2987,18 @@ int main(int argc, char *argv[])
   typedef DiceOverlapComputation<ImageDiceFunction> DiceOverlapType;
   DiceOverlapType dicer(&m_template, 5, 2, idf.GetVolume(), idf);
 
-  // Define the traits for the AL objective
-  typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
 
-  // Set up the target data
-  TraitsType::TargetData td;
-  td.w_target_model = 0.0;
-  td.w_image_function = 100.0;
-  td.target_model = &m_target;
-  td.image_function = &dicer;
 
-  if(param.interp_mode)
+  if(param.use_slack)
     {
-    // Set up the objective function
-    typedef PointMatchingWithTimeConstraintsAugLagObjective<TraitsType> ObjectiveType;
-    ObjectiveType obj(param, &m_template, &td);
-    obj.set_verbose(true);
-
-    // Do the optimization
-    optimize_auglag(obj, param);
+    // Define the traits for the AL objective
+    typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
+    do_optimization<TraitsType, DiceOverlapType>(param, &m_template, &m_target, &dicer);
     }
   else
     {
-    typedef PointMatchingWithEndpointConstraintsAugLagObjective<TraitsType> ObjectiveType;
-    ObjectiveType obj(param, &m_template, &td);
-    obj.set_verbose(true);
-
-    // Do the optimization
-    optimize_auglag(obj, param);
+    // Define the traits for the AL objective
+    typedef PointBasedMediallyConstrainedWithoutSlackFittingTraits<DiceOverlapType> TraitsType;
+    do_optimization<TraitsType, DiceOverlapType>(param, &m_template, &m_target, &dicer);
     }
 }
