@@ -331,6 +331,7 @@ PointSetOptimalControlSystem<TFloat, VDim>
 
   // Allocate the streamline arrays
   Qt.resize(N); Qt[0] = q0;
+  Vt.resize(N);
 
   // The return value
   TFloat KE;
@@ -341,10 +342,15 @@ PointSetOptimalControlSystem<TFloat, VDim>
     // Compute the hamiltonian
     KE += dt * ComputeEnergyAndVelocity(q, u[t-1]);
 
-    // Euler update
     for(unsigned int i = 0; i < k; i++)
       for(unsigned int a = 0; a < VDim; a++)
+        {
+        // Euler update
         q(i,a) += dt * d_q__d_t[a](i);
+
+        // Store the velocity in case user wants it
+        Vt[t-1](i,a) = d_q__d_t[a](i);
+        }
 
     // Store the flow results
     Qt[t] = q;

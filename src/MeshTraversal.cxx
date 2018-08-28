@@ -152,12 +152,24 @@ void LoopTangentScheme::SetMesh(TriangleMesh *mesh)
     // If the vertex is internal, weights are easy to compute
     if(!it.IsOpen())
       {
+      // Terms for the limit surface calculation
+      double beta = (n > 3) ? 3.0 / (8.0 * n) : 3.0 / 16.0;
+      double xi = 1.0 / ((3. / 8.) * beta + n);
+
       for(size_t j = 0; !it.IsAtEnd(); ++it, ++j)
         {
         size_t k = it.GetPositionInMeshSparseArray() + i + 1;
+
+        // Compute the weights for the tangents
         xSparse[k].w[0] = cos(j * vnl_math::pi * 2.0 / n);
         xSparse[k].w[1] = sin(j * vnl_math::pi * 2.0 / n);
+
+        // Compute the weight for the limit surface
+        xSparse[k].w[2] = xi;
         }
+
+      size_t kSelf = xRowIndex[i];
+      xSparse[kSelf].w[2] = 1.0 - n * xi;
       }
     else
       {
@@ -208,6 +220,11 @@ void LoopTangentScheme::SetMesh(TriangleMesh *mesh)
           xSparse[kInt].w[0] = (2.0 * cos(theta) - 2.0) * sin(theta * j);
           }
         }
+
+      // Limit surface is quite simple
+      xSparse[kSelf].w[2] = 0.6;
+      xSparse[kFirst].w[2] = 0.2; 
+      xSparse[kLast].w[2] = 0.2; 
       }
     }
 

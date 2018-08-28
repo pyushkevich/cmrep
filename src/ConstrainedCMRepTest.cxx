@@ -1119,7 +1119,8 @@ class BCMTemplate
 public:
 
   SubdivisionSurface::MeshLevel bmesh;
-  std::vector<SMLVec3d> x;
+  std::vector<SMLVec3d> x, Nx;
+  std::vector<double> R;
   std::vector<int> mIndex;
 
   void Load(const char *file);
@@ -1174,9 +1175,20 @@ void BCMTemplate::Save(const char *file)
   mix->Allocate(bmesh.nVertices);
   mix->SetName("MedialIndex");
 
+  vtkSmartPointer<vtkFloatArray> nrm = vtkSmartPointer<vtkFloatArray>::New();
+  nrm->SetNumberOfComponents(3);
+  nrm->Allocate(bmesh.nVertices);
+  
+  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+  rad->SetNumberOfComponents(1);
+  rad->Allocate(bmesh.nVertices);
+  rad->SetName("Radius");
+
   for(int i = 0; i < bmesh.nVertices; i++)
     {
     pts->InsertNextPoint(x[i].data_block());
+    nrm->InsertNextTuple(Nx[i].data_block());
+    rad->InsertNextTuple1(R[i]);
     mix->InsertNextTuple1(mIndex[i]);
     }
 
@@ -1184,6 +1196,8 @@ void BCMTemplate::Save(const char *file)
   pd->Allocate(bmesh.triangles.size());
   pd->SetPoints(pts);
   pd->GetPointData()->AddArray(mix);
+  pd->GetPointData()->AddArray(rad);
+  pd->GetPointData()->SetNormals(nrm);
 
   for(int i = 0; i < bmesh.triangles.size(); i++)
     {
@@ -1247,16 +1261,21 @@ void BCMTemplate::Subdivide()
 
   // Apply the subdivision to the mesh coordinates
   std::vector<SMLVec3d> xsrc = x;
-  x.clear();
+  std::vector<SMLVec3d> Nsrc = Nx;
+  std::vector<double> Rsrc = R;
+  x.clear(); Nx.clear(); Rsrc.clear();
 
   for(int i = 0; i < bmesh.nVertices; i++)
     {
-    SMLVec3d xi(0.0, 0.0, 0.0);
+    SMLVec3d xi(0.0, 0.0, 0.0), Ni(0.0, 0.0, 0.0);
+    double Ri = 0.0;
     for(SMat::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
       {
       xi += xsrc[it.Column()] * it.Value();
+      Ni += Nsrc[it.Column()] * it.Value();
+      Ri += R[it.Column()] * it.Value();
       }
-    x.push_back(xi);
+    x.push_back(xi); Nx.push_back(Ni); R.push_back(Ri);
     }
 
   // Compute the m-indices
@@ -1376,6 +1395,8 @@ void BCMTemplate::ImportFromCMRep(const char *file)
   // yet know which medial atoms the boundary atoms link to! We need to find a
   // medial atom and side for each boundary atom
   x.resize(ba->nVertices);
+  Nx.resize(ba->nVertices);
+  R.resize(ba->nVertices);
   mIndex.resize(ba->nVertices, -1);
 
   // Visit all vertices in all triangles
@@ -1401,6 +1422,11 @@ void BCMTemplate::ImportFromCMRep(const char *file)
         {
         mIndex[vb] = ma->triangles[mt].vertices[mj];
         x[vb] = tmpmodel->GetAtomArray()[mIndex[vb]].xBnd[side].X;
+
+        // Compute normal and radius
+        Nx[vb] = x[vb] - tmpmodel->GetAtomArray()[mIndex[vb]].X;
+        R[vb] = Nx[vb].magnitude();
+        Nx[vb] /= R[vb];
         }
       }
     }

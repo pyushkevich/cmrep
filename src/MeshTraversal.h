@@ -308,14 +308,17 @@ private:
 };
 
 /**
- * A scheme for computing tangent vectors from mesh levels
+ * A scheme for computing tangent vectors from mesh levels. It also can be used
+ * to compute the limit surface using the index 2
  */
 class LoopTangentScheme
 {
 public:
 
-  // Define a pair of weights (wu, wv)
-  struct Weight { double w[2]; };
+  enum Index { TANGENT_U = 0, TANGENT_V = 1, LIMIT_SURFACE = 2 };
+
+  // Define a pair of weights (wu, wv, w_limit)
+  struct Weight { double w[3]; };
 
   // A sparse matrix of weights (computed using Loop fmla)
   typedef ImmutableSparseArray<Weight> WeightMatrix;

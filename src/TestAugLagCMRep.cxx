@@ -186,7 +186,7 @@ void CMRep::ReadVTK(const char *fn)
   // Read the point coordinates into a matrix and the medial index array
   this->bnd_mi.set_size(nv);
   this->bnd_vtx.set_size(nv, 3);
-  this->bnd_nrm.set_size(nv, 3);
+  this->bnd_nrm.set_size(nv, 3); 
   vtkDataArray *da_mi = this->bnd_vtk->GetPointData()->GetArray("MedialIndex");
   for(int k = 0; k < nv; k++)
     {
@@ -194,7 +194,7 @@ void CMRep::ReadVTK(const char *fn)
     for(int d = 0; d < 3; d++)
       {
       this->bnd_vtx(k, d) = this->bnd_vtk->GetPoint(k)[d];
-      this->bnd_nrm(k, d) = b_norm->GetComponent(k,d);
+      this->bnd_nrm(k, d) = b_norm ? b_norm->GetComponent(k,d) : 0.0;
       }
     }
 
@@ -265,7 +265,7 @@ void CMRep::ReadVTK(const char *fn)
     unsigned int j = this->med_bi[i][0];
 
     // Compute the medial point coordinate
-    this->med_R[i] = b_rad->GetTuple1(j);
+    this->med_R[i] = b_rad ? b_rad->GetTuple1(j) : 0.0;
 
     for(int a = 0; a < 3; a++)
       this->med_vtx(i, a) = this->bnd_vtx(j, a) - b_norm->GetComponent(j, a) * b_rad->GetTuple1(j);
@@ -289,6 +289,102 @@ void CMRep::ReadVTK(const char *fn)
     // Place into an efficient sparse matrix
     this->wgt_Quv[a].SetFromVNL(vnl_wgt_Quv);
     }
+}
+
+void vtk_set_points(vtkPolyData * pd, const vnl_matrix<double> &x)
+{
+  assert(x.columns() == 3);
+  pd->GetPoints()->SetNumberOfPoints(x.rows());
+  for(int i = 0; i < x.rows(); i++)
+    pd->GetPoints()->SetPoint(i, x(i,0), x(i,1), x(i,2));
+}
+
+void vtk_set_normals(vtkPolyData * pd, const vnl_matrix<double> &x)
+{
+  assert(x.columns() == 3);
+  assert(pd->GetNumberOfPoints() == x.rows());
+
+  vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
+  arr_nrm->SetNumberOfComponents(3);
+  arr_nrm->SetNumberOfTuples(x.rows());
+
+  // Update the points
+  for(int i = 0; i < x.rows(); i++)
+    arr_nrm->SetTuple3(i, x(i,0), x(i,1), x(i,2));
+
+  pd->GetPointData()->SetNormals(arr_nrm);
+}
+
+void vtk_add_array(vtkPolyData * pd, const vnl_matrix<double> &x, const char *name)
+{
+  assert(pd->GetNumberOfPoints() == x.rows());
+
+  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+  arr->SetNumberOfComponents(x.columns());
+  arr->SetNumberOfTuples(x.rows());
+  arr->SetName(name);
+
+  // Update the points
+  for(int i = 0; i < x.rows(); i++)
+    for(int a = 0; a < x.columns(); a++)
+      arr->SetComponent(i, a, x(i,a));
+
+  pd->GetPointData()->AddArray(arr);
+}
+
+void vtk_add_array(vtkPolyData * pd, const vnl_vector<double> &x, const char *name)
+{
+  assert(pd->GetNumberOfPoints() == x.rows());
+
+  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+  arr->SetNumberOfComponents(1);
+  arr->SetNumberOfTuples(x.size());
+  arr->SetName(name);
+
+  // Update the points
+  for(int i = 0; i < x.size(); i++)
+    arr->SetTuple1(i, x[i]);
+
+  pd->GetPointData()->AddArray(arr);
+}
+
+void vtk_save_polydata(vtkPolyData *pd, const char *file)
+{
+  vtkSmartPointer<vtkPolyDataWriter> w = vtkPolyDataWriter::New();
+  w->SetInputData(pd);
+  w->SetFileName(file);
+  w->Update();
+}
+
+void TestLimitSurface(CMRep *model)
+{
+  LoopTangentScheme lts;
+  lts.SetMesh(&model->bnd_tri);
+
+  CMRep::Matrix X(model->nv, 3); 
+  for(int k = 0; k < model->nv; k++)
+    {
+    CMRep::Vector xk = model->bnd_vtx.get_row(k) * lts.GetOwnWeight(2, k);
+    for(EdgeWalkAroundVertex walk(&model->bnd_tri, k); !walk.IsAtEnd(); ++walk)
+      xk += model->bnd_vtx.get_row(walk.MovingVertexId()) * lts.GetNeighborWeight(2, walk);
+    X.set_row(k, xk);
+    }
+
+  // Write the mesh with these parameters
+  vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
+  pd->DeepCopy(model->bnd_vtk);
+
+  vtk_set_points(pd, X);
+  vtk_save_polydata(pd, "/tmp/test_limit_surface.vtk");
+
+  // Now subdivide the input mesh
+  SubdivisionSurface::MeshLevel par, sub;
+    *((TriangleMesh *)(&par)) = model->bnd_tri;
+  SubdivisionSurface::RecursiveSubdivide(&par, &sub, 4);
+
+  vtkSmartPointer<vtkPolyData> pdSub = vtkPolyData::New();
+  SubdivisionSurface::ApplySubdivision(pd, pdSub, sub);
+  vtk_save_polydata(pd, "/tmp/test_sub_4.vtk");
 }
 
 struct AugLagMedialFitParameters
@@ -1374,57 +1470,29 @@ public:
     vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
     pd->DeepCopy(model->bnd_vtk);
 
-    // Create an array for normals
-    vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
-    arr_nrm->SetNumberOfComponents(3);
-    arr_nrm->SetNumberOfTuples(model->nv);
+    // Add the points and normals
+    vtk_set_points(pd, ycmp.q_bnd);
+    vtk_set_normals(pd, ycmp.N_bnd);
 
-    // Create an array for radius
-    vtkSmartPointer<vtkFloatArray> arr_rad = vtkFloatArray::New();
-    arr_rad->SetNumberOfComponents(1);
-    arr_rad->SetNumberOfTuples(model->nv);
-    arr_rad->SetName("Radius");
-
-    // Update the points
+    // Map the radius to the boundary
+    Vector Rb(model->nv);
     for(int i = 0; i < ycmp.q_bnd.rows(); i++)
-      {
-      pd->GetPoints()->SetPoint(i, ycmp.q_bnd(i,0), ycmp.q_bnd(i,1), ycmp.q_bnd(i,2));
-      arr_nrm->SetTuple3(i, ycmp.N_bnd(i,0), ycmp.N_bnd(i,1), ycmp.N_bnd(i,2));
-      arr_rad->SetTuple1(i, ycmp.R_med(model->bnd_mi[i]));
-      }
+      Rb[i] = ycmp.R_med(model->bnd_mi[i]);
 
-    pd->GetPointData()->SetNormals(arr_nrm);
-    pd->GetPointData()->AddArray(arr_rad);
+    // Add the radius array
+    vtk_add_array(pd, Rb, "Radius");
 
     // Get the constraint values for the current timeslice
     double *pc = const_cast<double *>(C.data_block());
     MatrixRef Ct_N(model->nv, 3, pc);   pc += Ct_N.size();
     MatrixRef Ct_Spk(model->nv, 3, pc); pc += Ct_Spk.size();
 
-    // Create a point array for the constraints
-    vtkSmartPointer<vtkFloatArray> arr_con = vtkFloatArray::New();
-    arr_con->SetNumberOfComponents(6);
-    arr_con->SetNumberOfTuples(model->nv);
-
-    // Assign the ortho constraints
-    for(int j = 0; j < model->nv; j++)
-      {
-      arr_con->SetComponent(j, 0, Ct_N(j, 0));
-      arr_con->SetComponent(j, 1, Ct_N(j, 1));
-      arr_con->SetComponent(j, 2, Ct_N(j, 2));
-      arr_con->SetComponent(j, 3, Ct_Spk(j, 0));
-      arr_con->SetComponent(j, 4, Ct_Spk(j, 1));
-      arr_con->SetComponent(j, 5, Ct_Spk(j, 2));
-      }
-
-    arr_con->SetName("Constraints");
-    pd->GetPointData()->AddArray(arr_con);
+    // Add the constraint arrays
+    vtk_add_array(pd, Ct_N, "Constr_N");
+    vtk_add_array(pd, Ct_Spk, "Constr_Spk");
 
     // Write the model
-    vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
-    writer->SetFileName(fname);
-    writer->SetInputData(pd);
-    writer->Update();
+    vtk_save_polydata(pd, fname);
     }
 };
 
@@ -1598,6 +1666,46 @@ public:
     return AL;
     }
 
+  /** 
+   * Experimental code: use kinetic-type constraints
+   */
+  /*
+  static double ComputeAugmentedLagrangianAndGradient(
+    CMRep *model, TargetData *target, const Vector &Y, Vector &d_AL__d_Y,
+    Vector &C, Vector &lambda, double mu, HessianData *H,
+    unsigned int t, unsigned int nt)
+    {
+    // Break the input and output vectors into components
+    YComponents Ycmp(model, const_cast<double *>(Y.data_block()));
+    YComponents d_Ycmp(model, d_AL__d_Y.data_block());
+
+    // The objective function is only computed at the last timepoint
+    double AL = 0.0;
+    if(t == nt - 1)
+      {
+      // Initialize the outputs with the f/grad of the function f
+      AL += H->qf_F.Compute(Y, d_AL__d_Y);
+
+      // Compute the Dice overlap
+      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
+
+      // Compute the adjoint of the Dice overlap
+      target->image_function->ComputeAdjoint(
+        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+      }
+
+    // Iterate over the constraints
+    for(int j = 0; j < H->qf_C.size(); j++)
+      {
+      // Reference to the current quadratic form
+      QuadraticForm &Z = H->qf_C[j];
+
+      // Compute the constraint and its gradient
+      AL += Z.ComputeAL(Y, lambda[j], mu, C[j], d_AL__d_Y);
+      }
+
+    return AL;
+    }*/
 
   static IdxMatrix MakeIndexMatrix(unsigned int rows, unsigned int cols, unsigned int start_idx)
     {
@@ -2965,6 +3073,8 @@ int main(int argc, char *argv[])
   // Read the template mesh
   CMRep m_template;
   m_template.ReadVTK(fn_model.c_str());
+
+  TestLimitSurface(&m_template);
 
   // Read the target image file
   ImageDiceFunction idf(fn_target_image.c_str(), 0.2);

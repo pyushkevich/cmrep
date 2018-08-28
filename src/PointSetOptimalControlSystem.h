@@ -66,6 +66,9 @@ public:
    */
   const Matrix &GetQt(unsigned int t) const { return Qt[t]; }
 
+  /** Get the velocities */
+  const Matrix &GetVt(unsigned int t) const { return Vt[t]; }
+
   const TFloat GetDeltaT() const { return dt; }
 
 protected:
@@ -89,6 +92,9 @@ protected:
 
   // Streamlines - paths of the landmarks over time
   std::vector<Matrix> Qt;
+
+  // Streamline velocities
+  std::vector<Matrix> Vt;
 
     // Multi-threaded quantities
   struct ThreadData 
