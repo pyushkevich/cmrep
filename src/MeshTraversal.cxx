@@ -154,7 +154,7 @@ void LoopTangentScheme::SetMesh(TriangleMesh *mesh)
       {
       // Terms for the limit surface calculation
       double beta = (n > 3) ? 3.0 / (8.0 * n) : 3.0 / 16.0;
-      double xi = 1.0 / ((3. / 8.) * beta + n);
+      double xi = 1.0 / (3. / (8. * beta) + n);
 
       for(size_t j = 0; !it.IsAtEnd(); ++it, ++j)
         {
