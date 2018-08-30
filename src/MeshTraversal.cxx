@@ -138,7 +138,7 @@ void LoopTangentScheme::SetMesh(TriangleMesh *mesh)
 
   // Clear out the sparse values
   for(i = 0; i < nSparse; i++)
-    xSparse[i].w[0] = xSparse[i].w[1] = 0.0;
+    xSparse[i].w[0] = xSparse[i].w[1] = xSparse[i].w[2] = 0.0;
 
   // Now, compute the weights for the loop scheme
   for(i = 0; i < nmat.GetNumberOfRows(); i++)
