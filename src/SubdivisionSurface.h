@@ -32,6 +32,13 @@ public:
     // Constructor
     MeshLevel() : TriangleMesh()
       { parent = NULL; }
+
+    // Constructor that makes a copy of a triangle mesh
+    MeshLevel(const TriangleMesh &other)
+      {
+      *((TriangleMesh *)(this)) = other;
+      this->SetAsRoot();
+      }
   };
 
   /** Subdivide a mesh level once */
