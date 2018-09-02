@@ -24,6 +24,7 @@
 #include <vtkCellData.h>
 #include <vtkSmartPointer.h>
 #include <vtkCell.h>
+#include <vtkCellArray.h>
 #include <vtksys/SystemTools.hxx>
 
 #include <itkImage.h>
@@ -147,14 +148,15 @@ struct CMRep
   // Boundary and medial vertices
   Matrix bnd_vtx, med_vtx, bnd_nrm;
 
-  // Radius function
-  Vector med_R;
+  // Medial radii
+  Vector med_rad;
 
   // For each medial vertex, the list of corresponding boundary ones
   std::vector< std::vector<unsigned int> > med_bi;
 
-  // Sparse matrices used to compute tangent vectors Qu, Qv from Q's
-  SparseMat wgt_Quv[2];
+  // Sparse matrices used to compute tangent vectors Qu, Qv and the limit surface
+  // Qlim from the Q's.
+  SparseMat bnd_wtl[3], med_wtl[3];
 
   // Number of boundary vertices
   unsigned int nv, nmv;
@@ -162,9 +164,36 @@ struct CMRep
   // Number of boundary and medial triangles
   unsigned int nt, nmt;
 
+  // Generate tangent vector and limit surface sparse matrices for a mesh
+  static void ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[]);
+
   // Read from a VTK file (bcm-rep format)
   void ReadVTK(const char *file);
 };
+
+void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
+{
+  unsigned int nv = tri->nVertices;
+
+  LoopTangentScheme lts;
+  lts.SetMesh(tri);
+  
+  for(int a = 0; a < 3; a++)
+    {
+    vnl_sparse_matrix<double> Wa(nv, nv);
+    for(int k = 0; k < nv; k++)
+      {
+      Wa.put(k, k, lts.GetOwnWeight(a, k));
+      for(EdgeWalkAroundVertex walk(tri, k); !walk.IsAtEnd(); ++walk)
+        Wa.put(k, walk.MovingVertexId(), lts.GetNeighborWeight(a, walk));
+      }
+
+    // Place into an efficient sparse matrix
+    wgt[a].SetFromVNL(Wa);
+    }
+}
+
+
 
 void CMRep::ReadVTK(const char *fn)
 {
@@ -177,6 +206,10 @@ void CMRep::ReadVTK(const char *fn)
   // Read the normals
   vtkDataArray *b_norm = this->bnd_vtk->GetPointData()->GetNormals();
   vtkDataArray *b_rad = this->bnd_vtk->GetPointData()->GetArray("Radius");
+
+  // Sometimes the medial points are included in the model
+  vtkDataArray *b_med = this->bnd_vtk->GetPointData()->GetArray("MedialPoint");
+  std::cout << "BMED exists " << b_med << std::endl;
 
   // Get the number of vertices and triangles
   nv = this->bnd_vtk->GetNumberOfPoints();
@@ -257,7 +290,7 @@ void CMRep::ReadVTK(const char *fn)
 
   // Compute initial medial vertices. These can actually be imported from the model
   this->med_vtx.set_size(nmv, 3);
-  this->med_R.set_size(nmv);
+  this->med_rad.set_size(nmv);
 
   for(unsigned int i = 0; i < nmv; i++)
     {
@@ -265,87 +298,43 @@ void CMRep::ReadVTK(const char *fn)
     unsigned int j = this->med_bi[i][0];
 
     // Compute the medial point coordinate
-    this->med_R[i] = b_rad ? b_rad->GetTuple1(j) : 0.0;
-
     for(int a = 0; a < 3; a++)
-      this->med_vtx(i, a) = this->bnd_vtx(j, a) - b_norm->GetComponent(j, a) * b_rad->GetTuple1(j);
-    }
-
-
-  // Compute the weights used to generate Qu and Qv derivatives
-  LoopTangentScheme lts;
-  lts.SetMesh(&this->bnd_tri);
-  
-  for(int a = 0; a < 2; a++)
-    {
-    vnl_sparse_matrix<double> vnl_wgt_Quv(this->nv, this->nv);
-    for(int k = 0; k < this->nv; k++)
       {
-      vnl_wgt_Quv.put(k, k, lts.GetOwnWeight(a, k));
-      for(EdgeWalkAroundVertex walk(&this->bnd_tri, k); !walk.IsAtEnd(); ++walk)
-        vnl_wgt_Quv.put(k, walk.MovingVertexId(), lts.GetNeighborWeight(a, walk));
+      if(b_med)
+        {
+        this->med_vtx(i, a) = b_med->GetComponent(j, a);
+        }
+      else
+        {
+        this->med_vtx(i, a) = this->bnd_vtx(j, a) - b_norm->GetComponent(j, a) * b_rad->GetTuple1(j);
+        }
       }
 
-    // Place into an efficient sparse matrix
-    this->wgt_Quv[a].SetFromVNL(vnl_wgt_Quv);
+    // Store the input radius
+    this->med_rad(i) = b_rad->GetTuple1(j);
     }
-}
 
-void vtk_set_points(vtkPolyData * pd, const vnl_matrix<double> &x)
-{
-  assert(x.columns() == 3);
-  pd->GetPoints()->SetNumberOfPoints(x.rows());
-  for(int i = 0; i < x.rows(); i++)
-    pd->GetPoints()->SetPoint(i, x(i,0), x(i,1), x(i,2));
-}
+  // Generate the medial triangle mesh
+  // TODO: this probably does not work for branching meshes (need marking as crease)
+  TriangleMeshGenerator med_tmg(&this->med_tri, nmv);
+  for(unsigned int i = 0; i < nmt; i++)
+    {
+    // The index of the 'top-side' medial triangle
+    unsigned int bti = this->med_bti(i, 0);
+    auto tb = this->bnd_tri.triangles[bti];
 
-void vtk_set_normals(vtkPolyData * pd, const vnl_matrix<double> &x)
-{
-  assert(x.columns() == 3);
-  assert(pd->GetNumberOfPoints() == x.rows());
+    med_tmg.AddTriangle(
+      this->bnd_mi(tb.vertices[0]),
+      this->bnd_mi(tb.vertices[1]),
+      this->bnd_mi(tb.vertices[2]));
+    }
+  med_tmg.GenerateMesh();
 
-  vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
-  arr_nrm->SetNumberOfComponents(3);
-  arr_nrm->SetNumberOfTuples(x.rows());
+  // Compute the weights used to generate Qu and Qv derivatives and the limit surface
+  ComputeTangentAndLimitWeights(&this->bnd_tri, this->bnd_wtl);
 
-  // Update the points
-  for(int i = 0; i < x.rows(); i++)
-    arr_nrm->SetTuple3(i, x(i,0), x(i,1), x(i,2));
-
-  pd->GetPointData()->SetNormals(arr_nrm);
-}
-
-void vtk_add_array(vtkPolyData * pd, const vnl_matrix<double> &x, const char *name)
-{
-  assert(pd->GetNumberOfPoints() == x.rows());
-
-  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
-  arr->SetNumberOfComponents(x.columns());
-  arr->SetNumberOfTuples(x.rows());
-  arr->SetName(name);
-
-  // Update the points
-  for(int i = 0; i < x.rows(); i++)
-    for(int a = 0; a < x.columns(); a++)
-      arr->SetComponent(i, a, x(i,a));
-
-  pd->GetPointData()->AddArray(arr);
-}
-
-void vtk_add_array(vtkPolyData * pd, const vnl_vector<double> &x, const char *name)
-{
-  assert(pd->GetNumberOfPoints() == x.rows());
-
-  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
-  arr->SetNumberOfComponents(1);
-  arr->SetNumberOfTuples(x.size());
-  arr->SetName(name);
-
-  // Update the points
-  for(int i = 0; i < x.size(); i++)
-    arr->SetTuple1(i, x[i]);
-
-  pd->GetPointData()->AddArray(arr);
+  // Do the same for the medial surface
+  ComputeTangentAndLimitWeights(&this->med_tri, this->med_wtl);
 }
 
 void vtk_save_polydata(vtkPolyData *pd, const char *file)
@@ -355,12 +344,115 @@ void vtk_save_polydata(vtkPolyData *pd, const char *file)
   w->SetFileName(file);
   w->Update();
 }
+/**
+ * A helper class for making VTK meshes or adding stuff to them
+ */
+template <class TDataSet>
+class VTKMeshBuilder
+{
+public:
+
+  VTKMeshBuilder()
+    {
+    pd = TDataSet::New();
+    }
+
+  VTKMeshBuilder(TDataSet* other)
+    {
+    pd = TDataSet::New();
+    pd->DeepCopy(other);
+    }
+
+  TDataSet *GetData() const { return pd; }
+
+  void SetPoints(const vnl_matrix<double> &x)
+    {
+    assert(x.columns() == 3);
+    vtkSmartPointer<vtkPoints> pts = vtkPoints::New();
+    pts->SetNumberOfPoints(x.rows());
+    for(int i = 0; i < x.rows(); i++)
+      pts->SetPoint(i, x(i,0), x(i,1), x(i,2));
+    pd->SetPoints(pts);
+    }
+
+  void SetTriangles(const TriangleMesh &mesh)
+    {
+    vtkSmartPointer<vtkCellArray> cells = vtkCellArray::New();
+    for(auto T : mesh.triangles)
+      {
+      cells->InsertNextCell(3);
+      for(unsigned int a = 0; a < 3; a++)
+        cells->InsertCellPoint(T.vertices[a]);
+      }
+    pd->SetPolys(cells);
+    }
+
+  void SetNormals(const vnl_matrix<double> &x)
+    {
+    assert(x.columns() == 3);
+    assert(pd->GetNumberOfPoints() == x.rows());
+
+    vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
+    arr_nrm->SetNumberOfComponents(3);
+    arr_nrm->SetNumberOfTuples(x.rows());
+
+    // Update the points
+    for(int i = 0; i < x.rows(); i++)
+      arr_nrm->SetTuple3(i, x(i,0), x(i,1), x(i,2));
+
+    pd->GetPointData()->SetNormals(arr_nrm);
+    }
+
+  void AddArray(const vnl_matrix<double> &x, const char *name)
+  {
+    assert(pd->GetNumberOfPoints() == x.rows());
+
+    vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+    arr->SetNumberOfComponents(x.columns());
+    arr->SetNumberOfTuples(x.rows());
+    arr->SetName(name);
+
+    // Update the points
+    for(int i = 0; i < x.rows(); i++)
+      for(int a = 0; a < x.columns(); a++)
+        arr->SetComponent(i, a, x(i,a));
+
+    pd->GetPointData()->AddArray(arr);
+  }
+
+  void AddArray(const vnl_vector<double> &x, const char *name)
+    {
+    assert(pd->GetNumberOfPoints() == x.size());
+
+    vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+    arr->SetNumberOfComponents(1);
+    arr->SetNumberOfTuples(x.size());
+    arr->SetName(name);
+
+    // Update the points
+    for(int i = 0; i < x.size(); i++)
+      arr->SetTuple1(i, x[i]);
+
+    pd->GetPointData()->AddArray(arr);
+    }
+
+  void Save(const char *fn)
+    {
+    vtk_save_polydata(pd, fn);
+    }
+
+protected:
+  vtkSmartPointer<TDataSet> pd;
+};
+
+
 
 void TestLimitSurface(CMRep *model)
 {
   LoopTangentScheme lts;
   lts.SetMesh(&model->bnd_tri);
 
+  // Compute limit surface of the boundary mesh
   CMRep::Matrix X(model->nv, 3); 
   for(int k = 0; k < model->nv; k++)
     {
@@ -370,21 +462,49 @@ void TestLimitSurface(CMRep *model)
     X.set_row(k, xk);
     }
 
-  // Write the mesh with these parameters
-  vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
-  pd->DeepCopy(model->bnd_vtk);
+  // Compute limit surface of the medial mesh
+  LoopTangentScheme ltsm;
+  ltsm.SetMesh(&model->med_tri);
+  CMRep::Matrix Xm(model->nmv, 3); 
+  for(int k = 0; k < model->nmv; k++)
+    {
+    CMRep::Vector xk = model->med_vtx.get_row(k) * ltsm.GetOwnWeight(2, k);
+    for(EdgeWalkAroundVertex walk(&model->med_tri, k); !walk.IsAtEnd(); ++walk)
+      xk += model->med_vtx.get_row(walk.MovingVertexId()) * ltsm.GetNeighborWeight(2, walk);
+    Xm.set_row(k, xk);
+    }
 
-  vtk_set_points(pd, X);
-  vtk_save_polydata(pd, "/tmp/test_limit_surface.vtk");
+
+  // Write the mesh with these parameters
+  VTKMeshBuilder<vtkPolyData> vbm_bnd;
+  vbm_bnd.SetTriangles(model->bnd_tri);
+  vbm_bnd.SetPoints(X);
+  vbm_bnd.Save("/tmp/test_limit_surface.vtk");
 
   // Now subdivide the input mesh
-  SubdivisionSurface::MeshLevel par, sub;
-    *((TriangleMesh *)(&par)) = model->bnd_tri;
+  SubdivisionSurface::MeshLevel par(model->bnd_tri), sub;
   SubdivisionSurface::RecursiveSubdivide(&par, &sub, 4);
 
   vtkSmartPointer<vtkPolyData> pdSub = vtkPolyData::New();
-  SubdivisionSurface::ApplySubdivision(pd, pdSub, sub);
-  vtk_save_polydata(pd, "/tmp/test_sub_4.vtk");
+  SubdivisionSurface::ApplySubdivision(model->bnd_vtk, pdSub, sub);
+  vtk_save_polydata(pdSub, "/tmp/test_sub_4.vtk");
+
+  // Also subdivide the medial mesh
+  VTKMeshBuilder<vtkPolyData> vmb_med;
+  vmb_med.SetTriangles(model->med_tri);
+  vmb_med.SetPoints(Xm);
+  vmb_med.Save("/tmp/test_medial_limit_surface.vtk");
+
+  vmb_med.SetPoints(model->med_vtx);
+  vmb_med.Save("/tmp/test_medial_raw.vtk");
+
+  SubdivisionSurface::MeshLevel mpar(model->med_tri), msub;
+  SubdivisionSurface::RecursiveSubdivide(&mpar, &msub, 4);
+
+  vtkSmartPointer<vtkPolyData> pdMSub = vtkPolyData::New();
+  SubdivisionSurface::ApplySubdivision(vmb_med.GetData(), pdMSub, msub);
+  vtk_save_polydata(pdMSub, "/tmp/test_med_sub_4.vtk");
+
 }
 
 struct AugLagMedialFitParameters
@@ -412,15 +532,27 @@ struct AugLagMedialFitParameters
   // Use slack variables
   bool use_slack;
 
+  // Number of levels of Loop subdivision applied to the model when computing
+  // overlap with the image
+  unsigned int loop_subdivision_level;
+
+  // Whether the constraints are applied to the limit surface of the Loop
+  // subdivision surface (when true) or to the input model itself
+  bool limit_surface_constraints;
+
   // Do we do derivative checks?
   bool check_deriv;
 
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
-      mu_init(1), mu_scale(1.0), gradient_iter(6000), al_iter(10),
+      mu_init(1), mu_scale(1.0),
+      gradient_iter(6000), al_iter(10),
       bfgs_ftol(1e-5), al_max_con(1e-4),
-      interp_mode(false), check_deriv(false), use_slack(true)  {}
+      interp_mode(false), use_slack(true),
+      loop_subdivision_level(2),
+      limit_surface_constraints(false),
+      check_deriv(false) {}
 };
 
 
@@ -566,7 +698,10 @@ public:
   typedef vnl_matrix<double> Matrix;
   typedef vnl_vector<double> Vector;
 
-  MeshFunctionVolumeIntegral(CMRep *model, unsigned int n_layers, unsigned int sub_level, TFunction &f)
+  MeshFunctionVolumeIntegral(CMRep *model, 
+    unsigned int n_layers, unsigned int sub_level, 
+    bool flat_subdivision_mode, 
+    TFunction &f)
     : func(f)
     {
     this->model = model;
@@ -577,7 +712,7 @@ public:
     B.SetAsRoot();
 
     // Set up the child mesh
-    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level, true);
+    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level, flat_subdivision_mode);
 
     vtkSmartPointer<vtkPolyData> test = vtkPolyData::New();
     SubdivisionSurface::ApplySubdivision(model->bnd_vtk, test, S);
@@ -872,9 +1007,9 @@ public:
   typedef vnl_vector<double> Vector;
 
   DiceOverlapComputation(
-    CMRep *model, unsigned int n_wedges, unsigned int sub_level, 
+    CMRep *model, unsigned int n_wedges, unsigned int sub_level, bool flat_subdivision_mode,
     double vol_image, TFunction &in_func)
-    : integrator(model, n_wedges, sub_level, in_func)
+    : integrator(model, n_wedges, sub_level, flat_subdivision_mode, in_func)
     {
     this->vol_image = vol_image;
     }
@@ -1032,7 +1167,7 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
   qm.update(model->med_vtx);
 
   // Dice test
-  MeshFunctionVolumeIntegral<TFunction> dicer(model, 5, 2, tf);
+  MeshFunctionVolumeIntegral<TFunction> dicer(model, 5, 2, true, tf);
 
   // Values returned by the Dice test
   double fv, v;
@@ -1168,6 +1303,9 @@ public:
     // xcmp.u_med.update((target->target_model->med_vtx - model->med_vtx) / nt, 0, 0);
 
     // Normals and radii are set to be that of initial timepoint
+    // TODO: I think I should not be using this because it's problematic when it comes
+    // to loop subdivided models. Instead just restore everything from the model arrays
+    /*
     for(int i = 0; i < model->nv; i++)
       {
       // N * R is just normalized vector from medial to boundary
@@ -1176,6 +1314,13 @@ public:
       Ni.normalize();
       xcmp.N_bnd.set_row(i, Ni);
       }
+    */
+
+    for(int i = 0; i < model->nv; i++)
+      xcmp.N_bnd.set_row(i, model->bnd_nrm.get_row(i));
+
+    for(int j = 0; j < model->nmv; j++)
+      xcmp.R_med[j] = model->med_rad[j];
     }
 
   // Return a vector of bounds on the optimization variables
@@ -1288,7 +1433,10 @@ public:
    * do not change between iterations (exploiting wide use of quadratic functions
    * in the objective
    */
-  static void PrecomputeHessianData(CMRep *model, const TargetData *target, HessianData *data)
+  static void PrecomputeHessianData(
+    CMRep *model, const TargetData *target, 
+    bool limit_surface_constraints,
+    HessianData *data)
     {
     // Create index arrays into the input variable Y (includes x's and q's)
     // at the end, k holds total number of input variables
@@ -1311,6 +1459,9 @@ public:
     // Handle the per-boundary point constraints
     for(int j = 0; j < model->nv; j++)
       {
+      // The medial node for j
+      unsigned int jm = model->bnd_mi[j];
+
       // Constraint that the normal is orthogonal to the boundary tangent vectors
       // N . Qu = 0, i.e., sum_(j in nhd[i]) w_j N . Q[j] = 0
       for(int d = 0; d < 2; d++)
@@ -1318,7 +1469,7 @@ public:
         // Initialize the Hessian for this constraint
         vnl_sparse_matrix<double> H_Cj(k, k);
 
-        for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+        for(CMRep::SparseRowIter it = model->bnd_wtl[d].Row(j); !it.IsAtEnd(); ++it)
           {
           for(int a = 0; a < 3; a++)
             {
@@ -1349,19 +1500,36 @@ public:
         {
         // Indices of the involves quantities
         unsigned int i_qb_j = i_qb(j, a);
-        unsigned int i_qm_j = i_qm(model->bnd_mi[j], a);
+        unsigned int i_qm_j = i_qm(jm, a);
         unsigned int i_Nb_j = i_Nb(j, a);
-        unsigned int i_Rm_j  = i_Rm(model->bnd_mi[j]);
+        unsigned int i_Rm_j  = i_Rm(jm);
 
         // The Hessian here only contains terms from N R
         vnl_sparse_matrix<double> H_Cspk(k, k);
-        H_Cspk(i_Nb_j, i_Rm_j) = -1;
-        H_Cspk(i_Rm_j, i_Nb_j) = -1;
 
         // There is also an offset vector with +1 in the qb row and -1 in the qm row
         Vector B_Cspk(k, 0.0);
-        B_Cspk[i_qb_j] = 1.0;
-        B_Cspk[i_qm_j] = -1.0;
+
+        // Are the constraints applied at the limit surface?
+        if(limit_surface_constraints)
+          {
+          for(CMRep::SparseRowIter it = model->bnd_wtl[2].Row(j); !it.IsAtEnd(); ++it)
+            B_Cspk[i_qb(it.Column(), a)] = it.Value();
+
+          for(CMRep::SparseRowIter it = model->med_wtl[2].Row(jm); !it.IsAtEnd(); ++it)
+            {
+            B_Cspk[i_qm(it.Column(), a)] = -it.Value();
+            H_Cspk(i_Nb_j, i_Rm(it.Column())) = -it.Value();
+            H_Cspk(i_Rm(it.Column()), i_Nb_j) = -it.Value();
+            }
+          }
+        else
+          {
+          H_Cspk(i_Nb_j, i_Rm_j) = -1;
+          H_Cspk(i_Rm_j, i_Nb_j) = -1;
+          B_Cspk[i_qb_j] = 1.0;
+          B_Cspk[i_qm_j] = -1.0;
+          }
 
         data->qf_C[ic_spk(j, a)].Initialize(H_Cspk, B_Cspk, 0.0);
         }
@@ -1467,20 +1635,41 @@ public:
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
 
     // Create a copy of the mesh in the model
-    vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
-    pd->DeepCopy(model->bnd_vtk);
+    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
 
     // Add the points and normals
-    vtk_set_points(pd, ycmp.q_bnd);
-    vtk_set_normals(pd, ycmp.N_bnd);
+    vmbb.SetPoints(ycmp.q_bnd);
+    vmbb.SetNormals(ycmp.N_bnd);
 
-    // Map the radius to the boundary
+    // Extract boundary and medial limit points
+    Matrix Xlim(model->nv, 3);
+    Matrix Mlim(model->nmv, 3);
+    for(int a = 0; a < 3; a++)
+      {
+      Xlim.set_column(a, model->bnd_wtl[2].MultiplyByVector(ycmp.q_bnd.get_column(a)));
+      Mlim.set_column(a, model->med_wtl[2].MultiplyByVector(ycmp.q_med.get_column(a)));
+      }
+
+    // Map the radius and medial points to the boundary
     Vector Rb(model->nv);
+    Matrix Mb(model->nv, 3);
+    Matrix Mlimb(model->nv, 3);
     for(int i = 0; i < ycmp.q_bnd.rows(); i++)
+      {
       Rb[i] = ycmp.R_med(model->bnd_mi[i]);
+      Mb.set_row(i, ycmp.q_med.get_row(model->bnd_mi[i]));
+      Mlimb.set_row(i, Mlim.get_row(model->bnd_mi[i]));
+      }
 
     // Add the radius array
-    vtk_add_array(pd, Rb, "Radius");
+    vmbb.AddArray(Rb, "Radius");
+    
+    // Store the medial points as a separate array
+    vmbb.AddArray(Mb, "MedialPoint");
+
+    // Limit arrays
+    vmbb.AddArray(Xlim, "LimitPoint");
+    vmbb.AddArray(Mlimb, "MedialLimitPoint");
 
     // Get the constraint values for the current timeslice
     double *pc = const_cast<double *>(C.data_block());
@@ -1488,11 +1677,11 @@ public:
     MatrixRef Ct_Spk(model->nv, 3, pc); pc += Ct_Spk.size();
 
     // Add the constraint arrays
-    vtk_add_array(pd, Ct_N, "Constr_N");
-    vtk_add_array(pd, Ct_Spk, "Constr_Spk");
+    vmbb.AddArray(Ct_N, "Constr_N");
+    vmbb.AddArray(Ct_Spk, "Constr_Spk");
 
     // Write the model
-    vtk_save_polydata(pd, fname);
+    vmbb.Save(fname);
     }
 };
 
@@ -1728,8 +1917,14 @@ public:
    * do not change between iterations (exploiting wide use of quadratic functions
    * in the objective
    */
-  static void PrecomputeHessianData(CMRep *model, const TargetData *target, HessianData *data)
+  static void PrecomputeHessianData(
+    CMRep *model, const TargetData *target, 
+    bool limit_surface_constraints,
+    HessianData *data)
     {
+    if(limit_surface_constraints)
+      throw MedialModelException("Limit surface not supported for slack-free model");
+
     // Create index arrays into the input variable Y (includes x's and q's)
     // at the end, k holds total number of input variables
     unsigned int k = 0;
@@ -1755,7 +1950,7 @@ public:
         // Initialize the Hessian for this constraint
         vnl_sparse_matrix<double> H_Cj(k, k);
 
-        for(CMRep::SparseRowIter it = model->wgt_Quv[d].Row(j); !it.IsAtEnd(); ++it)
+        for(CMRep::SparseRowIter it = model->bnd_wtl[d].Row(j); !it.IsAtEnd(); ++it)
           {
           for(int a = 0; a < 3; a++)
             {
@@ -2040,7 +2235,7 @@ public:
     Traits::ComputeInitialLandmarks(model, q0);
 
     // Compute constant terms of Hessian
-    Traits::PrecomputeHessianData(model, target, &hess_data);
+    Traits::PrecomputeHessianData(model, target, param.limit_surface_constraints, &hess_data);
 
     // Initialize the hamiltonian system
     ocsys = new OCSystem(q0, param.sigma, param.nt);
@@ -2340,7 +2535,7 @@ public:
     Traits::ComputeInitialLandmarks(model, q0);
 
     // Compute constant terms of Hessian
-    Traits::PrecomputeHessianData(model, target, &hess_data);
+    Traits::PrecomputeHessianData(model, target, param.limit_surface_constraints, &hess_data);
 
     // Initialize the hamiltonian system
     hsys = new HSystem(q0, param.sigma, param.nt);
@@ -2827,7 +3022,7 @@ void optimize_auglag(
   TObjective &obj, const AugLagMedialFitParameters &param)
 {
   // The current iterate -- start with zero momentum
-  CMRep::Vector x_opt = obj.get_xinit();
+  CMRep::Vector x_opt = obj.get_xinit(), x_grad(x_opt.size(), 0.0);
 
   // Also obtain the bounds of the optimization
   CMRep::Vector x_lb = obj.get_xlb(), x_ub = obj.get_xub();
@@ -2845,6 +3040,11 @@ void optimize_auglag(
 
   // Set the initial mu
   obj.SetMu(mu);
+
+  // Evaluate before any optimization takes place 
+  printf("Initial evaluation of objective function:\n");
+  obj.compute(x_opt, &f_current, &x_grad);
+  obj.Export(x_opt, "/tmp/wrf_%03d.vtk");
 
   // Outer iteration loop
   for(int it = 0; it < param.al_iter; it++)
@@ -2942,6 +3142,9 @@ int usage()
     "  -t <int>           : Number of flow time steps (%d)\n"
     "  -T                 : Flag, specifies that constraints applied at all time points.\n"
     "                       When not set, constraints applied at endpoint of flow only.\n"
+    "  -L                 : Flag, specifies that constraints are applied to the limit surface\n"
+    "                       of a Loop subdivision surface (as opposed to model's vertices)\n"
+    "  -sl <int>          : Number of Loop subdivision levels for image metrics (%d)\n"
     "  -ftol <value>      : Relative function tolerance for BFGS (%f).\n"
     "  -cmax <value>      : Aug. lag. termination condition - stop when max constraint\n"
     "                       violation is below this value (%f)\n"
@@ -2950,6 +3153,7 @@ int usage()
     "  -noslack           : Use set of constraints without slack variables\n",
     param.w_kinetic, param.mu_init, param.sigma, 
     param.al_iter, param.gradient_iter,param.nt,
+    param.loop_subdivision_level,
     param.bfgs_ftol, param.al_max_con
     );
 
@@ -3064,6 +3268,14 @@ int main(int argc, char *argv[])
       {
       param.check_deriv = true;
       }
+    else if(command == "-sl")
+      {
+      param.loop_subdivision_level = cl.read_integer();
+      }
+    else if(command == "-L")
+      {
+      param.limit_surface_constraints = true;
+      }
     else if(command == "-noslack")
       {
       param.use_slack = false;
@@ -3095,8 +3307,8 @@ int main(int argc, char *argv[])
 
   // Initialize the Dice overlap computer
   typedef DiceOverlapComputation<ImageDiceFunction> DiceOverlapType;
-  DiceOverlapType dicer(&m_template, 5, 2, idf.GetVolume(), idf);
-
+  DiceOverlapType dicer(&m_template, 5, param.loop_subdivision_level, 
+    !param.limit_surface_constraints, idf.GetVolume(), idf);
 
 
   if(param.use_slack)

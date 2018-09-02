@@ -331,10 +331,10 @@ PointSetOptimalControlSystem<TFloat, VDim>
 
   // Allocate the streamline arrays
   Qt.resize(N); Qt[0] = q0;
-  Vt.resize(N);
+  Vt.resize(N, Matrix(k, VDim));
 
   // The return value
-  TFloat KE;
+  TFloat KE = 0.0;
 
   // Flow over time
   for(unsigned int t = 1; t < N; t++)
