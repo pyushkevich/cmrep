@@ -209,7 +209,6 @@ void CMRep::ReadVTK(const char *fn)
 
   // Sometimes the medial points are included in the model
   vtkDataArray *b_med = this->bnd_vtk->GetPointData()->GetArray("MedialPoint");
-  std::cout << "BMED exists " << b_med << std::endl;
 
   // Get the number of vertices and triangles
   nv = this->bnd_vtk->GetNumberOfPoints();
@@ -446,7 +445,6 @@ protected:
 };
 
 
-
 void TestLimitSurface(CMRep *model)
 {
   LoopTangentScheme lts;
@@ -543,6 +541,9 @@ struct AugLagMedialFitParameters
   // Do we do derivative checks?
   bool check_deriv;
 
+  // Do similarity transform
+  bool do_similarity;
+
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
@@ -552,7 +553,7 @@ struct AugLagMedialFitParameters
       interp_mode(false), use_slack(true),
       loop_subdivision_level(2),
       limit_surface_constraints(false),
-      check_deriv(false) {}
+      check_deriv(false), do_similarity(false) {}
 };
 
 
@@ -1226,6 +1227,8 @@ public:
   typedef vnl_matrix_ref<double> MatrixRef;
   typedef vnl_vector_ref<double> VectorRef;
 
+  typedef TImageFunction ImageFunctionType;
+
   // Target data represents terms that attract the model
   struct TargetData
     {
@@ -1701,6 +1704,8 @@ public:
   typedef vnl_matrix<unsigned int> IdxMatrix;
   typedef vnl_matrix_ref<double> MatrixRef;
   typedef vnl_vector_ref<double> VectorRef;
+
+  typedef TImageFunction ImageFunctionType;
 
   // Target data represents terms that attract the model
   struct TargetData
@@ -2291,6 +2296,10 @@ public:
 
   void set_verbose(bool flag) { this->verbose = flag; }
 
+  CMRep *get_model() const { return this->model; }
+
+  TargetData *get_target() const { return this->target; }
+
   /** Print the problem status */
   void iter_print(unsigned int iter, 
     double m_distsq, double m_kinetic, 
@@ -2329,6 +2338,23 @@ public:
       iter,
       mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
       con_text.c_str(), m_total, norm_g);
+    }
+
+  /** Get the boundary points at t-th iteration. Must call after 'compute' */
+  Matrix get_qbnd(unsigned int t)
+    {
+    MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
+    MatrixRef Y_qtb(model->nv, 3, Y_qt.data_block());
+    Y_qt.update(ocsys->GetQt(t));
+    return Y_qtb;
+    }
+
+  Matrix get_qmed(unsigned int t)
+    {
+    MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
+    MatrixRef Y_qtm(model->nmv, 3, Y_qt.data_block() + model->nv * 3);
+    Y_qt.update(ocsys->GetQt(t));
+    return Y_qtm;
     }
 
   /** Compute the objective function */
@@ -2588,6 +2614,10 @@ public:
 
   void set_verbose(bool flag) { this->verbose = flag; }
 
+  CMRep *get_model() const { return this->model; }
+
+  TargetData *get_target() const { return this->target; }
+
   /** Print the problem status */
   void iter_print(unsigned int iter, 
     double m_distsq, double m_kinetic, 
@@ -2616,6 +2646,23 @@ public:
       con_text.c_str(), m_total, norm_g);
     }
 
+
+  /** Get the boundary points at t-th iteration. Must call after 'compute' */
+  Matrix get_qbnd(unsigned int t)
+    {
+    MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
+    MatrixRef Y_qtb(model->nv, 3, Y_qt.data_block());
+    Y_qt.update(hsys->GetQt(t));
+    return Y_qtb;
+    }
+
+  Matrix get_qmed(unsigned int t)
+    {
+    MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
+    MatrixRef Y_qtm(model->nmv, 3, Y_qt.data_block() + model->nv * 3);
+    Y_qt.update(hsys->GetQt(t));
+    return Y_qtm;
+    }
 
   /** Compute the objective function */
   virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
@@ -3016,6 +3063,217 @@ double nlopt_vnl_func(unsigned n, const double *x, double *grad, void *my_func_d
   return f;
 }
 
+vnl_matrix_fixed<double,3,3> get_rotation_matrix_from_vec3(const vnl_vector_fixed<double, 3> q)
+{
+  typedef vnl_matrix_fixed<double,3,3> Mat3;
+  typedef vnl_vector_fixed<double,3> Vec3;
+
+  // Compute theta
+  double theta = q.magnitude();
+
+  // Predefine the rotation matrix
+  Mat3 R; R.set_identity();
+
+  // Create the Q matrix
+  Mat3 Qmat; Qmat.fill(0.0);
+  Qmat(0,1) = -q[2]; Qmat(1,0) =  q[2];
+  Qmat(0,2) =  q[1]; Qmat(2,0) = -q[1];
+  Qmat(1,2) = -q[0]; Qmat(2,1) =  q[0];
+
+  // Compute the square of the matrix
+  Mat3 QQ = vnl_matrix_fixed_mat_mat_mult(Qmat, Qmat);
+
+  // When theta = 0, rotation is identity
+  double eps = 1e-4;
+
+  if(theta > eps)
+    {
+    // Compute the constant terms in the Rodriguez formula
+    double a1 = sin(theta) / theta;
+    double a2 = (1 - cos(theta)) / (theta * theta);
+
+    // Compute the rotation matrix
+    R += a1 * Qmat + a2 * QQ;
+    }
+  else
+    {
+    R += Qmat;
+    }
+
+  return R;
+}
+
+template <class TProblemTraits>
+class SimilarityTransformObjective
+{
+public:
+  typedef typename TProblemTraits::Vector Vector;
+  typedef typename TProblemTraits::Matrix Matrix;
+  typedef typename TProblemTraits::TargetData TargetData;
+
+  typedef vnl_vector_fixed<double, 3> Vec3;
+  typedef vnl_matrix_fixed<double, 3, 3> Mat3;
+
+  SimilarityTransformObjective(
+    CMRep *in_model, TargetData *in_target, const AugLagMedialFitParameters &in_param)
+    : model(in_model), target(in_target), param(in_param),
+      x_init(7, 0.0), x_lb(7, 0.0), x_ub(7,0.0)
+    {
+    // Bounds for the extent
+    double max_dim = model->bnd_vtx.max_value() - model->bnd_vtx.min_value();
+    for(int a = 0; a < 3; a++)
+      {
+      x_lb[a] = -vnl_math::pi;
+      x_ub[a] = vnl_math::pi;
+      x_lb[a + 3] = -max_dim;
+      x_ub[a + 3] = max_dim;
+      }
+
+    // Bounds for the scale factor
+    x_lb[6] = -4.0; x_ub[6] = 4.0;
+
+    // Compute the model's center of mass
+    qctr.fill(0.0);
+    for(unsigned int i = 0; i < model->bnd_vtx.rows(); i++)
+      qctr += model->bnd_vtx.get_row(i) / model->bnd_vtx.rows();
+    } 
+
+  /** breakdown of coefficient vector into similarity transform coefficients */
+  struct Coeff
+    {
+    Vec3 x_rot, x_off;
+    double x_scale;
+    Mat3 R;
+
+    Coeff(const Vector &x)
+      {
+      // Extract coefficients
+      x_rot = x.extract(3, 0);
+      x_off = x.extract(3, 3);
+      x_scale = pow(2.0, x[6]);
+
+      // Compute the rotation matrix
+      R = get_rotation_matrix_from_vec3(x_rot);
+      }
+    };
+
+  virtual Vector get_xinit() const { return x_init; }
+  virtual Vector get_x_lb() const { return x_lb; }
+  virtual Vector get_x_ub() const { return x_ub; }
+
+  virtual Matrix transform_points(const Coeff &xc, const Matrix &q)
+    {
+    Matrix q_out(q.rows(), 3);
+    for(unsigned int i = 0; i < q.rows(); i++)
+      q_out.set_row(i, (xc.R * (q.get_row(i) - qctr)) * xc.x_scale + qctr + xc.x_off);
+    return q_out;
+    }
+
+  virtual Matrix transform_normals(const Coeff &xc, const Matrix &q)
+    {
+    Matrix q_out(q.rows(), 3);
+    for(unsigned int i = 0; i < q.rows(); i++)
+      q_out.set_row(i, xc.R * q.get_row(i));
+    return q_out;
+    }
+
+  virtual Vector transform_radii(const Coeff &xc, const Vector &r)
+    {
+    return r * xc.x_scale;
+    }
+
+  virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
+    {
+    // Get the coefficients
+    Coeff xc(x);
+
+    // Get the coordinates of all boundary and medial vertices
+    Matrix qb = transform_points(xc, model->bnd_vtx);
+    Matrix qm = transform_points(xc, model->med_vtx);
+
+    // TODO: we are missing the least squares part
+    *f =  target->w_image_function * (1.0 - target->image_function->Compute(qb, qm));
+
+    // Print the results
+    printf("Affine: Rot = %8.4f %8.4f %8.4f;  Scale = %8.4f;  Tran = %8.4f %8.4f %8.4f;  Obj = %8.4f\n",
+      xc.x_rot[0] * 180.0 / vnl_math::pi, 
+      xc.x_rot[1] * 180.0 / vnl_math::pi,
+      xc.x_rot[2] * 180.0 / vnl_math::pi, 
+      xc.x_scale, 
+      xc.x_off[0], xc.x_off[1], xc.x_off[2], *f);
+    }
+
+  // Apply the transformation encoded in x to the model
+  virtual void apply(const CMRep::Vector &x, CMRep *m)
+    {
+    // Get the coefficients
+    Coeff xc(x);
+
+    // Apply transform to the coordinates of boundary and medial vertices
+    m->bnd_vtx = transform_points(xc, m->bnd_vtx);
+    m->med_vtx = transform_points(xc, m->med_vtx);
+
+    // Rotate the boundary normals
+    m->bnd_nrm = transform_normals(xc, m->bnd_nrm);
+
+    // Scale the radii
+    m->med_rad = transform_radii(xc, m->med_rad);
+    }
+
+protected:
+  CMRep *model;
+  TargetData *target;
+  const AugLagMedialFitParameters &param;
+
+  Vector x_init, x_lb, x_ub;
+  Vec3 qctr;
+};
+
+template <class TProblemTraits>
+void optimize_similarity(
+  CMRep *model,
+  typename TProblemTraits::TargetData *target, 
+  const AugLagMedialFitParameters &param)
+{
+  // Create the similarity objective
+  typedef SimilarityTransformObjective<TProblemTraits> SimObjective;
+  SimObjective sim_obj(model, target, param);
+
+  // Create the initial solution
+  typename SimObjective::Vector x_opt = sim_obj.get_xinit(), 
+                                x_lb = sim_obj.get_x_lb(),
+                                x_ub = sim_obj.get_x_ub();
+
+  // Create an optimizer
+  vnl_func_wrapper<SimObjective> obj_vnl(sim_obj);
+
+  nlopt_opt opt = nlopt_create(NLOPT_LN_SBPLX, x_opt.size());
+  nlopt_set_min_objective(opt, nlopt_vnl_func, &obj_vnl);
+  nlopt_set_xtol_rel(opt, 1e-5);
+  nlopt_set_ftol_rel(opt, 1e-8);
+  nlopt_set_maxeval(opt, 5000);
+
+  // Set the bounds
+  nlopt_set_lower_bounds(opt, x_lb.data_block());
+  nlopt_set_upper_bounds(opt, x_ub.data_block());
+
+  double f_opt;
+  int rc = nlopt_optimize(opt, x_opt.data_block(), &f_opt);
+  switch(rc)
+    {
+  case NLOPT_SUCCESS: printf("NLOPT: Success!\n"); break;
+  case NLOPT_STOPVAL_REACHED: printf("NLOPT: Reached f_stopval!\n"); break;
+  case NLOPT_FTOL_REACHED: printf("NLOPT: Reached f_tol!\n"); break;
+  case NLOPT_XTOL_REACHED: printf("NLOPT: Reached x_tol!\n"); break;
+  case NLOPT_MAXEVAL_REACHED: printf("NLOPT: Reached max evaluations!\n"); break;
+  default: printf("nlopt failed %d!\n",rc);
+    }
+  nlopt_destroy(opt);
+
+  // Apply the transformation to the model
+  sim_obj.apply(x_opt, model);
+}
+
 
 template <class TObjective>
 void optimize_auglag(
@@ -3044,7 +3302,7 @@ void optimize_auglag(
   // Evaluate before any optimization takes place 
   printf("Initial evaluation of objective function:\n");
   obj.compute(x_opt, &f_current, &x_grad);
-  obj.Export(x_opt, "/tmp/wrf_%03d.vtk");
+  obj.Export(x_opt, "/tmp/initial_%03d.vtk");
 
   // Outer iteration loop
   for(int it = 0; it < param.al_iter; it++)
@@ -3148,6 +3406,8 @@ int usage()
     "  -ftol <value>      : Relative function tolerance for BFGS (%f).\n"
     "  -cmax <value>      : Aug. lag. termination condition - stop when max constraint\n"
     "                       violation is below this value (%f)\n"
+    "  -S                 : Flag, when enabled, a similarity (rigid+scale) transform will be\n"
+    "                       found before beginning model fitting\n"
     "Debugging Parameters:\n"
     "  -D                 : Enable derivative checks\n"
     "  -noslack           : Use set of constraints without slack variables\n",
@@ -3161,10 +3421,11 @@ int usage()
 }
 
 
-template <class TProblemTraits, class TImageFunction>
+template <class TProblemTraits>
 int do_optimization(
   const AugLagMedialFitParameters &param,
-  CMRep *m_template, CMRep *m_target, TImageFunction *dicer)
+  CMRep *m_template, CMRep *m_target, 
+  typename TProblemTraits::ImageFunctionType *dicer)
 
 {
   // Set up the target data
@@ -3173,6 +3434,10 @@ int do_optimization(
   td.w_image_function = 100.0;
   td.target_model = m_target;
   td.image_function = dicer;
+
+  // Perform similarity transform if requested
+  if(param.do_similarity)
+    optimize_similarity<TProblemTraits>(m_template, &td, param);
 
   if(param.interp_mode)
     {
@@ -3280,6 +3545,10 @@ int main(int argc, char *argv[])
       {
       param.use_slack = false;
       }
+    else if(command == "-S")
+      {
+      param.do_similarity = true;
+      }
     }
 
   // Read the template mesh
@@ -3315,12 +3584,12 @@ int main(int argc, char *argv[])
     {
     // Define the traits for the AL objective
     typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
-    do_optimization<TraitsType, DiceOverlapType>(param, &m_template, &m_target, &dicer);
+    do_optimization<TraitsType>(param, &m_template, &m_target, &dicer);
     }
   else
     {
     // Define the traits for the AL objective
     typedef PointBasedMediallyConstrainedWithoutSlackFittingTraits<DiceOverlapType> TraitsType;
-    do_optimization<TraitsType, DiceOverlapType>(param, &m_template, &m_target, &dicer);
+    do_optimization<TraitsType>(param, &m_template, &m_target, &dicer);
     }
 }
