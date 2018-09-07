@@ -11,6 +11,7 @@
 #include "FastLinearInterpolator.h"
 #include "MedialAtomGrid.h"
 #include "SubdivisionSurface.h"
+#include "VTKMeshBuilder.h"
 
 #include "CommandLineHelper.h"
 
@@ -21,10 +22,8 @@
 #include <vtkDataArray.h>
 #include <vtkFloatArray.h>
 #include <vtkPoints.h>
-#include <vtkCellData.h>
 #include <vtkSmartPointer.h>
 #include <vtkCell.h>
-#include <vtkCellArray.h>
 #include <vtksys/SystemTools.hxx>
 
 #include <itkImage.h>
@@ -343,106 +342,6 @@ void vtk_save_polydata(vtkPolyData *pd, const char *file)
   w->SetFileName(file);
   w->Update();
 }
-/**
- * A helper class for making VTK meshes or adding stuff to them
- */
-template <class TDataSet>
-class VTKMeshBuilder
-{
-public:
-
-  VTKMeshBuilder()
-    {
-    pd = TDataSet::New();
-    }
-
-  VTKMeshBuilder(TDataSet* other)
-    {
-    pd = TDataSet::New();
-    pd->DeepCopy(other);
-    }
-
-  TDataSet *GetData() const { return pd; }
-
-  void SetPoints(const vnl_matrix<double> &x)
-    {
-    assert(x.columns() == 3);
-    vtkSmartPointer<vtkPoints> pts = vtkPoints::New();
-    pts->SetNumberOfPoints(x.rows());
-    for(int i = 0; i < x.rows(); i++)
-      pts->SetPoint(i, x(i,0), x(i,1), x(i,2));
-    pd->SetPoints(pts);
-    }
-
-  void SetTriangles(const TriangleMesh &mesh)
-    {
-    vtkSmartPointer<vtkCellArray> cells = vtkCellArray::New();
-    for(auto T : mesh.triangles)
-      {
-      cells->InsertNextCell(3);
-      for(unsigned int a = 0; a < 3; a++)
-        cells->InsertCellPoint(T.vertices[a]);
-      }
-    pd->SetPolys(cells);
-    }
-
-  void SetNormals(const vnl_matrix<double> &x)
-    {
-    assert(x.columns() == 3);
-    assert(pd->GetNumberOfPoints() == x.rows());
-
-    vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
-    arr_nrm->SetNumberOfComponents(3);
-    arr_nrm->SetNumberOfTuples(x.rows());
-
-    // Update the points
-    for(int i = 0; i < x.rows(); i++)
-      arr_nrm->SetTuple3(i, x(i,0), x(i,1), x(i,2));
-
-    pd->GetPointData()->SetNormals(arr_nrm);
-    }
-
-  void AddArray(const vnl_matrix<double> &x, const char *name)
-  {
-    assert(pd->GetNumberOfPoints() == x.rows());
-
-    vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
-    arr->SetNumberOfComponents(x.columns());
-    arr->SetNumberOfTuples(x.rows());
-    arr->SetName(name);
-
-    // Update the points
-    for(int i = 0; i < x.rows(); i++)
-      for(int a = 0; a < x.columns(); a++)
-        arr->SetComponent(i, a, x(i,a));
-
-    pd->GetPointData()->AddArray(arr);
-  }
-
-  void AddArray(const vnl_vector<double> &x, const char *name)
-    {
-    assert(pd->GetNumberOfPoints() == x.size());
-
-    vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
-    arr->SetNumberOfComponents(1);
-    arr->SetNumberOfTuples(x.size());
-    arr->SetName(name);
-
-    // Update the points
-    for(int i = 0; i < x.size(); i++)
-      arr->SetTuple1(i, x[i]);
-
-    pd->GetPointData()->AddArray(arr);
-    }
-
-  void Save(const char *fn)
-    {
-    vtk_save_polydata(pd, fn);
-    }
-
-protected:
-  vtkSmartPointer<TDataSet> pd;
-};
 
 
 void TestLimitSurface(CMRep *model)

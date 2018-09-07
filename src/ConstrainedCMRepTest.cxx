@@ -13,6 +13,7 @@
 #include "MedialModelIO.h"
 #include "IpIpoptApplication.hpp"
 #include "MedialAtomGrid.h"
+#include "VTKMeshBuilder.h"
 #include "vtkPolyDataWriter.h"
 #include "vtkPolyDataReader.h"
 #include "vtkFloatArray.h"
@@ -1128,7 +1129,6 @@ public:
 
   void Subdivide();
   void ImportFromCMRep(const char *file);
-
 };
 
 void BCMTemplate::Load(const char *file)
@@ -1332,6 +1332,154 @@ int MatchToOppositeTriangle(int index, int level)
   return q;
 }
 
+void merge_vertices(TriangleMesh &tm, vnl_matrix<double> &X, unsigned int v1, unsigned int v2)
+{
+  // Get rid of references to v2
+  for(auto &tr : tm.triangles)
+    {
+    for(unsigned int i = 0; i < 3; i++)
+      {
+      if(tr.vertices[i] == v2)
+        tr.vertices[i] = v1;
+      }
+    }
+
+  // Merge the vertices themselves
+  X.set_row(v1, (X.get_row(v1) + X.get_row(v2)) * 0.5);
+}
+
+void InflateMedialModel(const char *fn_input, const char *fn_output, double rad)
+{
+  typedef vnl_vector_fixed<double, 3> Vec3;
+  typedef vnl_matrix_fixed<double, 3, 3> Mat3;
+
+  // Load a triangular mesh from file
+  vtkSmartPointer<vtkPolyDataReader> reader = vtkSmartPointer<vtkPolyDataReader>::New();
+  reader->SetFileName(fn_input);
+  reader->Update();
+
+  // Convert it into a triangle mesh
+  vtkSmartPointer<vtkPolyData> pd = reader->GetOutput();
+  vtkSmartPointer<vtkDataArray> alab = pd->GetPointData()->GetArray("Label");
+  unsigned int nv = pd->GetNumberOfPoints();
+
+  // On the first pass, we just duplicate each triangle and each vertex. Each vertex
+  // i is matched to the corresponding vertex nv + i
+  TriangleMesh model;
+  TriangleMeshGenerator tmg(&model, 2 * nv);
+
+  // Constants for pushing out vertices along the normals and laterally
+  double r_norm = rad, r_lat = 0.5 * rad;
+
+  // The coordinates of the vertices. These are constructed additively by pushing
+  // each triangle vertex along its normal and outwards
+  vnl_matrix<double> X(nv * 2, 3, 0.0);
+
+  // The valence of the vertices - used for coordinate computation
+  vnl_vector<unsigned int> valence(nv * 2, 0);
+
+  // For each triangle in the mesh, generate another triangle that is its opposite. 
+  for(int i = 0; i < pd->GetNumberOfCells(); i++)
+    {
+    // Read the cell
+    vtkCell *c = pd->GetCell(i);
+    if(c->GetNumberOfPoints() != 3)
+      throw MedialModelException("Bad cell in input");
+
+    // The vertices of the triangle
+    vnl_vector_fixed<unsigned int, 3> v, w;
+    Mat3 x;
+    for(unsigned int a = 0; a < 3; a++)
+      {
+      v[a] = c->GetPointId(a);
+      w[a] = v[a] + nv;
+      for(unsigned int b = 0; b < 3; b++)
+        x(a,b) = pd->GetPoint(v[a])[b];
+      }
+
+    // Add the two triangles
+    tmg.AddTriangle(v[0], v[1], v[2]);
+    tmg.AddTriangle(w[2], w[1], w[0]);
+
+    // Get triangle normal and center
+    Vec3 N = vnl_cross_3d(x.get_row(1)-x.get_row(0), x.get_row(2)-x.get_row(0)).normalize();
+    Vec3 C = (x.get_row(0) + x.get_row(1) + x.get_row(2)) / 3.0;
+
+    // Update the coordinates and valences
+    for(unsigned int a = 0; a < 3; a++)
+      {
+      Vec3 y1 = x.get_row(a) * (1 + r_lat) - C * r_lat + N * r_norm;
+      Vec3 y2 = x.get_row(a) * (1 + r_lat) - C * r_lat - N * r_norm;
+      X.set_row(v[a], X.get_row(v[a]) + y1);
+      X.set_row(w[a], X.get_row(w[a]) + y2);
+      valence[v[a]]++; valence[w[a]]++;
+      }
+    }
+
+  // Scale the X by valence
+  for(int j = 0; j < 2 * nv; j++)
+    X.set_row(j, X.get_row(j) * 1.0 / valence[j]);
+
+  // Generate the mesh
+  tmg.GenerateMesh();
+
+  // Write the mesh
+  /*
+  VTKMeshBuilder<vtkPolyData> vmb;
+  vmb.SetPoints(X);
+  vmb.SetTriangles(model);
+  vmb.Save("/tmp/lifted.vtk");
+  */
+
+  // Find all the edge vertices and merge them
+  std::vector<int> remap(X.rows(), 0);
+  for(unsigned int j = 0; j < nv; j++)
+    {
+    printf("label : %d\n", (alab ? (int) alab->GetTuple1(j) : -1));
+    if(!model.IsVertexInternal(j) && (!alab || alab->GetTuple1(j) == 1))
+      {
+      merge_vertices(model, X, j, j + nv);
+      remap[j+nv] = -1;
+      }
+    }
+
+  // Create a vertex index mapping
+  unsigned int k = 0;
+  for(unsigned int j = 0; j < remap.size(); j++)
+    {
+    if(remap[j] == 0)
+      remap[j] = k++;
+    }
+
+  // Apply the mapping
+  TriangleMesh model_merged;
+  TriangleMeshGenerator tmg_merged(&model_merged, k);
+  for(auto &tr : model.triangles)
+    tmg_merged.AddTriangle(remap[tr.vertices[0]], remap[tr.vertices[1]], remap[tr.vertices[2]]);
+  tmg_merged.GenerateMesh();
+
+  // Medial index
+  vnl_vector<int> mindex(k, 0);
+
+  // Apply to X
+  vnl_matrix<double> X_merged(k, 3);
+  for(unsigned int j = 0; j < remap.size(); j++)
+    {
+    if(remap[j] >= 0)
+      {
+      X_merged.set_row(remap[j], X.get_row(j));
+      mindex[remap[j]] = j < nv ? j : j - nv;
+      }
+    }
+
+  // Write the mesh
+  VTKMeshBuilder<vtkPolyData> vmb_merged;
+  vmb_merged.SetPoints(X_merged);
+  vmb_merged.SetTriangles(model_merged);
+  vmb_merged.AddArray(mindex,"MedialIndex");
+  vmb_merged.Save(fn_output);
+}
+
 void BCMTemplate::ImportFromCMRep(const char *file)
 {
   // Load and process the mrep (TODO: remove)
@@ -1446,6 +1594,7 @@ int ConvertCMRepToBoundaryRepresentation(std::string fnInput, std::string fnOutp
   BCMTemplate tmpl;
   tmpl.ImportFromCMRep(fnInput.c_str());
   tmpl.Save(fnOutput.c_str());
+
   return 0;
 }
 
@@ -1732,6 +1881,7 @@ enum ProgramAction {
   ACTION_FIT_SELF,
   ACTION_SUBDIVIDE,
   ACTION_CONVERT_CMREP,
+  ACTION_INFLATE_CMREP,
   ACTION_FIX_CMREP,
   ACTION_NONE
 };
@@ -1748,6 +1898,7 @@ int usage()
       "  -sub template.vtk factor       : subdivide template by a factor\n"
       "  -cmr input.cmrep               : import a cm-rep template\n"
       "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
+      "  -inf medial.vtk radius         : inflate a medial model created with the GUI tool\n"
       "other required options:\n"
       "  -o output.vtk                  : mesh to save the result\n"
       "optional parameters:\n"
@@ -1879,6 +2030,7 @@ int main(int argc, char *argv[])
   ProgramAction action = ACTION_NONE;
   std::string fnTemplate, fnTarget, fnOutput, fnImportSource;
   int subdivisionLevel = 0;
+  double infl_radius;
 
   RegularizationOptions regOpts;
 
@@ -1911,6 +2063,12 @@ int main(int argc, char *argv[])
       {
       action = ACTION_CONVERT_CMREP;
       fnImportSource = argv[++p];
+      }
+    else if(cmd == "-inf")
+      {
+      action = ACTION_INFLATE_CMREP;
+      fnImportSource = argv[++p];
+      infl_radius = atof(argv[++p]);
       }
     else if(cmd == "-cfx")
       {
@@ -1974,6 +2132,12 @@ int main(int argc, char *argv[])
   if(action == ACTION_CONVERT_CMREP)
     {
     return ConvertCMRepToBoundaryRepresentation(fnImportSource, fnOutput);
+    }
+
+  else if(action == ACTION_INFLATE_CMREP)
+    {
+    InflateMedialModel(fnImportSource.c_str(), fnOutput.c_str(), infl_radius);
+    return 0;
     }
 
   else if(action == ACTION_FIX_CMREP)

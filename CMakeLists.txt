@@ -336,7 +336,8 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
       src/TestAugLagCMRep.cxx
       src/MeshTraversal.cxx
       src/PointSetOptimalControlSystem.cxx
-      src/PointSetHamiltonianSystem.cxx)
+      src/PointSetHamiltonianSystem.cxx
+      src/VTKMeshBuilder.cxx)
     TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS} ${NLOPT_LIBRARIES})
   ENDIF(NLOPT_FOUND)
 
@@ -378,7 +379,8 @@ IF(USE_IPOPT AND USE_TETGEN)
                  src/GentleNLP.cxx
                  src/IPOptProblemInterface.cxx
                  src/ConstrainedCMRepObjectives.cxx
-                 src/ConstrainedCMRepTest.cxx)
+                 src/ConstrainedCMRepTest.cxx
+                 src/VTKMeshBuilder.cxx)
   TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
   TARGET_LINK_LIBRARIES(contest ${PDE_LIBS} toms611)
 
