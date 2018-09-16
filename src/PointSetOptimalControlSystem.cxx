@@ -4,6 +4,8 @@
 #include "ctpl_stl.h"
 #include "exp_approx.h"
 
+#include "PointSetOctree.h"
+
 template <class TFloat, unsigned int VDim>
 PointSetOptimalControlSystem<TFloat, VDim>
 ::PointSetOptimalControlSystem(
@@ -61,42 +63,31 @@ PointSetOptimalControlSystem<TFloat, VDim>
     }
 }
 
+// TODO: get rid of this stuff
+#include "VTKMeshBuilder.h"
+#include <vtkPolyData.h>
 
-
-template <class TFloat, unsigned int VDim>
-TFloat
-PointSetOptimalControlSystem<TFloat, VDim>
-::ComputeEnergyAndVelocity(const Matrix &q, const Matrix &u)
+template <class TFloat>
+class EraseMe
 {
-  // Submit the jobs to thread pool
-  std::vector<std::future<void>> futures;
-  for(auto &tdi : td)
+public:
+  static void Save(const vnl_matrix<TFloat> &q, const vnl_matrix<TFloat> &u, const vnl_matrix<TFloat> &v, const vnl_matrix<TFloat> &va) {}
+};
+
+template<>
+class EraseMe<double>
+{
+public:
+  static void Save(const vnl_matrix<double> &q, const vnl_matrix<double> &u, const vnl_matrix<double> &v, const vnl_matrix<double> &va) 
     {
-    futures.push_back(
-      thread_pool->push(
-        [&](int id) { this->ComputeEnergyAndVelocityThreadedWorker(q, u, &tdi); }));
+    VTKMeshBuilder<vtkPolyData> vmb;
+    vmb.SetPoints(q);
+    vmb.AddArray(u, "Control");
+    vmb.AddArray(v, "V");
+    vmb.AddArray(va, "V_approx");
+    vmb.Save("/tmp/octree_test.vtk");
     }
-
-  // Wait for completion
-  for(auto &f : futures)
-    f.get();
-
-  // Compile the results
-  TFloat KE = 0.0;
-  for(int a = 0; a < VDim; a++)
-    this->d_q__d_t[a].fill(0.0);
-
-  for(auto &tdi : td)
-    {
-    for(int a = 0; a < VDim; a++)
-      {
-      this->d_q__d_t[a] += tdi.d_q__d_t[a];
-      }
-    KE += tdi.KE;
-    }
-
-  return KE;
-}
+};
 
 template <class TFloat, unsigned int VDim>
 void
@@ -161,6 +152,104 @@ PointSetOptimalControlSystem<TFloat, VDim>
         }
       } // loop over j
     } // loop over i
+}
+
+
+
+template <class TFloat, unsigned int VDim>
+TFloat
+PointSetOptimalControlSystem<TFloat, VDim>
+::ComputeEnergyAndVelocity(const Matrix &q, const Matrix &u)
+{
+  // Submit the jobs to thread pool
+  std::vector<std::future<void>> futures;
+  for(auto &tdi : td)
+    {
+    futures.push_back(
+      thread_pool->push(
+        [&](int id) { this->ComputeEnergyAndVelocityThreadedWorker(q, u, &tdi); }));
+    }
+
+  // Wait for completion
+  for(auto &f : futures)
+    f.get();
+
+  // Compile the results
+  TFloat KE = 0.0;
+  for(int a = 0; a < VDim; a++)
+    this->d_q__d_t[a].fill(0.0);
+
+  for(auto &tdi : td)
+    {
+    for(int a = 0; a < VDim; a++)
+      {
+      this->d_q__d_t[a] += tdi.d_q__d_t[a];
+      }
+    KE += tdi.KE;
+    }
+
+  Matrix v(q.rows(), VDim), v_approx(q.rows(), VDim);
+  PointSetOctree<TFloat, VDim> octree;
+  octree.Build(q0);
+  octree.Update(q, u);
+
+  unsigned int count = 0;
+  for(unsigned int i = 0; i < q.rows(); i++)
+    {
+    for(unsigned int a = 0; a < VDim; a++)
+      v(i,a) = this->d_q__d_t[a](i);
+
+    vnl_vector_fixed<TFloat, VDim> xi = q.get_row(i), vi(0.0);
+    octree.Approximate(xi, vi, count, 4.0, -0.5 / (sigma * sigma));
+    v_approx.set_row(i, vi);
+    }
+
+  printf("Octree:  visrate: %8.6f   RMSE: %8.6f   MaxE: %8.6f\n", 
+    count * 1.0 / (q.rows() * q.rows()),
+    (v - v_approx).array_two_norm() / sqrt(q.rows()),
+    (v - v_approx).absolute_value_max());
+  EraseMe<TFloat>::Save(q, u, v, v_approx);
+
+  return KE;
+}
+
+
+template <class TFloat, unsigned int VDim>
+TFloat
+PointSetOptimalControlSystem<TFloat, VDim>
+::Flow(const std::vector<Matrix> &u)
+{
+  // Initialize q
+  Matrix q = q0;
+
+  // Allocate the streamline arrays
+  Qt.resize(N); Qt[0] = q0;
+  Vt.resize(N, Matrix(k, VDim));
+
+  // The return value
+  TFloat KE = 0.0;
+
+  // Flow over time
+  for(unsigned int t = 1; t < N; t++)
+    {
+    // Compute the hamiltonian
+    KE += dt * ComputeEnergyAndVelocity(q, u[t-1]);
+
+    for(unsigned int i = 0; i < k; i++)
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        // Euler update
+        q(i,a) += dt * d_q__d_t[a](i);
+
+        // Store the velocity in case user wants it
+        Vt[t-1](i,a) = d_q__d_t[a](i);
+        }
+
+    // Store the flow results
+    Qt[t] = q;
+    }
+
+  return KE;
 }
 
 
@@ -319,44 +408,6 @@ PointSetOptimalControlSystem<TFloat, VDim>
         }
       } // loop over j
     } // loop over i}
-}
-
-template <class TFloat, unsigned int VDim>
-TFloat
-PointSetOptimalControlSystem<TFloat, VDim>
-::Flow(const std::vector<Matrix> &u)
-{
-  // Initialize q
-  Matrix q = q0;
-
-  // Allocate the streamline arrays
-  Qt.resize(N); Qt[0] = q0;
-  Vt.resize(N, Matrix(k, VDim));
-
-  // The return value
-  TFloat KE = 0.0;
-
-  // Flow over time
-  for(unsigned int t = 1; t < N; t++)
-    {
-    // Compute the hamiltonian
-    KE += dt * ComputeEnergyAndVelocity(q, u[t-1]);
-
-    for(unsigned int i = 0; i < k; i++)
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        // Euler update
-        q(i,a) += dt * d_q__d_t[a](i);
-
-        // Store the velocity in case user wants it
-        Vt[t-1](i,a) = d_q__d_t[a](i);
-        }
-
-    // Store the flow results
-    Qt[t] = q;
-    }
-
-  return KE;
 }
 
 template class PointSetOptimalControlSystem<double, 2>;

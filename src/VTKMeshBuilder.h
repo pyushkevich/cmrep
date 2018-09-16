@@ -25,6 +25,7 @@ public:
   void SetPoints(const vnl_matrix<double> &x);
 
   void SetTriangles(const TriangleMesh &mesh);
+  void SetTriangles(const vnl_matrix<unsigned int> &tri);
 
   void SetNormals(const vnl_matrix<double> &x);
 

@@ -1175,20 +1175,9 @@ void BCMTemplate::Save(const char *file)
   mix->Allocate(bmesh.nVertices);
   mix->SetName("MedialIndex");
 
-  vtkSmartPointer<vtkFloatArray> nrm = vtkSmartPointer<vtkFloatArray>::New();
-  nrm->SetNumberOfComponents(3);
-  nrm->Allocate(bmesh.nVertices);
-  
-  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
-  rad->SetNumberOfComponents(1);
-  rad->Allocate(bmesh.nVertices);
-  rad->SetName("Radius");
-
   for(int i = 0; i < bmesh.nVertices; i++)
     {
     pts->InsertNextPoint(x[i].data_block());
-    nrm->InsertNextTuple(Nx[i].data_block());
-    rad->InsertNextTuple1(R[i]);
     mix->InsertNextTuple1(mIndex[i]);
     }
 
@@ -1196,8 +1185,31 @@ void BCMTemplate::Save(const char *file)
   pd->Allocate(bmesh.triangles.size());
   pd->SetPoints(pts);
   pd->GetPointData()->AddArray(mix);
-  pd->GetPointData()->AddArray(rad);
-  pd->GetPointData()->SetNormals(nrm);
+  
+  if(Nx.size())
+    {
+    vtkSmartPointer<vtkFloatArray> nrm = vtkSmartPointer<vtkFloatArray>::New();
+    nrm->SetNumberOfComponents(3);
+    nrm->Allocate(bmesh.nVertices);
+
+    for(int i = 0; i < bmesh.nVertices; i++)
+      nrm->InsertNextTuple(Nx[i].data_block());
+
+    pd->GetPointData()->SetNormals(nrm);
+    }
+
+  if(R.size())
+    {
+    vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+    rad->SetNumberOfComponents(1);
+    rad->Allocate(bmesh.nVertices);
+    rad->SetName("Radius");
+
+    for(int i = 0; i < bmesh.nVertices; i++)
+      rad->InsertNextTuple1(R[i]);
+
+    pd->GetPointData()->AddArray(rad);
+    }
 
   for(int i = 0; i < bmesh.triangles.size(); i++)
     {
@@ -1222,6 +1234,21 @@ struct Edge : public std::pair<int, int>
     this->second = std::max(a, b);
   }
 };
+
+template <class T>
+void apply_subdivision(std::vector<T> &z, ImmutableSparseMatrix<double> &W)
+{
+  std::vector<T> zsrc = z;
+  z.clear();
+
+  for(int i = 0; i < W.GetNumberOfRows(); i++)
+    {
+    T zi(0.0);
+    for(typename ImmutableSparseMatrix<double>::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
+      zi += zsrc[it.Column()] * it.Value();
+    z.push_back(zi);
+    }
+}
 
 void BCMTemplate::Subdivide()
 {
@@ -1260,23 +1287,11 @@ void BCMTemplate::Subdivide()
     }
 
   // Apply the subdivision to the mesh coordinates
-  std::vector<SMLVec3d> xsrc = x;
-  std::vector<SMLVec3d> Nsrc = Nx;
-  std::vector<double> Rsrc = R;
-  x.clear(); Nx.clear(); Rsrc.clear();
-
-  for(int i = 0; i < bmesh.nVertices; i++)
-    {
-    SMLVec3d xi(0.0, 0.0, 0.0), Ni(0.0, 0.0, 0.0);
-    double Ri = 0.0;
-    for(SMat::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
-      {
-      xi += xsrc[it.Column()] * it.Value();
-      Ni += Nsrc[it.Column()] * it.Value();
-      Ri += R[it.Column()] * it.Value();
-      }
-    x.push_back(xi); Nx.push_back(Ni); R.push_back(Ri);
-    }
+  apply_subdivision(x, W);
+  if(Nx.size())
+    apply_subdivision(Nx, W);
+  if(R.size())
+    apply_subdivision(R, W);
 
   // Compute the m-indices
   mIndex.resize(bmesh.nVertices, -1);

@@ -261,7 +261,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
         }
 
       // If this is an animation frame, save it
-      if(0 == (t + 1) % param.anim_freq || t + 1 == tEnd)
+      if((param.anim_freq > 0 && 0 == (t + 1) % param.anim_freq) || t + 1 == tEnd)
         UpdateAndWriteMesh(mesh_to_warp, m_x, it->second, t + 1);
 
       std::cout << "." << std::flush;

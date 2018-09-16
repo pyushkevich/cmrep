@@ -4,7 +4,7 @@
 #include "vtkPolyData.h"
 #include "vtkCellArray.h"
 #include "vtkPointData.h"
-#include "vtkFloatArray.h"
+#include "vtkDoubleArray.h"
 #include "vtkPolyDataWriter.h"
 
 
@@ -46,12 +46,25 @@ void VTKMeshBuilder<TDataSet>::SetTriangles(const TriangleMesh &mesh)
 }
 
 template <class TDataSet>
+void VTKMeshBuilder<TDataSet>::SetTriangles(const vnl_matrix<unsigned int> &tri)
+{
+  vtkSmartPointer<vtkCellArray> cells = vtkCellArray::New();
+  for(unsigned int i = 0; i < tri.rows(); i++)
+    {
+    cells->InsertNextCell(3);
+    for(unsigned int a = 0; a < 3; a++)
+      cells->InsertCellPoint(tri(i,a));
+    }
+  pd->SetPolys(cells);
+}
+
+template <class TDataSet>
 void VTKMeshBuilder<TDataSet>::SetNormals(const vnl_matrix<double> &x)
 {
   assert(x.columns() == 3);
   assert(pd->GetNumberOfPoints() == x.rows());
 
-  vtkSmartPointer<vtkFloatArray> arr_nrm = vtkFloatArray::New();
+  vtkSmartPointer<vtkDoubleArray> arr_nrm = vtkDoubleArray::New();
   arr_nrm->SetNumberOfComponents(3);
   arr_nrm->SetNumberOfTuples(x.rows());
 
@@ -67,7 +80,7 @@ void VTKMeshBuilder<TDataSet>::AddArray(const vnl_matrix<double> &x, const char 
 {
   assert(pd->GetNumberOfPoints() == x.rows());
 
-  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+  vtkSmartPointer<vtkDoubleArray> arr= vtkDoubleArray::New();
   arr->SetNumberOfComponents(x.columns());
   arr->SetNumberOfTuples(x.rows());
   arr->SetName(name);
@@ -85,7 +98,7 @@ void VTKMeshBuilder<TDataSet>::AddArray(const vnl_vector<double> &x, const char 
 {
   assert(pd->GetNumberOfPoints() == x.size());
 
-  vtkSmartPointer<vtkFloatArray> arr= vtkFloatArray::New();
+  vtkSmartPointer<vtkDoubleArray> arr= vtkDoubleArray::New();
   arr->SetNumberOfComponents(1);
   arr->SetNumberOfTuples(x.size());
   arr->SetName(name);

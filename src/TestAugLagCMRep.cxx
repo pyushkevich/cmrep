@@ -751,6 +751,40 @@ public:
       }
     }
 
+  void Export(const char *fn)
+    {
+    unsigned int k = samples.size();
+    vnl_matrix<double> X(k,3), grad_f(k,3), d_obj__d_x(k,3);
+    vnl_vector<double> f(k), ve(k);
+
+    for(unsigned int i = 0; i < samples.size(); i++)
+      {
+      Sample &s = samples[i];
+      X.set_row(i, s.x);
+      grad_f.set_row(i, s.grad_f);
+      d_obj__d_x.set_row(i, s.d_obj__d_x);
+      f[i] = s.f;
+      ve[i] = s.vol_elt; 
+      }
+
+    vnl_matrix<unsigned int> tri(wedges.size() * 8, 3);
+    unsigned int it = 0;
+    for(auto &w : wedges)
+      for(unsigned int t = 0; t < 8; t++)
+        tri.set_row(it++, w.T.get_row(t));
+
+    VTKMeshBuilder<vtkPolyData> vmb;
+    vmb.SetPoints(X);
+    vmb.SetTriangles(tri);
+    vmb.AddArray(grad_f, "grad_f");
+    vmb.AddArray(d_obj__d_x, "d_obj__d_x");
+    vmb.AddArray(f, "f");
+    vmb.AddArray(ve, "ve");
+
+    vmb.Save(fn);
+
+    }
+
   void ComputeAdjoint(
     const Matrix &qb, const Matrix &qm, 
     double d_obj__d_v, double d_obj__d_fv,
@@ -929,6 +963,8 @@ public:
     double d_obj__d_v = - d_obj__d_dice * 2.0 * fv / ((v + vol_image) * (v + vol_image));
     integrator.ComputeAdjoint(qb, qm, d_obj__d_v, d_obj__d_fv, d_obj__d_qb, d_obj__d_qm);
     }
+
+  void Export(const char *fn) { integrator.Export(fn); }
 
 private:
   typedef MeshFunctionVolumeIntegral<TFunction> Integrator;
@@ -1530,8 +1566,8 @@ public:
     }
 
 
-  static void ExportTimepoint(CMRep *model, const Vector &Y, 
-    const Vector &C, const Vector &lambda, const char *fname)
+  static void ExportTimepoint(CMRep *model, TargetData *target, 
+    const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
     {
     // Get the references to all the data in vector Y
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
@@ -1552,16 +1588,27 @@ public:
       Mlim.set_column(a, model->med_wtl[2].MultiplyByVector(ycmp.q_med.get_column(a)));
       }
 
+    // Compute the adjoint of the image objective function on medial and boundary points
+    Matrix d_obj__d_q_bnd(model->nv, 3, 0.0), d_obj__d_q_med(model->nmv, 3, 0.0);
+    target->image_function->Compute(ycmp.q_bnd, ycmp.q_med);
+    target->image_function->ComputeAdjoint(
+        ycmp.q_bnd, ycmp.q_med, -target->w_image_function, d_obj__d_q_bnd, d_obj__d_q_med);
+
     // Map the radius and medial points to the boundary
     Vector Rb(model->nv);
     Matrix Mb(model->nv, 3);
     Matrix Mlimb(model->nv, 3);
+    Matrix d_obj__d_q_med_tobnd(model->nv, 3);
     for(int i = 0; i < ycmp.q_bnd.rows(); i++)
       {
       Rb[i] = ycmp.R_med(model->bnd_mi[i]);
       Mb.set_row(i, ycmp.q_med.get_row(model->bnd_mi[i]));
       Mlimb.set_row(i, Mlim.get_row(model->bnd_mi[i]));
+      d_obj__d_q_med_tobnd.set_row(i, d_obj__d_q_med.get_row(model->bnd_mi[i]));
       }
+
+    // Add the boundary momentum
+    vmbb.AddArray(ycmp.u_bnd, "InitialMomentum");
 
     // Add the radius array
     vmbb.AddArray(Rb, "Radius");
@@ -1573,6 +1620,10 @@ public:
     vmbb.AddArray(Xlim, "LimitPoint");
     vmbb.AddArray(Mlimb, "MedialLimitPoint");
 
+    // Objective adjoint arrays
+    vmbb.AddArray(-d_obj__d_q_bnd, "ImageFunctionAdjoint");
+    vmbb.AddArray(-d_obj__d_q_med_tobnd, "MedialImageFunctionAdjoint");
+
     // Get the constraint values for the current timeslice
     double *pc = const_cast<double *>(C.data_block());
     MatrixRef Ct_N(model->nv, 3, pc);   pc += Ct_N.size();
@@ -1581,6 +1632,7 @@ public:
     // Add the constraint arrays
     vmbb.AddArray(Ct_N, "Constr_N");
     vmbb.AddArray(Ct_Spk, "Constr_Spk");
+
 
     // Write the model
     vmbb.Save(fname);
@@ -1997,8 +2049,8 @@ public:
     }
 
 
-  static void ExportTimepoint(CMRep *model, const Vector &Y, 
-    const Vector &C, const Vector &lambda, const char *fname)
+  static void ExportTimepoint(CMRep *model, TargetData *target, 
+    const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
     {
     // Get the references to all the data in vector Y
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
@@ -2369,7 +2421,7 @@ public:
 
       char fn[4096];
       sprintf(fn, fn_pattern, t);
-      Traits::ExportTimepoint(model, Y, Ct, lambda_t, fn);
+      Traits::ExportTimepoint(model, target, Y, Ct, lambda_t, fn);
       }
     }
 
@@ -2834,7 +2886,7 @@ public:
       // Create a mesh
       char fn[4096];
       sprintf(fn, fn_pattern, t);
-      Traits::ExportTimepoint(model, Yt, C, lambda, fn);
+      Traits::ExportTimepoint(model, target, Yt, C, lambda, fn);
       }
     }
 
@@ -3250,6 +3302,9 @@ void optimize_auglag(
     printf("*** End of inner iteration loop %d ***\n", it);
     printf("Elapsed time %12.8f seconds\n", (clock() - t_start) / CLOCKS_PER_SEC);
 
+    // Export the DICE
+    obj.get_target()->image_function->Export("/tmp/dicer_export.vtk");
+
     // Update the lambdas
     obj.update_lambdas();
 
@@ -3457,7 +3512,7 @@ int main(int argc, char *argv[])
   TestLimitSurface(&m_template);
 
   // Read the target image file
-  ImageDiceFunction idf(fn_target_image.c_str(), 0.2);
+  ImageDiceFunction idf(fn_target_image.c_str(), 0.02);
 
   // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
