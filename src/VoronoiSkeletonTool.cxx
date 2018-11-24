@@ -404,7 +404,7 @@ int main(int argc, char *argv[])
   // Create a temporary file where to store the points
 #ifndef WIN32
   char fnTemplate[] = "/tmp/voronoi_pts.XXXXXX";
-  char *fnPoints = mktemp(fnPoints);
+  char *fnPoints = mktemp(fnTemplate);
 #else
   char *fnPoints = tmpnam(NULL);
 #endif
