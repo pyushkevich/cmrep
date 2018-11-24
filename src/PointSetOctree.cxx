@@ -180,7 +180,8 @@ PointSetOctree<TFloat, VDim>
 template <class TFloat, unsigned int VDim>
 void
 PointSetOctree<TFloat, VDim>
-::Approximate(const VecN &x, VecN &px, unsigned int &count, 
+::Approximate(
+  const VecN &x, VecN &px, unsigned int &count, unsigned int &found_node, 
   TFloat d2_rel_thresh, TFloat f, unsigned int i_node)
 {
   // Get the node info
@@ -216,12 +217,13 @@ PointSetOctree<TFloat, VDim>
     {
     for(unsigned int j = 0; j < NC; j++)
       if(node.children[j] != NIL)
-        Approximate(x, px, count, d2_rel_thresh, f, node.children[j]);
+        Approximate(x, px, count, found_node, d2_rel_thresh, f, node.children[j]);
     }
   else
     {
     px += nd.p_total * exp(f * dx.squared_magnitude());
     count++;
+    found_node = i_node;
     }
 }
 

@@ -66,7 +66,7 @@ public:
   void Update(const Matrix &q, const Matrix &p, unsigned int i_node = 0);
 
   // Approximate Gaussian transform at a point
-  void Approximate(const VecN &x, VecN &p, unsigned int &count, 
+  void Approximate(const VecN &x, VecN &p, unsigned int &count, unsigned int &found_node,
     TFloat d2_rel_thresh, TFloat f, unsigned int i_node = 0);
 
 protected:
