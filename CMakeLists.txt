@@ -337,7 +337,6 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
       src/MeshTraversal.cxx
       src/PointSetOptimalControlSystem.cxx
       src/PointSetHamiltonianSystem.cxx
-      src/PointSetOctree.cxx
       src/VTKMeshBuilder.cxx)
     TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS} ${NLOPT_LIBRARIES})
   ENDIF(NLOPT_FOUND)

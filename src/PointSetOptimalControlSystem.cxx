@@ -4,8 +4,6 @@
 #include "ctpl_stl.h"
 #include "exp_approx.h"
 
-#include "PointSetOctree.h"
-
 template <class TFloat, unsigned int VDim>
 PointSetOptimalControlSystem<TFloat, VDim>
 ::PointSetOptimalControlSystem(
@@ -187,28 +185,6 @@ PointSetOptimalControlSystem<TFloat, VDim>
       }
     KE += tdi.KE;
     }
-
-  Matrix v(q.rows(), VDim), v_approx(q.rows(), VDim);
-  PointSetOctree<TFloat, VDim> octree;
-  octree.Build(q0);
-  octree.Update(q, u);
-
-  unsigned int count = 0;
-  for(unsigned int i = 0; i < q.rows(); i++)
-    {
-    for(unsigned int a = 0; a < VDim; a++)
-      v(i,a) = this->d_q__d_t[a](i);
-
-    vnl_vector_fixed<TFloat, VDim> xi = q.get_row(i), vi(0.0);
-    octree.Approximate(xi, vi, count, 4.0, -0.5 / (sigma * sigma));
-    v_approx.set_row(i, vi);
-    }
-
-  printf("Octree:  visrate: %8.6f   RMSE: %8.6f   MaxE: %8.6f\n", 
-    count * 1.0 / (q.rows() * q.rows()),
-    (v - v_approx).array_two_norm() / sqrt(q.rows()),
-    (v - v_approx).absolute_value_max());
-  EraseMe<TFloat>::Save(q, u, v, v_approx);
 
   return KE;
 }
