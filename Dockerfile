@@ -21,4 +21,5 @@ RUN mkdir cmrep_build \
     -D IPOPT_LIBRARY:FILEPATH=/home/itk/CoinIpopt/install/lib/libipopt.so \
     -D TETGEN_INCLUDE_DIR:PATH=/home/itk/tetgen \
     -D TETGEN_LIBRARY=/home/itk/tetgen_build/libtet.a \
-     ../cmrep
+     ../cmrep \
+  && make -j $(nproc)
