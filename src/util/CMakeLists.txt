@@ -7,6 +7,7 @@ ADD_EXECUTABLE(vtkprocrustes
   ${CMREP_SOURCE_DIR}/src/Procrustes.cxx)
 
 ADD_EXECUTABLE(vtklevelset RealImageToMesh.cxx ReadWriteVTK.cxx)
+TARGET_LINK_LIBRARIES(vtklevelset cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(vtkcontour RealImageToContour.cxx ReadWriteVTK.cxx)
 

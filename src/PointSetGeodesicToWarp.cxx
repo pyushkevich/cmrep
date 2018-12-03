@@ -147,7 +147,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
     bool has_value = 1;
     for(unsigned int a = 0; a < VDim; a++)
       {
-      if(isnan(arr_p0->GetComponent(i,a)))
+      if(std::isnan(arr_p0->GetComponent(i,a)))
         {
         has_value = 0;
         break;

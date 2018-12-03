@@ -175,20 +175,20 @@ void SubdivisionSurface::SubdivideSelected(
 
     if(nsplit == 0)
       {
-      tmg.AddTriangle(pt.vertices[0], pt.vertices[1], pt.vertices[2]);
+      tmg.AddTriangle(pt.vertices[0], pt.vertices[1], pt.vertices[2], pt.label);
       }
     else if(nsplit == 1)
       {
       j = (split[i][0] != NOID) ? 0 : ( (split[i][1] != NOID) ? 1 : 2 );
-      tmg.AddTriangle(pt.vertices[j], pt.vertices[(j+1) % 3], split[i][j]);
-      tmg.AddTriangle(pt.vertices[j], split[i][j], pt.vertices[(j+2) % 3]);
+      tmg.AddTriangle(pt.vertices[j], pt.vertices[(j+1) % 3], split[i][j], pt.label);
+      tmg.AddTriangle(pt.vertices[j], split[i][j], pt.vertices[(j+2) % 3], pt.label);
       }
     else if(nsplit == 3)
       {
-      tmg.AddTriangle(pt.vertices[0], split[i][2], split[i][1]);
-      tmg.AddTriangle(split[i][2], pt.vertices[1], split[i][0]);
-      tmg.AddTriangle(split[i][1], split[i][0], pt.vertices[2]);
-      tmg.AddTriangle(split[i][0], split[i][1], split[i][2]);
+      tmg.AddTriangle(pt.vertices[0], split[i][2], split[i][1], pt.label);
+      tmg.AddTriangle(split[i][2], pt.vertices[1], split[i][0], pt.label);
+      tmg.AddTriangle(split[i][1], split[i][0], pt.vertices[2], pt.label);
+      tmg.AddTriangle(split[i][0], split[i][1], split[i][2], pt.label);
       }
     }
 
@@ -245,6 +245,10 @@ void SubdivisionSurface::Subdivide(const MeshLevel *parent, MeshLevel *child, bo
     Triangle *ct[4] = {
                         &child->triangles[4*i], &child->triangles[4*i+1],
                         &child->triangles[4*i+2], &child->triangles[4*i+3]};
+
+    // Copy the label
+    for (j = 0; j < 4; j++)
+      ct[j]->label = pt.label;
 
     // Set the neighbors within this triangle
     for (j = 0; j < 3; j++)
@@ -367,6 +371,65 @@ RecursiveSubdivide(const MeshLevel *src, MeshLevel *dst, size_t n, bool flat_mod
 
   // Set the parent pointer in dst to src (bypass intermediates)
   dst->parent = src;
+}
+
+void
+SubdivisionSurface::
+PickTrianglesWithLabel(const MeshLevel &src, size_t label, MeshLevel &dst, std::vector<size_t> &vtx_full_to_sub)
+{
+  // We need to maintain a mapping from new vertices to parent vertices
+  std::vector<size_t> vtx_sub_to_full;
+  vtx_full_to_sub.resize(src.nVertices, NOID);
+  std::vector<size_t> tri_sub_vtx;
+
+  // Figure out the new triangles and the vertex mapping
+  for(size_t t = 0; t < src.triangles.size(); t++)
+    {
+    if(src.triangles[t].label == label)
+      {
+      // This triangle gets copied. Remap its vertices
+      for(size_t k = 0; k < 3; k++)
+        {
+        // Figure out the new index of the vertex
+        size_t v_full = src.triangles[t].vertices[k];
+        if(vtx_full_to_sub[v_full] == NOID)
+          {
+          vtx_full_to_sub[v_full] = vtx_sub_to_full.size();
+          vtx_sub_to_full.push_back(v_full);
+          }
+
+        // Store the vertex
+        tri_sub_vtx.push_back(vtx_full_to_sub[v_full]);
+        }
+      }
+    }
+
+  // Create a mesh builder for the destination mesh
+  TriangleMeshGenerator tmg(&dst, vtx_sub_to_full.size());
+
+  // Add all the new vertices
+  for(size_t j = 0; j < tri_sub_vtx.size(); j += 3)
+    tmg.AddTriangle(tri_sub_vtx[j], tri_sub_vtx[j+1], tri_sub_vtx[j+2], label);
+
+  // Generate the mesh
+  tmg.GenerateMesh();
+
+  // We need a matrix from new vertices to parent vertices. The matrix is just ones and zeros
+  ImmutableSparseMatrix<double>::VNLSourceType w_vnl(vtx_sub_to_full.size(), src.nVertices);
+  for(size_t j = 0; j < vtx_sub_to_full.size(); j++)
+    w_vnl(j, vtx_sub_to_full[j]) = 1.0;
+
+  // Set the parent
+  dst.parent = &src;
+
+  // Set the weights
+  dst.weights.SetFromVNL(w_vnl);
+
+  // If the parent's parent is not NULL, we need to multiply the sparse
+  // matrices of the parent and child
+  if(src.parent)
+    ImmutableSparseMatrix<double>::Multiply(
+      dst.weights, dst.weights, src.weights);
 }
 
 std::set<size_t> 

@@ -302,26 +302,24 @@ LINK_LIBRARIES(
   ${ITK_LIBRARIES}
   ${VTK_LIBRARIES}
   ${OPENGL_LIBRARIES}
-  ${OPENGL_glu_LIBRARY}
-  ${SYSTEM_LIBS}
-  cmrep)
+  ${SYSTEM_LIBS})
 
 # New: Geodesic shooting
 IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
   ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
-  TARGET_LINK_LIBRARIES(shooting_test ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(shooting_test cmrep ${PDE_LIBS})
 
   ADD_EXECUTABLE(lmshoot 
     src/PointSetHamiltonianSystem.cxx 
     src/PointSetGeodesicShooting.cxx
     src/util/ReadWriteVTK.cxx)
-  TARGET_LINK_LIBRARIES(lmshoot ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(lmshoot cmrep ${PDE_LIBS})
 
   ADD_EXECUTABLE(lmflow
     src/PointSetHamiltonianSystem.cxx
     src/util/ReadWriteVTK.cxx
     src/PointSetGeodesicFlowUtil.cxx)
-  TARGET_LINK_LIBRARIES(lmflow ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(lmflow cmrep ${PDE_LIBS})
 
   INCLUDE_DIRECTORIES(submodules/greedy/src/ITKFilters/include submodules/greedy/src)
   ADD_EXECUTABLE(lmtowarp
@@ -329,7 +327,7 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
     src/util/ReadWriteVTK.cxx
     src/PointSetGeodesicToWarp.cxx
     submodules/greedy/src/lddmm_data.cxx)
-  TARGET_LINK_LIBRARIES(lmtowarp ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(lmtowarp cmrep ${PDE_LIBS})
 
   IF(NLOPT_FOUND)
     ADD_EXECUTABLE(alcmrep_test
@@ -338,40 +336,47 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
       src/PointSetOptimalControlSystem.cxx
       src/PointSetHamiltonianSystem.cxx
       src/VTKMeshBuilder.cxx)
-    TARGET_LINK_LIBRARIES(alcmrep_test ${PDE_LIBS} ${NLOPT_LIBRARIES})
+    TARGET_LINK_LIBRARIES(alcmrep_test cmrep ${PDE_LIBS} ${NLOPT_LIBRARIES})
   ENDIF(NLOPT_FOUND)
 
 ENDIF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
-TARGET_LINK_LIBRARIES(cmrep_test ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_test cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_fit src/Fit.cxx)
-TARGET_LINK_LIBRARIES(cmrep_fit cmrep ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_fit cmrep cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_getmesh src/CMRepToMesh.cxx)
-TARGET_LINK_LIBRARIES(cmrep_getmesh ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_getmesh cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_subdivide src/CMRepSubdivide.cxx)
-TARGET_LINK_LIBRARIES(cmrep_subdivide ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_subdivide cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_remesh src/CMRepRemesh.cxx)
-TARGET_LINK_LIBRARIES(cmrep_remesh ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_remesh cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_meanmodel src/CMRepMeanModel.cxx)
-TARGET_LINK_LIBRARIES(cmrep_meanmodel ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_meanmodel cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_pca_generate src/ComputePCA.cxx)
-TARGET_LINK_LIBRARIES(cmrep_pca_generate ${PDE_LIBS} toms611)
+TARGET_LINK_LIBRARIES(cmrep_pca_generate cmrep ${PDE_LIBS} toms611)
 
 ADD_EXECUTABLE(cmrep_fillmesh src/CMRepMeshToImage.cxx)
+TARGET_LINK_LIBRARIES(cmrep_fillmesh cmrep)
+
 ADD_EXECUTABLE(cmrep_genwarp src/CMRepToWarp.cxx)
+TARGET_LINK_LIBRARIES(cmrep_genwarp cmrep)
+
 ADD_EXECUTABLE(cmrep_warpimage src/CMRepWarpImage.cxx)
+TARGET_LINK_LIBRARIES(cmrep_warpimage cmrep)
+
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
+TARGET_LINK_LIBRARIES(cmrep_afftran cmrep)
 
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
-TARGET_LINK_LIBRARIES(cmrep_vskel cmrep_dijkstra)
+TARGET_LINK_LIBRARIES(cmrep_vskel cmrep cmrep_dijkstra)
 
 IF(USE_IPOPT AND USE_TETGEN)
   ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
@@ -381,8 +386,8 @@ IF(USE_IPOPT AND USE_TETGEN)
                  src/ConstrainedCMRepObjectives.cxx
                  src/ConstrainedCMRepTest.cxx
                  src/VTKMeshBuilder.cxx)
-  TARGET_LINK_LIBRARIES(opttest ${PDE_LIBS})
-  TARGET_LINK_LIBRARIES(contest ${PDE_LIBS} toms611)
+  TARGET_LINK_LIBRARIES(opttest cmrep ${PDE_LIBS})
+  TARGET_LINK_LIBRARIES(contest cmrep ${PDE_LIBS} toms611)
 
   INSTALL(TARGETS contest 
      BUNDLE DESTINATION . COMPONENT Runtime

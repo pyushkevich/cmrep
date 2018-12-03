@@ -246,13 +246,14 @@ TriangleMeshGenerator::TriangleMeshGenerator(
   xTargetMesh->triangles.clear();
 }
 
-void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2)
+void TriangleMeshGenerator::AddTriangle(size_t v0, size_t v1, size_t v2, size_t label)
 {
   size_t v[3] = {v0, v1, v2};
   size_t i = xTargetMesh->triangles.size();
 
   // Associate each half-edge with a triangle
   Triangle tri;
+  tri.label = label;
   for(size_t j = 0; j < 3; j++)
   {
     // Set the vertices in each triangle
@@ -564,8 +565,8 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
     size_t topp = edges[eij].t2;
     short qopp = edges[eij].q2;
 
-    // Branch based on boundary or not
-    if(topp != NOID)
+    // Branch based on boundary or not? Also cannot flip when triangles have different labels
+    if(topp != NOID && this->triangles[t].label == this->triangles[topp].label)
       {
       // Get the four edges
       size_t eik = teidx[t][rol(q)];
@@ -609,6 +610,7 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
         tnew.vertices[q] = told.vertices[ror(q)];
         tnew.neighbors[q] = topp;
         tnew.nedges[q] = qopp;
+        tnew.label = told.label;
         
         tnew.vertices[rol(q)] = told.vertices[q];
         tnew.neighbors[rol(q)] = toppold.neighbors[ror(qopp)];
@@ -631,6 +633,7 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
         toppnew.vertices[qopp] = toppold.vertices[ror(qopp)];
         toppnew.neighbors[qopp] = t;
         toppnew.nedges[qopp] = q;
+        toppnew.label = told.label;
         
         toppnew.vertices[rol(qopp)] = toppold.vertices[qopp];
         toppnew.neighbors[rol(qopp)] = told.neighbors[ror(q)];

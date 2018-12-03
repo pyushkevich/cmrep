@@ -24,6 +24,7 @@
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
 #include <vtkCell.h>
+#include <vtkCellData.h>
 #include <vtksys/SystemTools.hxx>
 
 #include <itkImage.h>
@@ -167,7 +168,7 @@ struct CMRep
   static void ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[]);
 
   // Read from a VTK file (bcm-rep format)
-  void ReadVTK(const char *file);
+  void ReadVTK(const char *file, bool compute_limit_surface_weights);
 };
 
 void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
@@ -194,7 +195,7 @@ void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
 
 
 
-void CMRep::ReadVTK(const char *fn)
+void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights)
 {
   // Read the mesh from file
   vtkSmartPointer<vtkPolyDataReader> reader = vtkPolyDataReader::New();
@@ -208,6 +209,9 @@ void CMRep::ReadVTK(const char *fn)
 
   // Sometimes the medial points are included in the model
   vtkDataArray *b_med = this->bnd_vtk->GetPointData()->GetArray("MedialPoint");
+
+  // Sometimes the boundary triangles have labels
+  vtkDataArray *b_label = this->bnd_vtk->GetCellData()->GetArray("Label");
 
   // Get the number of vertices and triangles
   nv = this->bnd_vtk->GetNumberOfPoints();
@@ -237,7 +241,11 @@ void CMRep::ReadVTK(const char *fn)
     if(cell->GetNumberOfPoints() != 3)
       throw ModelIOException("Non-triangle cell in input mesh");
 
-    bnd_tmg.AddTriangle(cell->GetPointId(0), cell->GetPointId(1), cell->GetPointId(2));
+    // Get the label of the cell
+    size_t label = b_label ? (size_t) b_label->GetTuple1(i) : NOID;
+
+    // Add a triangle with assigned label
+    bnd_tmg.AddTriangle(cell->GetPointId(0), cell->GetPointId(1), cell->GetPointId(2), label);
     }
   bnd_tmg.GenerateMesh();
 
@@ -312,27 +320,30 @@ void CMRep::ReadVTK(const char *fn)
     this->med_rad(i) = b_rad->GetTuple1(j);
     }
 
-  // Generate the medial triangle mesh
-  // TODO: this probably does not work for branching meshes (need marking as crease)
-  TriangleMeshGenerator med_tmg(&this->med_tri, nmv);
-  for(unsigned int i = 0; i < nmt; i++)
-    {
-    // The index of the 'top-side' medial triangle
-    unsigned int bti = this->med_bti(i, 0);
-    auto tb = this->bnd_tri.triangles[bti];
-
-    med_tmg.AddTriangle(
-      this->bnd_mi(tb.vertices[0]),
-      this->bnd_mi(tb.vertices[1]),
-      this->bnd_mi(tb.vertices[2]));
-    }
-  med_tmg.GenerateMesh();
-
   // Compute the weights used to generate Qu and Qv derivatives and the limit surface
   ComputeTangentAndLimitWeights(&this->bnd_tri, this->bnd_wtl);
 
-  // Do the same for the medial surface
-  ComputeTangentAndLimitWeights(&this->med_tri, this->med_wtl);
+  // Generate the medial triangle mesh
+  if(compute_limit_surface_weights)
+    {
+    // TODO: this probably does not work for branching meshes (need marking as crease)
+    TriangleMeshGenerator med_tmg(&this->med_tri, nmv);
+    for(unsigned int i = 0; i < nmt; i++)
+      {
+      // The index of the 'top-side' medial triangle
+      unsigned int bti = this->med_bti(i, 0);
+      auto tb = this->bnd_tri.triangles[bti];
+
+      med_tmg.AddTriangle(
+        this->bnd_mi(tb.vertices[0]),
+        this->bnd_mi(tb.vertices[1]),
+        this->bnd_mi(tb.vertices[2]));
+      }
+    med_tmg.GenerateMesh();
+
+    // Do the same for the medial surface
+    ComputeTangentAndLimitWeights(&this->med_tri, this->med_wtl);
+    }
 }
 
 void vtk_save_polydata(vtkPolyData *pd, const char *file)
@@ -600,8 +611,7 @@ public:
 
   MeshFunctionVolumeIntegral(CMRep *model, 
     unsigned int n_layers, unsigned int sub_level, 
-    bool flat_subdivision_mode, 
-    TFunction &f)
+    bool flat_subdivision_mode, TFunction &f, size_t label = NOID)
     : func(f)
     {
     this->model = model;
@@ -612,7 +622,16 @@ public:
     B.SetAsRoot();
 
     // Set up the child mesh
-    SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level, flat_subdivision_mode);
+    if(label == NOID)
+      {
+      SubdivisionSurface::RecursiveSubdivide(&B, &S, sub_level, flat_subdivision_mode);
+      }
+    else
+      {
+      vector<size_t> label_full_to_sub;
+      SubdivisionSurface::RecursiveSubdivide(&B, &S_full, sub_level, flat_subdivision_mode);
+      SubdivisionSurface::PickTrianglesWithLabel(S_full, label, S, label_full_to_sub);
+      }
 
     vtkSmartPointer<vtkPolyData> test = vtkPolyData::New();
     SubdivisionSurface::ApplySubdivision(model->bnd_vtk, test, S);
@@ -620,8 +639,6 @@ public:
     w->SetInputData(test);
     w->SetFileName("/tmp/subflat.vtk");
     w->Update();
-
-
 
     // Allocate the array of samples
     samples.resize((n_layers + 1) * S.nVertices);
@@ -876,7 +893,7 @@ protected:
   unsigned int n_layers;
 
   // Base layers (input mesh resolution) and subdivided layers
-  MeshLevel B, S;
+  MeshLevel B, S, S_full;
 
   // Function being integrated
   TFunction &func;
@@ -1580,13 +1597,9 @@ public:
     vmbb.SetNormals(ycmp.N_bnd);
 
     // Extract boundary and medial limit points
-    Matrix Xlim(model->nv, 3);
-    Matrix Mlim(model->nmv, 3);
+    Matrix Xlim(model->nv, 3);    
     for(int a = 0; a < 3; a++)
-      {
       Xlim.set_column(a, model->bnd_wtl[2].MultiplyByVector(ycmp.q_bnd.get_column(a)));
-      Mlim.set_column(a, model->med_wtl[2].MultiplyByVector(ycmp.q_med.get_column(a)));
-      }
 
     // Compute the adjoint of the image objective function on medial and boundary points
     Matrix d_obj__d_q_bnd(model->nv, 3, 0.0), d_obj__d_q_med(model->nmv, 3, 0.0);
@@ -1597,13 +1610,11 @@ public:
     // Map the radius and medial points to the boundary
     Vector Rb(model->nv);
     Matrix Mb(model->nv, 3);
-    Matrix Mlimb(model->nv, 3);
     Matrix d_obj__d_q_med_tobnd(model->nv, 3);
     for(int i = 0; i < ycmp.q_bnd.rows(); i++)
       {
       Rb[i] = ycmp.R_med(model->bnd_mi[i]);
       Mb.set_row(i, ycmp.q_med.get_row(model->bnd_mi[i]));
-      Mlimb.set_row(i, Mlim.get_row(model->bnd_mi[i]));
       d_obj__d_q_med_tobnd.set_row(i, d_obj__d_q_med.get_row(model->bnd_mi[i]));
       }
 
@@ -1618,11 +1629,22 @@ public:
 
     // Limit arrays
     vmbb.AddArray(Xlim, "LimitPoint");
-    vmbb.AddArray(Mlimb, "MedialLimitPoint");
 
     // Objective adjoint arrays
     vmbb.AddArray(-d_obj__d_q_bnd, "ImageFunctionAdjoint");
     vmbb.AddArray(-d_obj__d_q_med_tobnd, "MedialImageFunctionAdjoint");
+
+    // Extract medial limit points (only for models that support them)
+    if(model->med_wtl->GetNumberOfRows() > 0)
+      {
+      Matrix Mlim(model->nmv, 3);
+      for(int a = 0; a < 3; a++)
+        Mlim.set_column(a, model->med_wtl[2].MultiplyByVector(ycmp.q_med.get_column(a)));
+      Matrix Mlimb(model->nv, 3);
+      for(int i = 0; i < ycmp.q_bnd.rows(); i++)
+        Mlimb.set_row(i, Mlim.get_row(model->bnd_mi[i]));
+      vmbb.AddArray(Mlimb, "MedialLimitPoint");
+      }
 
     // Get the constraint values for the current timeslice
     double *pc = const_cast<double *>(C.data_block());
@@ -3448,7 +3470,7 @@ int main(int argc, char *argv[])
       }
     else if(command == "-o")
       {
-      fn_output = cl.read_existing_filename();
+      fn_output = cl.read_output_filename();
       }
     else if(command == "-wk")
       {
@@ -3464,12 +3486,12 @@ int main(int argc, char *argv[])
       }
     else if(command == "-n")
       {
-      param.al_iter = cl.read_integer();
-      param.gradient_iter = cl.read_integer();
+      param.al_iter = (unsigned int) cl.read_integer();
+      param.gradient_iter = (unsigned int) cl.read_integer();
       }
     else if(command == "-t")
       {
-      param.nt = cl.read_integer();
+      param.nt = (unsigned int) cl.read_integer();
       }
     else if(command == "-T")
       {
@@ -3507,16 +3529,18 @@ int main(int argc, char *argv[])
 
   // Read the template mesh
   CMRep m_template;
-  m_template.ReadVTK(fn_model.c_str());
+  m_template.ReadVTK(fn_model.c_str(), param.limit_surface_constraints);
 
-  TestLimitSurface(&m_template);
+  // Test the Loop limit surface calculation (only valid for non-branching models currently)
+  if(param.limit_surface_constraints)
+    TestLimitSurface(&m_template);
 
   // Read the target image file
   ImageDiceFunction idf(fn_target_image.c_str(), 0.02);
 
   // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
-  m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str());
+  m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str(), param.limit_surface_constraints);
 
   if(param.check_deriv)
     {

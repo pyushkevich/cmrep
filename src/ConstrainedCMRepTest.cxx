@@ -1363,7 +1363,7 @@ void merge_vertices(TriangleMesh &tm, vnl_matrix<double> &X, unsigned int v1, un
   X.set_row(v1, (X.get_row(v1) + X.get_row(v2)) * 0.5);
 }
 
-void InflateMedialModel(const char *fn_input, const char *fn_output, double rad)
+void InflateMedialModel(const char *fn_input, const char *fn_output, double rad, int edge_label)
 {
   typedef vnl_vector_fixed<double, 3> Vec3;
   typedef vnl_matrix_fixed<double, 3, 3> Mat3;
@@ -1451,7 +1451,7 @@ void InflateMedialModel(const char *fn_input, const char *fn_output, double rad)
   for(unsigned int j = 0; j < nv; j++)
     {
     printf("label : %d\n", (alab ? (int) alab->GetTuple1(j) : -1));
-    if(!model.IsVertexInternal(j) && (!alab || alab->GetTuple1(j) == 1))
+    if(!model.IsVertexInternal(j) && (!alab || edge_label < 0 || (int) alab->GetTuple1(j) == edge_label))
       {
       merge_vertices(model, X, j, j + nv);
       remap[j+nv] = -1;
@@ -1913,7 +1913,8 @@ int usage()
       "  -sub template.vtk factor       : subdivide template by a factor\n"
       "  -cmr input.cmrep               : import a cm-rep template\n"
       "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
-      "  -inf medial.vtk radius         : inflate a medial model created with the GUI tool\n"
+      "  -inf medial.vtk radius edgelab : inflate a medial model created with the GUI tool.\n"
+      "                                   edgelab specifies labels of edge vertices, or -1\n"
       "other required options:\n"
       "  -o output.vtk                  : mesh to save the result\n"
       "optional parameters:\n"
@@ -2046,6 +2047,7 @@ int main(int argc, char *argv[])
   std::string fnTemplate, fnTarget, fnOutput, fnImportSource;
   int subdivisionLevel = 0;
   double infl_radius;
+  int infl_edge_label = -1;
 
   RegularizationOptions regOpts;
 
@@ -2084,6 +2086,7 @@ int main(int argc, char *argv[])
       action = ACTION_INFLATE_CMREP;
       fnImportSource = argv[++p];
       infl_radius = atof(argv[++p]);
+      infl_edge_label = atoi(argv[++p]);
       }
     else if(cmd == "-cfx")
       {
@@ -2151,7 +2154,7 @@ int main(int argc, char *argv[])
 
   else if(action == ACTION_INFLATE_CMREP)
     {
-    InflateMedialModel(fnImportSource.c_str(), fnOutput.c_str(), infl_radius);
+    InflateMedialModel(fnImportSource.c_str(), fnOutput.c_str(), infl_radius, infl_edge_label);
     return 0;
     }
 

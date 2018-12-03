@@ -687,7 +687,7 @@ ClusterComputer::ComputeClusters(bool build_combo_mesh)
     fThresh->Modified();
 
   fConnect->Update();
-  vtkUnstructuredGrid *p = fConnect->GetOutput();
+  vtkUnstructuredGrid *p = dynamic_cast<vtkUnstructuredGrid *>(fConnect->GetOutput());
   int nelt = (dom == POINT) ?  p->GetNumberOfPoints() : p->GetNumberOfCells();
 
   // Leave if there are no clusters
@@ -1036,7 +1036,7 @@ ClusterArray ComputeClusters(
   fConnect->SetExtractionModeToAllRegions();
   fConnect->ColorRegionsOn();
   fConnect->Update();
-  vtkUnstructuredGrid *p = fConnect->GetOutput();
+  vtkUnstructuredGrid *p = dynamic_cast<vtkUnstructuredGrid *>(fConnect->GetOutput());
 
   vtkDataSetAttributes *pdata = (dom == POINT) ? 
     (vtkDataSetAttributes *) p->GetPointData() : 

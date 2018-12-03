@@ -7,6 +7,9 @@ inline TFloat
 exp_approx(TFloat x, TFloat f)
 {
   TFloat z = 1.0 + (x * f) / 256.0;
+  if(z < 0)
+    return 0.0;
+
   z *= z; z *= z; z *= z; z *= z;
   z *= z; z *= z; z *= z; z *= z;
 
@@ -18,6 +21,12 @@ inline TFloat
 exp_approx(TFloat x, TFloat f, TFloat &d_fx)
 {
   TFloat z = 1.0 + (x * f) / 256.0;
+  if(z < 0)
+    {
+    d_fx = 0.0;
+    return 0.0;
+    }
+    
   TFloat y = z;
   z *= z; z *= z; z *= z; z *= z;
   z *= z; z *= z; z *= z; z *= z;

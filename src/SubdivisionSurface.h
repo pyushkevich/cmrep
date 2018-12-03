@@ -88,6 +88,10 @@ public:
   /** Test the correctness of a mesh level */
   static bool CheckMeshLevel(MeshLevel *mesh);
 
+  /** Get a sub-mesh in which triangles have a certain label */
+  static void PickTrianglesWithLabel(const MeshLevel &src, size_t label,
+                                     MeshLevel &dst, std::vector<size_t> &vtx_full_to_sub);
+
 private:
   // Mutable sparse matrix
   typedef vnl_sparse_matrix<double> MutableSparseMatrix;

@@ -473,7 +473,7 @@ ClusterArray ComputeClusters(
   fConnect->SetExtractionModeToAllRegions();
   fConnect->ColorRegionsOn();
   fConnect->Update();
-  vtkUnstructuredGrid *p = fConnect->GetOutput();
+  vtkUnstructuredGrid *p = dynamic_cast<vtkUnstructuredGrid *>(fConnect->GetOutput());
 
 /*** Segment 3 new code begin ****/
   if (!strcmp(domain, "Point"))

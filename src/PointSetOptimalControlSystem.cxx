@@ -29,6 +29,7 @@ void
 PointSetOptimalControlSystem<TFloat, VDim>
 ::SetupMultiThreaded()
 {
+  // TODO: restore this!
   unsigned int n_threads = std::thread::hardware_concurrency();
   td.resize(n_threads);
 

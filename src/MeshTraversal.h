@@ -29,6 +29,9 @@ struct Triangle
   // Index of the neighbors
   size_t neighbors[3];
 
+  // Optional label of the triangle. Will be propagated to children
+  size_t label;
+
   // Each edge is associated with an index of the vertex opposite to it.
   // This value tells us for each edge its index in the adjacent triangle
   short nedges[3];
@@ -39,8 +42,8 @@ struct Triangle
     vertices[0] = vertices[1] = vertices[2] = NOID;
     neighbors[0] = neighbors[1] = neighbors[2] = NOID;
     nedges[0] = nedges[1] = nedges[2] = -1;
+    label = NOID;
     }
-
 };
 
 /**
@@ -161,7 +164,7 @@ public:
   TriangleMeshGenerator(TriangleMesh *target, size_t nVertices);
     
   // Add a triangle to the generator
-  void AddTriangle(size_t v0, size_t v1, size_t v2);
+  void AddTriangle(size_t v0, size_t v1, size_t v2, size_t label = NOID);
 
   // Populate the triangle mesh
   void GenerateMesh();
