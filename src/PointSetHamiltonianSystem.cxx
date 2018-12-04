@@ -136,6 +136,58 @@ PointSetHamiltonianSystem<TFloat, VDim>
   return H;
 }
 
+/**
+ * This is the computation of the recursive backpropagation with free-riding points z
+ */
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ApplyHamiltonianHessianToAlphaBetaGamma(
+    const Matrix &q, const Matrix &p, const Matrix &z,
+    const Vector alpha[], const Vector beta[], const Vector gamma[],
+    Vector d_alpha[], Vector d_beta[], Vector d_gamma[])
+{
+  // Exponent constant
+  TFloat f = -0.5 / (sigma * sigma);
+
+  // First, compute the backpropagation for alpha, beta, q and p
+  ApplyHamiltonianHessianToAlphaBeta(q, p, alpha, beta, d_alpha, d_beta);
+
+  // Loop over the elements of z
+  for(int j = 0; j < z.rows(); j++)
+    {
+    const TFloat *zj = z.data_array()[j];
+
+    // Loop over the elements of q/p
+    for(int i = 0; i < k; i++)
+      {
+      const TFloat *pi = p.data_array()[i], *qi = q.data_array()[i];
+
+      // Compute the exponent term
+      VecD d_zq;
+      for(int a = 0; a < VDim; a++)
+        d_zq[a] = qi[a] - zj[a];
+
+      // Compute the Gaussian and its derivative terms
+      TFloat g = exp(f * d_zq.squared_magnitude()), g1 = f * g;
+
+      // Accumulate derivatives
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        TFloat term_2_g1_dzqa = 2.0 * g1 * d_zq[a];
+        for(unsigned int b = 0; b < VDim; b++)
+          {
+          d_alpha[b][i] -= gamma[a][j] * term_2_g1_dzqa * pi[b];
+          d_gamma[b][j] += gamma[b][j];
+          }
+        d_beta[a][i] += g;
+        }
+      }
+
+    }
+}
+
+
 template <class TFloat, unsigned int VDim>
 void
 PointSetHamiltonianSystem<TFloat, VDim>
@@ -231,6 +283,62 @@ PointSetHamiltonianSystem<TFloat, VDim>
       }
 
     } // loop over i}
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const
+{
+  // Allocate Zt
+  Zt.resize(N); Zt[0] = z0;
+  Matrix z = z0;
+
+  // Gaussian factor, i.e., K(z) = exp(f * z)
+  TFloat f = -0.5 / (sigma * sigma);
+  TFloat d2_cutoff = 27.63102 * sigma * sigma;
+
+
+  // Flow over time
+  for(unsigned int t = 1; t < N; t++)
+    {
+    const Matrix &q = Qt[t], &p = Pt[t];
+    for(int i = 0; i < z.rows(); i++)
+      {
+      // Current coordinate and its velocity
+      TFloat *zi = z.data_array()[i];
+      TFloat vi[VDim];
+
+      // Iterate over all the points
+      for(int j = 0; j < k; j++)
+        {
+        TFloat delta, d2 = 0;
+        for(int a = 0; a < VDim; a++)
+          {
+          delta = zi[a] - q(j,a);
+          d2 += delta * delta;
+          }
+
+        // Only proceed if distance is below cutoff
+        if(d2 < d2_cutoff)
+          {
+          // Take the exponent
+          double g = exp(f * d2);
+
+          // Scale momentum by exponent
+          for(int a = 0; a < VDim; a++) 
+            vi[a] += g * p(j,a);
+          }
+        }
+
+      // Update the point
+      for(int a = 0; a < VDim; a++) 
+        zi[a] += dt * vi[a];
+      }
+
+    // Store the z timepoint
+    Zt[t] = z;
+    }
 }
 
 template <class TFloat, unsigned int VDim>
@@ -388,6 +496,50 @@ PointSetHamiltonianSystem<TFloat, VDim>
     for(int a = 0; a < VDim; a++)
       {
       alpha[a] += dt * d_alpha[a];
+      beta[a] += dt * d_beta[a];
+      }
+    } 
+
+  // Finally, what we are really after are the betas
+  for(int a = 0; a < VDim; a++)
+    {
+    result[a] = beta[a];
+    }
+}
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Vector result[VDim])
+{
+  // Allocate update vectors for alpha and beta
+  Vector alpha[VDim], beta[VDim];
+  Vector d_alpha[VDim], d_beta[VDim];
+
+  for(int a = 0; a < VDim; a++)
+    {
+    // Initialize alpha with the last time-point q-gradient
+    alpha[a] = d_obj__d_qt[N-1].get_column(a);
+
+    // Initialize beta to zero 
+    beta[a].set_size(k); beta[a].fill(0.0);
+
+    d_alpha[a].set_size(k);
+    d_beta[a].set_size(k);
+    }
+
+  // Work our way backwards
+  for(int t = N-1; t > 0; t--)
+    {
+    // Apply Hamiltonian Hessian to get an update in alpha/beta
+    ApplyHamiltonianHessianToAlphaBeta(
+          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+    // Update the vectors
+    for(int a = 0; a < VDim; a++)
+      {
+      alpha[a] += dt * d_alpha[a] + d_obj__d_qt[t-1].get_column(a);
       beta[a] += dt * d_beta[a];
       }
     } 

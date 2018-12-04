@@ -1051,11 +1051,6 @@ void SaveMedialMesh(const char *file,
   spoke[2]->Allocate(M.size());
   spoke[2]->SetName("Spoke3");
 
-  vtkSmartPointer<vtkFloatArray> t_area = vtkSmartPointer<vtkFloatArray>::New();
-  t_area->SetNumberOfComponents(1);
-  t_area->Allocate(bmesh->triangles.size());
-  t_area->SetName("Triangle area");
-
   for(int i = 0; i < M.size(); i++)
     {
     vnl_vector_fixed<double, 3> xm;
@@ -1094,11 +1089,20 @@ void SaveMedialMesh(const char *file,
     for(int j = 0; j < 3; j++)
       vtx[j] = mIndex[bmesh->triangles[i].vertices[j]];
     pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
-
-    t_area->InsertNextTuple1(TA[i]->Evaluate());
     }
 
-  pd->GetCellData()->AddArray(t_area);
+  if(TA.size())
+    {
+    vtkSmartPointer<vtkFloatArray> t_area = vtkSmartPointer<vtkFloatArray>::New();
+    t_area->SetNumberOfComponents(1);
+    t_area->Allocate(bmesh->triangles.size());
+    t_area->SetName("Triangle area");
+
+    for(int i = 0; i < bmesh->triangles.size(); i++)
+      t_area->InsertNextTuple1(TA[i]->Evaluate());
+
+    pd->GetCellData()->AddArray(t_area);
+    }
 
   vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
   writer->SetInputData(pd);
@@ -3020,9 +3024,13 @@ int main(int argc, char *argv[])
       }
     }
 
+
   // ------------------------------------------------------------------------
   // Minimize the edge length
   // ------------------------------------------------------------------------
+  // TODO: add a constraint on the angle between adjacent boundary edges, b/c
+  // that seems to become quite small sometimes and setting a minimum on it might
+  // work better than penalizing the total length
   BigSum *objEdgeLength = new BigSum(p);
   if(regOpts.EdgeLengthWeight > 0.0)
     {

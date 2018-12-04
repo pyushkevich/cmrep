@@ -36,6 +36,7 @@ int usage()
 //  cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
   cout << "  -O filepattern             : pattern for saving traced landmark paths (e.g., path%04d.vtk)" << endl;
   cout << "  -f                         : use single-precision float (off by deflt)" << endl;
+  cout << "  -C mu0 mu_mult             : test constrained optimization (not for general use)" << endl;
   return -1;
 }
 
@@ -69,11 +70,15 @@ struct ShootingParameters
   Algorithm alg;
   bool use_float;
 
+  // For constrained optimization - just exprimental
+  double constrained_mu_init, constrained_mu_mult;
+
   std::vector<int> qcdiv;
 
   ShootingParameters() :
     N(100), dim(3), sigma(0.0), lambda(0.0), iter_grad(20), iter_newton(20), downsample(1),
-    use_float(false), alg(GradDescent) {}
+    use_float(false), alg(GradDescent), constrained_mu_init(0.0), constrained_mu_mult(0.0) 
+  {}
 };
 
 template <class TFloat, unsigned int VDim>
@@ -190,6 +195,168 @@ protected:
   Matrix qT, p0, q0, p1, q1;
   Vector alpha[VDim], beta[VDim], grad_f[VDim];
   unsigned int k;
+
+};
+
+/**
+ * This is just a simple test of a cost function to be used with augmented lagrangian methods
+ */
+template <class TFloat, unsigned int VDim>
+class ExampleConstrainedPointSetShootingCostFunction : public PointSetShootingCostFunction<TFloat, VDim>
+{
+public:
+
+  typedef PointSetShootingCostFunction<TFloat,VDim> Superclass;
+  typedef typename Superclass::HSystem HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+
+  // Separate type because vnl optimizer is double-only
+  typedef vnl_vector<double> DVector;
+
+  ExampleConstrainedPointSetShootingCostFunction(
+    const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
+    : Superclass(param, q0, qT)
+    {
+    // Compute the vectors with which the flows have to be orthogonal
+    norm.set_size(q0.rows(), q0.columns());
+    for(int i = 0; i < q0.rows(); i++)
+      {
+      Vector del = qT.get_row(i) - q0.get_row(i);
+      double len = del.magnitude();
+      norm(i,0) = -del[1] / len;
+      norm(i,1) = del[0] / len;
+      }
+    }
+
+  void set_lambdas(Matrix &m)
+    {
+    this->lambda = m;
+    }
+
+  const Matrix & lambdas() const { return this->lambda; }
+
+  void set_mu(double mu)
+    {
+    this->mu = mu;
+    }
+
+  virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
+    {
+    // Initialize the p0-vector
+    this->p0 = this->tall_to_wide(x);
+
+    // Perform flow
+    double H = this->hsys.FlowHamiltonian(this->p0, this->q1, this->p1);
+
+    // Compute the landmark errors
+    double fnorm_sq = 0.0;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      for(unsigned int i = 0; i < this->k; i++)
+        {
+        this->alpha[a](i) = this->q1(i,a) - this->qT(i,a);
+        fnorm_sq += this->alpha[a](i) * this->alpha[a](i);
+        }
+      }
+
+    // Compute the landmark part of the objective
+    double Edist = 0.5 * fnorm_sq;
+
+    if(f)
+      {
+      // Compute the objective part
+      *f = H + this->param.lambda * Edist;
+
+      // Compute the constraints
+      int i_lam = 0;
+      for(int t = 0; t < this->hsys.GetN(); t++)
+        {
+        const Matrix &qt = this->hsys.GetQt(t);
+        for(int i = 0; i < this->q0.rows(); i++)
+          {
+          // C(i) is the dot product of norm vector with current time vector
+          Vector del = qt.get_row(i) - this->q0.get_row(i);
+          double Cti = dot_product(del, norm.get_row(i));
+          *f -= lambda(t, i) * Cti;
+          *f += (mu / 2) * Cti * Cti;
+          }
+        }
+      }
+
+    if(g)
+      {
+      // Create the gradient array to pass to backward flow
+      std::vector<Matrix> d_obj__d_qt(this->hsys.GetN());
+
+      // Fill out the gradients due to the constraint parts of the augmented Lagrangian
+      for(int t = 0; t < this->hsys.GetN(); t++)
+        {
+        d_obj__d_qt[t].set_size(this->q0.rows(), VDim);
+
+        const Matrix &qt = this->hsys.GetQt(t);
+        for(int i = 0; i < this->q0.rows(); i++)
+          {
+          Vector del = qt.get_row(i) - this->q0.get_row(i);
+          double Cti = dot_product(del, norm.get_row(i));
+          double term1 = ( -lambda(t, i) + mu * Cti);
+          d_obj__d_qt[t].set_row(i, norm.get_row(i) * term1);
+          }
+        }
+
+      // Add the parts due to the objective function
+      for(int i = 0; i < this->q0.rows(); i++)
+        {
+        for(int a = 0; a < this->q0.columns(); a++)
+          {
+          d_obj__d_qt[this->hsys.GetN() - 1](i,a) += this->alpha[a](i) * this->param.lambda;
+          }
+        }
+
+      // Multiply gradient of f. wrt q1 (alpha) by Jacobian of q1 wrt p0
+      this->hsys.FlowTimeVaryingGradientsBackward(d_obj__d_qt, this->grad_f);
+
+      // Recompute Hq/Hp at initial timepoint
+      this->hsys.ComputeHamiltonianJet(this->q0, this->p0, false);
+
+      // Complete gradient computation
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        // Combine the gradient terms
+        this->grad_f[a] = this->grad_f[a] + this->hsys.GetHp(a);
+        }
+
+      // Pack the gradient into the output vector
+      *g = this->wide_to_tall(this->grad_f);
+      }
+    }
+
+  void update_lambdas(vnl_vector<double> const& x)
+    {
+    // Initialize the p0-vector
+    this->p0 = this->tall_to_wide(x);
+
+    // Perform flow
+    double H = this->hsys.FlowHamiltonian(this->p0, this->q1, this->p1);
+
+    for(int t = 0; t < this->hsys.GetN(); t++)
+      {
+      const Matrix &qt = this->hsys.GetQt(t);
+      for(int i = 0; i < this->q0.rows(); i++)
+        {
+        // C(i) is the dot product of norm vector with current time vector
+        Vector del = qt.get_row(i) - this->q0.get_row(i);
+        double Cti = dot_product(del, norm.get_row(i));
+        lambda(t, i) -= mu * Cti;
+        }
+      }
+    }
+
+protected:
+
+  Matrix lambda;
+  Matrix norm;
+  double mu;
 
 };
 
@@ -385,6 +552,10 @@ public:
 
   // Minimize using gradient descent
   static void minimize_gradient(const ShootingParameters &param, 
+    const Matrix &q0, const Matrix &qT, Matrix &p0);
+
+  // Minimize constrained problem using Augmented Lagrangian method
+  static void minimize_constrained(const ShootingParameters &param, 
     const Matrix &q0, const Matrix &qT, Matrix &p0);
 
   static int minimize(const ShootingParameters &param);
@@ -667,6 +838,87 @@ PointSetShootingProblem<TFloat, VDim>
   p0 = cost_fn.tall_to_wide(x);
 }
 
+
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetShootingProblem<TFloat, VDim>
+::minimize_constrained(const ShootingParameters &param, 
+  const Matrix &q0, const Matrix &qT, Matrix &p0)
+{
+  unsigned int k = q0.rows();
+
+  // Create the minimization problem
+  typedef ExampleConstrainedPointSetShootingCostFunction<TFloat, VDim> CostFn;
+  CostFn cost_fn(param, q0, qT);
+
+  // Create initial/final solution
+  p0 = (qT - q0) / param.N;
+
+  // Initialize mu
+  double mu = param.constrained_mu_init;
+  cost_fn.set_mu(mu);
+
+  // Initialize the lambdas
+  typename CostFn::Matrix lambdas(param.N, k);
+  lambdas.fill(0.0);
+  cost_fn.set_lambdas(lambdas);
+
+  // Do this for some number of iterations
+  for(int it = 0; it < 10; it++)
+    {
+    typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
+
+    // Update the parameters
+    printf("Augmented Lagrangian Phase %d (mu = %8.4f, max-lambda = %8.4f)\n",
+      it, mu, cost_fn.lambdas().array_inf_norm());
+
+    // Uncomment this code to test derivative computation
+    TFloat eps = 1e-6;
+    typename CostFn::DVector test_grad(x.size());
+    double f_test;
+    cost_fn.compute(x, &f_test, &test_grad);
+    for(int i = 0; i < std::min((int) p0.size(), 10); i++)
+      {
+      typename CostFn::DVector xtest = x;
+      double f1, f2;
+      xtest[i] = x[i] - eps;
+      cost_fn.compute(xtest, &f1, NULL);
+
+      xtest[i] = x[i] + eps;
+      cost_fn.compute(xtest, &f2, NULL);
+
+      printf("i = %03d,  AG = %12.8f,  NG = %12.8f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+      }
+
+    // Create an optimization
+    vnl_lbfgsb optimizer(cost_fn);
+    optimizer.set_f_tolerance(1e-9);
+    optimizer.set_x_tolerance(1e-4);
+    optimizer.set_g_tolerance(1e-6);
+    optimizer.set_trace(true);
+    optimizer.set_max_function_evals(param.iter_grad / 10);
+
+    // vnl_conjugate_gradient optimizer(cost_fn);
+    // optimizer.set_trace(true);
+    optimizer.minimize(x);
+
+    // Take the optimal solution from this round
+    p0 = cost_fn.tall_to_wide(x);
+
+    // Update the lambdas
+    cost_fn.update_lambdas(x);
+
+    // Update the mu
+    mu *= param.constrained_mu_mult;
+    cost_fn.set_mu(mu);
+    }
+}
+
+
+
+
+
 template <class TFloat, unsigned int VDim>
 int
 PointSetShootingProblem<TFloat, VDim>
@@ -747,7 +999,11 @@ PointSetShootingProblem<TFloat, VDim>
   // Run some iterations of gradient descent
   if(param.iter_grad > 0)
     {
-    minimize_gradient(param, q0, qT, p0);
+    if(param.constrained_mu_init > 0.0)
+      minimize_constrained(param, q0, qT, p0);
+
+    else
+      minimize_gradient(param, q0, qT, p0);
     }
 
   if(param.iter_newton > 0)
@@ -882,6 +1138,11 @@ int main(int argc, char *argv[])
       {
       param.iter_grad = (unsigned int) cl.read_integer();
       param.iter_newton = (unsigned int) cl.read_integer();
+      }
+    else if(arg == "-C")
+      {
+      param.constrained_mu_init = cl.read_double();
+      param.constrained_mu_mult = cl.read_double();
       }
     else if(arg == "-q")
       {

@@ -29,6 +29,11 @@ public:
     TFloat sigma,
     unsigned int N);
 
+  /** 
+   * Get the number of time steps
+   */
+  unsigned int GetN() const { return N; }
+
   /**
    * Compute the Hamiltonian and its derivatives for given p/q. The
    * computation is stored internally in variables Hp, Hq, Hqq, Hqp, Hpp
@@ -50,12 +55,28 @@ public:
       const Vector alpha[VDim], const Vector beta[VDim],
       Vector d_alpha[VDim], Vector d_beta[VDim]);
 
+
+  /** This is an equivalent function that also carries passive points z */
+  void ApplyHamiltonianHessianToAlphaBetaGamma(
+      const Matrix &q, const Matrix &p, const Matrix &z,
+      const Vector alpha[], const Vector beta[], const Vector gamma[],
+      Vector d_alpha[], Vector d_beta[], Vector d_gamma[]);
+
   /**
    * Flow the Hamiltonian system with initial momentum p0 without gradient 
    * computation. Returns the kinetic energy (Hamiltonian value that should 
-   * be preserved over the time evolution)
+   * be preserved over the time evolution). 
    */
   TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p);
+
+  // TODO: this is what we are trying to do
+  // TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p, const Matrix &z0, Matrix &z);
+
+  /**
+   * Applies the flow to a set of additional points for which we are not optimizing
+   * the momentum. These extra samples are just along for the ride
+   */
+  void ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const;
 
   /**
    * Flow the Hamiltonian system with gradient computation. The gradient is 
@@ -80,6 +101,21 @@ public:
    */ 
   void FlowGradientBackward(
     const Vector alpha[VDim], const Vector beta[VDim], Vector result[VDim]);
+
+
+
+
+  /**
+   * This function is used when we have an objective function that involves
+   * q_t for all time points, and not just the final time point. For example,
+   * this may be a constraint that must hold through the entire flow. The input
+   * alpha here is parameterized by time, i.e., the gradient of the objective
+   * functions evaluated at each time point. 
+   *
+   * Here there is no beta input, which is normally zero since we rarely involve
+   * the momentum in objective functions
+   */
+  void FlowTimeVaryingGradientsBackward(const std::vector<Matrix> d_obj__d_qt, Vector result[VDim]);
 
   const Vector &GetHp(unsigned int d) const { return Hp[d]; }
   const Vector &GetHq(unsigned int d) const { return Hq[d]; }
