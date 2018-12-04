@@ -28,6 +28,9 @@ INCLUDE(${VTK_USE_FILE})
 # Where to get additional modules
 SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
 
+# Keep track of all binaries that will be compiled
+SET(CMREP_BINARY_TOOLS "")
+
 # Optionally, support PARDISO
 OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
 IF(USE_PARDISO)
@@ -146,60 +149,20 @@ ENDIF(USE_TETGEN)
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
-# Find BOOST
-IF(USE_CGAL)
-  FIND_PACKAGE(BOOST)
-  IF(Boost_FOUND)
-    INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIR})
-  ENDIF(Boost_FOUND)
-
-  # Find CGAL
-  FIND_PATH(CGAL_ROOT_DIR NAMES include/CGAL/Surface_mesh_default_triangulation_3.h DOC CGAL main directory)
-  IF(CGAL_ROOT_DIR)
-
-    FIND_PATH(CGAL_INCLUDE_DIR NAMES CGAL/Surface_mesh_default_triangulation_3.h PATHS ${CGAL_ROOT_DIR}/include)
-    FIND_PATH(CGAL_GMP_INCLUDE_DIR NAMES gmp.h PATHS ${CGAL_ROOT_DIR}/auxiliary/gmp/include)
-
-    INCLUDE_DIRECTORIES(${CGAL_INCLUDE_DIR})
-    INCLUDE_DIRECTORIES(${CGAL_GMP_INCLUDE_DIR})
-    LINK_DIRECTORIES(${CGAL_ROOT_DIR}/lib)
-    LINK_DIRECTORIES(${CGAL_ROOT_DIR}/auxiliary/gmp/lib)
-    
-    IF(MSVC)
-      FIND_PATH(CGAL_SYSTEM_INCLUDE_DIR CGAL/compiler_config.h PATHS ${CGAL_INCLUDE_DIR}/CGAL/config/msvc)
-      INCLUDE_DIRECTORIES(${CGAL_SYSTEM_INCLUDE_DIR})
-    ENDIF(MSVC)
-    
-  ENDIF(CGAL_ROOT_DIR)
-ENDIF(USE_CGAL)
-
-# Get GLUT
-FIND_PACKAGE(GLUT)
-IF(GLUT_FOUND)
-  INCLUDE_DIRECTORIES(${GLUT_INCLUDE_DIR})
-  LINK_DIRECTORIES(${GLUT_INCLUDE_DIR})
-ENDIF(GLUT_FOUND)
-
+# Not sure why we need OpenGL
 FIND_PACKAGE(OpenGL)
-IF(OpenGL_FOUND)
 
-ENDIF(OpenGL_FOUND)
-
-
-
+# Find NLOPT - a small non-linear optimization package
 OPTION(USE_NLOPT "Use the NLOPT optimization library" OFF)
 IF(USE_NLOPT)
   FIND_PACKAGE(NLOPT REQUIRED)
   INCLUDE_DIRECTORIES(${NLOPT_INCLUDE_DIRS})
+  GET_FILENAME_COMPONENT(NLOPT_LIBRARY_DIR ${NLOPT_LIBRARIES} DIRECTORY)
 ENDIF(USE_NLOPT)
-
-
-#  ${CMREP_SOURCE_DIR}/extras/afront/tmp/
 
 # Include subdirectories
 SUBDIRS(extras/toms611)
 SUBDIRS(testing)
-
 
 OPTION(BUILD_UTILS "Build some cm-rep utilities" ON)
 
@@ -257,46 +220,6 @@ SET(DIJKSTRA_SRCS
 # Create library of shortest path routines
 ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 
-# Define the VTK libraries
-IF(COMMENT_OUT)
-SET(VTK_LIBRARIES
-  vtkChartsCore
-  vtkRenderingLOD
-  vtkRenderingOpenGL
-  vtkRenderingVolume
-  vtkRenderingVolumeOpenGL
-  vtkViewsCore
-  vtkViewsContext2D
-  vtkInteractionStyle
-  vtkIOExport
-  vtkIOGeometry
-  vtkIOLegacy
-  vtkIOImage
-  vtkIOCore
-  vtkImagingCore
-  vtkRenderingFreeTypeOpenGL
-  vtkRenderingFreeType
-  vtkRenderingCore
-  vtkFiltersModeling
-  vtkFiltersExtraction
-  vtkFiltersSources
-  vtkFiltersGeometry
-  vtkFiltersGeneral
-  vtkFiltersCore
-  vtkCommonExecutionModel
-  vtkCommonDataModel
-  vtkCommonMisc
-  vtkCommonSystem
-  vtkCommonTransforms
-  vtkCommonMath
-  vtkCommonCore
-  vtksys
-  vtkftgl
-  vtkfreetype
-  vtkzlib
-)
-ENDIF(COMMENT_OUT)
-
 # Set the list of required libraries
 LINK_LIBRARIES(
   ${ITK_LIBRARIES}
@@ -306,6 +229,7 @@ LINK_LIBRARIES(
 
 # New: Geodesic shooting
 IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
+
   ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
   TARGET_LINK_LIBRARIES(shooting_test cmrep ${PDE_LIBS})
 
@@ -329,6 +253,9 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
     submodules/greedy/src/lddmm_data.cxx)
   TARGET_LINK_LIBRARIES(lmtowarp cmrep ${PDE_LIBS})
 
+  # Update the list of binaries
+  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} shooting_test lmshoot lmtowarp)
+
   IF(NLOPT_FOUND)
     ADD_EXECUTABLE(alcmrep_test
       src/TestAugLagCMRep.cxx
@@ -337,6 +264,7 @@ IF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
       src/PointSetHamiltonianSystem.cxx
       src/VTKMeshBuilder.cxx)
     TARGET_LINK_LIBRARIES(alcmrep_test cmrep ${PDE_LIBS} ${NLOPT_LIBRARIES})
+    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} alcmrep_test)
   ENDIF(NLOPT_FOUND)
 
 ENDIF(LAPACK_FOUND OR IPOPT_LAPACK_FOUND)
@@ -378,6 +306,12 @@ TARGET_LINK_LIBRARIES(cmrep_afftran cmrep)
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
 TARGET_LINK_LIBRARIES(cmrep_vskel cmrep cmrep_dijkstra)
 
+# Update the list of binaries
+SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 
+  cmrep_test cmrep_fit cmrep_getmesh cmrep_remesh cmrep_meanmodel 
+  cmrep_pca_generate cmrep_fillmesh cmrep_genwarp cmrep_warpimage
+  cmrep_afftran cmrep_vskel)
+
 IF(USE_IPOPT AND USE_TETGEN)
   ADD_EXECUTABLE(opttest src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
   ADD_EXECUTABLE(contest
@@ -389,25 +323,26 @@ IF(USE_IPOPT AND USE_TETGEN)
   TARGET_LINK_LIBRARIES(opttest cmrep ${PDE_LIBS})
   TARGET_LINK_LIBRARIES(contest cmrep ${PDE_LIBS} toms611)
 
-  INSTALL(TARGETS contest 
-     BUNDLE DESTINATION . COMPONENT Runtime
-     RUNTIME DESTINATION bin COMPONENT RUNTIME)
+  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} opttest contest)
 
 ENDIF(USE_IPOPT AND USE_TETGEN)
 
-# Add installation targets
-INSTALL(TARGETS cmrep_fit cmrep_test cmrep_afftran cmrep_getmesh
-  cmrep_meanmodel cmrep_subdivide cmrep_remesh cmrep_fillmesh cmrep_genwarp
-  cmrep_vskel cmrep_warpimage 
-     BUNDLE DESTINATION . COMPONENT Runtime
-     RUNTIME DESTINATION bin COMPONENT RUNTIME)
-
-INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
-  "share/cmrep/")
-
+# Include the utilities
 IF(BUILD_UTILS)
   SUBDIRS(src/util)
 ENDIF(BUILD_UTILS)
+
+# Install all the targets
+FOREACH(CMREP_TOOL ${CMREP_BINARY_TOOLS})
+
+  INSTALL(TARGETS ${CMREP_TOOL} 
+    BUNDLE DESTINATION . COMPONENT Runtime
+    RUNTIME DESTINATION bin COMPONENT RUNTIME)
+
+ENDFOREACH(CMREP_TOOL)
+
+INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
+  "share/cmrep/")
 
 INCLUDE(BundleUtilities)
 
@@ -422,6 +357,20 @@ IF(APPLE)
      fixup_bundle(\"${APPS}\"   \"\"   \"\")
      " COMPONENT Runtime)
 ENDIF(APPLE)
+
+# Fixup bundle on LINUX
+IF(UNIX AND NOT APPLE)
+
+  SET(APPS "\${CMAKE_INSTALL_PREFIX}/bin/cmrep_fit")
+  SET(FIXUP_DIRS "${IPOPT_LIB_DIR}" "${VTK_DIR}/lib" "${NLOPT_LIBRARY_DIR}")
+
+  INSTALL(CODE "
+     include(BundleUtilities)
+     fixup_bundle(\"${APPS}\"   \"\"   \"${FIXUP_DIRS}\")
+     " COMPONENT Runtime)
+
+ENDIF(UNIX AND NOT APPLE)
+
 
 # Add package support
 INCLUDE(CMake/Package.cmake)

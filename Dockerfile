@@ -3,7 +3,7 @@ FROM pyushkevich/cmrep-env
 USER itk
 
 # Copy our code
-COPY . cmrep
+COPY --chown=itk:itk . cmrep
 
 # Configure
 RUN mkdir cmrep_build \
@@ -21,5 +21,8 @@ RUN mkdir cmrep_build \
     -D IPOPT_LIBRARY:FILEPATH=/home/itk/CoinIpopt/install/lib/libipopt.so \
     -D TETGEN_INCLUDE_DIR:PATH=/home/itk/tetgen \
     -D TETGEN_LIBRARY=/home/itk/tetgen_build/libtet.a \
+    -D USE_NLOPT:BOOL=ON \
+    -D NLOPT_LIBRARIES:FILEPATH=/home/itk/nlopt_build/install/lib/libnlopt.so \
+    -D NLOPT_INCLUDE_DIRS:PATH=/home/itk/nlopt_build/install/include \
      ../cmrep \
   && make -j $(nproc)

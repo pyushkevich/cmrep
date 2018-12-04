@@ -35,7 +35,12 @@ ADD_EXECUTABLE(meshdiff CompareMeshes.cxx DrawFillInside.cpp DrawTriangles.cpp)
 
 ADD_EXECUTABLE(warpmesh WarpMeshBackwards.cxx)
 
+# Add to the list of binaries
+SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 
+  sphere_splat vtkprocrustes vtklevelset vtkcontour
+  mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
+  meshglm meshcluster meshdiff warpmesh)
 
 # Add installation targets
-INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster meshglm mesh_image_sample vtkcontour mesh_merge_arrays warpmesh)
+# INSTALL_TARGETS("/bin" vtklevelset mesh2img meshcluster meshglm mesh_image_sample vtkcontour mesh_merge_arrays warpmesh)
 

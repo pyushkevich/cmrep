@@ -29,9 +29,10 @@ void
 PointSetOptimalControlSystem<TFloat, VDim>
 ::SetupMultiThreaded()
 {
-  // TODO: restore this!
   unsigned int n_threads = std::thread::hardware_concurrency();
   td.resize(n_threads);
+
+  std::cout << "std::thread pool created with " << n_threads << " threads\n" << std::endl;
 
   // Create the thread pool
   thread_pool = new ctpl::thread_pool(n_threads);

@@ -168,7 +168,7 @@ struct CMRep
   static void ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[]);
 
   // Read from a VTK file (bcm-rep format)
-  void ReadVTK(const char *file, bool compute_limit_surface_weights);
+  void ReadVTK(const char *file, bool compute_limit_surface_weights, const char *fn_init_transform);
 };
 
 void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
@@ -195,14 +195,14 @@ void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
 
 
 
-void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights)
+void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const char *fn_init_transform)
 {
   // Read the mesh from file
   vtkSmartPointer<vtkPolyDataReader> reader = vtkPolyDataReader::New();
   reader->SetFileName(fn);
   reader->Update();
   this->bnd_vtk = reader->GetOutput();
-
+  
   // Read the normals
   vtkDataArray *b_norm = this->bnd_vtk->GetPointData()->GetNormals();
   vtkDataArray *b_rad = this->bnd_vtk->GetPointData()->GetArray("Radius");
@@ -232,6 +232,10 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights)
       this->bnd_nrm(k, d) = b_norm ? b_norm->GetComponent(k,d) : 0.0;
       }
     }
+  
+  // Allocate an array to hold the boundary radii
+  vnl_vector<double> bnd_rad(nv, 0.0);
+  
 
   // Parse the boundary triangles
   TriangleMeshGenerator bnd_tmg(&this->bnd_tri, nv);
@@ -343,6 +347,35 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights)
 
     // Do the same for the medial surface
     ComputeTangentAndLimitWeights(&this->med_tri, this->med_wtl);
+    }
+  
+  // Read the initial transform matrix
+  vnl_matrix_fixed<double, 4, 4> m_tran; m_tran.set_identity();
+  if(fn_init_transform != NULL)
+    {
+    std::ifstream matrix_file(fn_init_transform);
+    m_tran.read_ascii(matrix_file);
+    matrix_file.close();
+    std::cout << "Read initial matrix " << m_tran << std::endl;
+    }
+  
+  // Apply the transform to the boundary and normals
+  vnl_matrix_fixed<double, 3, 3> m_tran_A = m_tran.extract(3,3);
+  vnl_vector_fixed<double, 3> m_tran_B = m_tran.get_column(3).extract(3);
+  double m_tran_s = vnl_determinant(m_tran_A);
+  
+  std::cout << "Transform determinant " << m_tran_s << std::endl;
+  
+  for(int k = 0; k < nv; k++)
+    {
+    this->bnd_vtx.set_row(k, m_tran_A * this->bnd_vtx.get_row(k) + m_tran_B);
+    this->bnd_nrm.set_row(k, (m_tran_A * this->bnd_nrm.get_row(k)) / m_tran_s);
+    }
+  
+  for(int k = 0; k < nmv; k++)
+    {
+    this->med_vtx.set_row(k, m_tran_A * this->med_vtx.get_row(k) + m_tran_B);
+    this->med_rad[k] *= m_tran_s;
     }
 }
 
@@ -3368,6 +3401,7 @@ int usage()
     "  -i <image.nii>     : Target binary image to be fitted\n"
     "  -t <target.vtk>    : Target mesh to be fitted (exclusive of -i)\n"
     "  -o <out.vtk>       : Output medial mesh\n"
+    "  -tran <tran.mat>   : Read initial similarity transform from file\n"
     "Fitting Parameters:\n"
     "  -wk <value>        : Weight of the kinetic energy term (%f)\n"
     "  -mu <value>        : Initial value of the augmented lagrangian mu (%f)\n"
@@ -3449,7 +3483,7 @@ int main(int argc, char *argv[])
   AugLagMedialFitParameters param;
 
   // Input filenames
-  std::string fn_model, fn_target_image, fn_target_mesh, fn_output;
+  std::string fn_model, fn_target_image, fn_target_mesh, fn_output, fn_transform;
 
   // Read the command-line arguments
   CommandLineHelper cl(argc, argv);
@@ -3471,6 +3505,10 @@ int main(int argc, char *argv[])
     else if(command == "-o")
       {
       fn_output = cl.read_output_filename();
+      }
+    else if(command == "-tran")
+      {
+      fn_transform = cl.read_existing_filename();
       }
     else if(command == "-wk")
       {
@@ -3529,7 +3567,7 @@ int main(int argc, char *argv[])
 
   // Read the template mesh
   CMRep m_template;
-  m_template.ReadVTK(fn_model.c_str(), param.limit_surface_constraints);
+  m_template.ReadVTK(fn_model.c_str(), param.limit_surface_constraints, fn_transform.c_str());
 
   // Test the Loop limit surface calculation (only valid for non-branching models currently)
   if(param.limit_surface_constraints)
@@ -3540,7 +3578,7 @@ int main(int argc, char *argv[])
 
   // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
-  m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str(), param.limit_surface_constraints);
+  m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str(), param.limit_surface_constraints, NULL);
 
   if(param.check_deriv)
     {
