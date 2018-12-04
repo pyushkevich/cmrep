@@ -1127,7 +1127,7 @@ public:
   void Load(const char *file);
   void Save(const char *file);
 
-  void Subdivide();
+  void Subdivide(bool edge_only);
   void ImportFromCMRep(const char *file);
 };
 
@@ -1250,14 +1250,37 @@ void apply_subdivision(std::vector<T> &z, ImmutableSparseMatrix<double> &W)
     }
 }
 
-void BCMTemplate::Subdivide()
+void BCMTemplate::Subdivide(bool edges_only)
 {
   // Make a copy of the boundary mesh
   bmesh.SetAsRoot();
   SubdivisionSurface::MeshLevel src = bmesh;
-
-  // Subdivide into the current mesh
-  SubdivisionSurface::Subdivide(&src, &bmesh);
+  
+  // If subdividing edges only, mark those triangles
+  if(edges_only)
+    {
+    // Triangle selection
+    std::set<size_t> tsel;
+    
+    // Iterate over triangles and find the ones on the edge
+    for(size_t t = 0; t < src.triangles.size(); t++)
+      {
+      auto &tri = src.triangles[t];
+      for(int a = 0; a < 3; a++)
+        if(tri.neighbors[a] == NOID)
+          tsel.insert(t);
+      }
+    
+    // Only subdivide those triangles
+    // TODO: This code is broken. If you run this, the code below where the mIndex is assigned
+    // will crash. This can be overcome but needs additional coding
+    SubdivisionSurface::SubdivideSelected(&src, &bmesh, tsel);
+    }
+  else
+    {
+    // Subdivide into the current mesh
+    SubdivisionSurface::Subdivide(&src, &bmesh);
+    }
 
   // Get the subdivision matrix
   typedef ImmutableSparseMatrix<double> SMat;
@@ -1726,6 +1749,7 @@ void FixCmrepMedialMesh(std::string fnInput, std::string fnOutput)
 int SubdivideBoundaryRepresentation(
     std::string fnTemplate,
     int subdivisionLevel,
+    bool edges_only,
     std::string fnOutput)
 {
   // Load the template!
@@ -1734,7 +1758,7 @@ int SubdivideBoundaryRepresentation(
 
   // Create the output template
   for(int i = 0; i < subdivisionLevel; i++)
-    tmpl.Subdivide();
+    tmpl.Subdivide(edges_only);
 
   // Save the mesh
   tmpl.Save(fnOutput.c_str());
@@ -1895,6 +1919,7 @@ enum ProgramAction {
   ACTION_FIT_TARGET,
   ACTION_FIT_SELF,
   ACTION_SUBDIVIDE,
+  ACTION_SUBDIVIDE_EDGE,
   ACTION_CONVERT_CMREP,
   ACTION_INFLATE_CMREP,
   ACTION_FIX_CMREP,
@@ -1911,6 +1936,7 @@ int usage()
       "  -icp template.vtk target.vtk   : fit template mesh to target mesh\n"
       "  -lsq template.vtk target.vtk   : least squares fit to target mesh\n"
       "  -sub template.vtk factor       : subdivide template by a factor\n"
+      "  -subedg template.vtk factor    : subdivide template, but only edge triangles\n"
       "  -cmr input.cmrep               : import a cm-rep template\n"
       "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
       "  -inf medial.vtk radius edgelab : inflate a medial model created with the GUI tool.\n"
@@ -1928,6 +1954,7 @@ int usage()
       "                                           at each iteration\n"
       "  -reg-el W                      : penalize the length of the crest\n"
       "                                           curve with weight specified\n"
+      "  -max-iter N                    : maximum iterations for IpOpt (200)\n"
       "triangle shape constraints:\n"
       "  -bc alpha,beta,min_area        : Set boundary triangle constraints \n"
       "                                     alpha:    minimum triangle angle (def: 12)\n"
@@ -1953,11 +1980,12 @@ struct RegularizationOptions
   bool UseHessian;
 
   double EdgeLengthWeight;
+  unsigned int MaxIpOptIter;
 
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
       Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
-      EdgeLengthWeight(0.0), UseHessian(true) {}
+      EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200) {}
 };
 
 class ObjectiveCombiner
@@ -2076,6 +2104,12 @@ int main(int argc, char *argv[])
       fnTemplate = argv[++p];
       subdivisionLevel = atoi(argv[++p]);
       }
+    else if(cmd == "-subedg")
+      {
+      action = ACTION_SUBDIVIDE_EDGE;
+      fnTemplate = argv[++p];
+      subdivisionLevel = atoi(argv[++p]);
+      }
     else if(cmd == "-cmr")
       {
       action = ACTION_CONVERT_CMREP;
@@ -2118,6 +2152,10 @@ int main(int argc, char *argv[])
     else if(cmd == "-reg-el")
       {
       regOpts.EdgeLengthWeight = atof(argv[++p]);
+      }
+    else if(cmd == "-max-iter")
+      {
+      regOpts.MaxIpOptIter = atoi(argv[++p]);
       }
     else if(cmd == "-solver")
       {
@@ -2166,14 +2204,23 @@ int main(int argc, char *argv[])
 
   else if(action == ACTION_SUBDIVIDE)
     {
-    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, fnOutput);
+    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, false, fnOutput);
     }
 
+  else if(action == ACTION_SUBDIVIDE_EDGE)
+    {
+    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, true, fnOutput);
+    }
+  
   else if(action == ACTION_NONE)
     {
     std::cerr << "No action specified" << std::endl;
     return -1;
     }
+  
+  // Get the parts of the output filename
+  std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutput);
+  std::string fnOutDir = itksys::SystemTools::GetParentDirectory(fnOutput);
 
   // Load the template
   BCMTemplate tmpl;
@@ -3535,7 +3582,8 @@ int main(int argc, char *argv[])
   SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(p);
 
   // Create a file for dumping the constraint info
-  FILE *fnConstraintDump = fopen("constraint_dump.txt", "wt");
+  sprintf(buffer, "%s/%s_constraint_dump.txt", fnOutDir.c_str(), fnOutBase.c_str());
+  FILE *fnConstraintDump = fopen(buffer, "wt");
   ip->log_constraints(fnConstraintDump);
 
   // Set up the IPopt problem
@@ -3555,7 +3603,7 @@ int main(int argc, char *argv[])
   // app->Options()->SetStringValue("mu_strategy", "adaptive");
   // app->Options()->SetStringValue("output_file", "ipopt.out");
 
-  app->Options()->SetIntegerValue("max_iter", 200);
+  app->Options()->SetIntegerValue("max_iter", regOpts.MaxIpOptIter);
   if(!regOpts.UseHessian)
     app->Options()->SetStringValue("hessian_approximation", "limited-memory");
 
@@ -3597,14 +3645,11 @@ int main(int argc, char *argv[])
   // Evaluate the objective
   ocfit.PrintReport();
 
-  // Remove the extension fromthe filename
-  std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutput);
-
   // Save the current state
-  sprintf(buffer, "%s_fit2tmp_bnd.vtk", fnOutBase.c_str());
+  sprintf(buffer, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
   SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
-  sprintf(buffer, "%s_fit2tmp_med.vtk", fnOutBase.c_str());
+  sprintf(buffer, "%s/%s_fit2tmp_med.vtk", fnOutDir.c_str(), fnOutBase.c_str());
   SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
 
   // Continue if in ICP mode
@@ -3652,12 +3697,12 @@ int main(int argc, char *argv[])
 
       // Evaluate the objective
       ocicp.PrintReport();
-
+      
       // Save the current state
-      sprintf(buffer, "%s_icp_%02d_bnd.vtk", fnOutBase.c_str(), i);
+      sprintf(buffer, "%s/%s_icp_%02d_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
       SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
 
-      sprintf(buffer, "%s_icp_%02d_med.vtk", fnOutBase.c_str(), i);
+      sprintf(buffer, "%s/%s_icp_%02d_med.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
       SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
       }
 

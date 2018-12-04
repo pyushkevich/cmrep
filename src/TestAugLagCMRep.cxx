@@ -487,6 +487,9 @@ struct AugLagMedialFitParameters
   // Do similarity transform
   bool do_similarity;
 
+  // Location for saving output models
+  std::string fnOutputDir;
+
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), 
@@ -3375,7 +3378,7 @@ void optimize_auglag(
 
     // Export the meshes
     char fn_dir[4096], fn_pattern[4096];
-    sprintf(fn_dir, "/tmp/testau_iter_%02d", it);
+    sprintf(fn_dir, "%s/al_iter_%02d", param.fnOutputDir.c_str(), it);
     sprintf(fn_pattern, "%s/testau_iter_%02d_tp_%s.vtk", fn_dir, it, "%03d");
     vtksys::SystemTools::MakeDirectory(fn_dir);
     obj.Export(x_opt, fn_pattern);
@@ -3400,7 +3403,7 @@ int usage()
     "  -m <model.vtk>     : Input template\n"
     "  -i <image.nii>     : Target binary image to be fitted\n"
     "  -t <target.vtk>    : Target mesh to be fitted (exclusive of -i)\n"
-    "  -o <out.vtk>       : Output medial mesh\n"
+    "  -o <out_dir>       : Output directory\n"
     "  -tran <tran.mat>   : Read initial similarity transform from file\n"
     "Fitting Parameters:\n"
     "  -wk <value>        : Weight of the kinetic energy term (%f)\n"
@@ -3504,7 +3507,7 @@ int main(int argc, char *argv[])
       }
     else if(command == "-o")
       {
-      fn_output = cl.read_output_filename();
+      param.fnOutputDir = cl.read_output_filename();
       }
     else if(command == "-tran")
       {
