@@ -458,6 +458,9 @@ struct AugLagMedialFitParameters
 
   // Sigma of the Gaussian kernel
   double sigma;
+
+  // Sigma for the image smoothing
+  double image_sigma;
   
   // Schedule for mu
   double mu_init, mu_scale;
@@ -492,7 +495,7 @@ struct AugLagMedialFitParameters
 
   // Default initializer
   AugLagMedialFitParameters() 
-    : nt(40), w_kinetic(0.05), sigma(2.0), 
+    : nt(40), w_kinetic(0.05), sigma(2.0), image_sigma(0.2),
       mu_init(1), mu_scale(1.0),
       gradient_iter(6000), al_iter(10),
       bfgs_ftol(1e-5), al_max_con(1e-4),
@@ -2114,56 +2117,55 @@ public:
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
 
     // Create a copy of the mesh in the model
-    vtkSmartPointer<vtkPolyData> pd = vtkPolyData::New();
-    pd->DeepCopy(model->bnd_vtk);
+    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
 
-    // Update the points
-    for(int i = 0; i < ycmp.q_bnd.rows(); i++)
+    // Add the points
+    vmbb.SetPoints(ycmp.q_bnd);
+
+    // Update the medial coordinates, normals, and radii
+    Vector Rb(model->nv);
+    Matrix Mb(model->nv, 3), Nb(model->nv, 3);
+    for(unsigned int i = 0; i < ycmp.q_bnd.rows(); i++)
       {
-      pd->GetPoints()->SetPoint(i, ycmp.q_bnd(i,0), ycmp.q_bnd(i,1), ycmp.q_bnd(i,2));
+      auto m = ycmp.q_med.get_row(model->bnd_mi[i]);
+      auto x = ycmp.q_bnd.get_row(i);
+
+      Mb.set_row(i, m);
+      Rb[i] = (x - m).magnitude();
+      Nb.set_row(i, (x-m) / Rb[i]);
       }
+
+    vmbb.AddArray(Rb, "Radius");
+    vmbb.AddArray(Mb, "MedialPoint");
+    vmbb.SetNormals(Nb);
 
     // Get the constraint values for the current timeslice
     MatrixRef Ct_orth(model->nv, 2, const_cast<double *>(C.data_block()));
     VectorRef Ct_spklen(C.size() - 2 * model->nv, const_cast<double *>(C.data_block() + 2 * model->nv));
 
-    // Create a point array for the constraints
-    vtkSmartPointer<vtkFloatArray> arr_con = vtkFloatArray::New();
-    arr_con->SetNumberOfComponents(3);
-    arr_con->SetNumberOfTuples(model->nv);
-
-    // Assign the ortho constraints
-    for(int j = 0; j < model->nv; j++)
-      {
-      arr_con->SetComponent(j, 0, Ct_orth(j, 0));
-      arr_con->SetComponent(j, 1, Ct_orth(j, 1));
-      }
-
     // Assign the spoke constraints
-    for(int k = 0, m = 0; k < model->med_bi.size(); k++)
+    Vector Ct_spklen_b(model->nv);
+    for(unsigned int k = 0, m = 0; k < model->med_bi.size(); k++)
       {
       if(model->med_bi[k].size() > 1)
         {
-        int b0 = model->med_bi[k][0];
+        unsigned int b0 = model->med_bi[k][0];
         double consum = 0.0;
-        for(int j = 1; j < model->med_bi[k].size(); j++, m++)
+        for(unsigned int j = 1; j < model->med_bi[k].size(); j++, m++)
           {
-          int bj = model->med_bi[k][j];
-          arr_con->SetComponent(bj, 2, Ct_spklen[m]);
+          unsigned int bj = model->med_bi[k][j];
+          Ct_spklen_b[bj] = Ct_spklen[m];
           consum += Ct_spklen[m];
           }
-        arr_con->SetComponent(b0, 2, -consum);
+        Ct_spklen_b[b0] = -consum;
         }
       }
 
-    arr_con->SetName("Constraints");
-    pd->GetPointData()->AddArray(arr_con);
+    vmbb.AddArray(Ct_orth, "Ct_orth");
+    vmbb.AddArray(Ct_spklen_b, "Ct_spklen");
 
     // Write the model
-    vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
-    writer->SetFileName(fname);
-    writer->SetInputData(pd);
-    writer->Update();
+    vmbb.Save(fname);
     }
 };
 
@@ -3409,6 +3411,7 @@ int usage()
     "  -wk <value>        : Weight of the kinetic energy term (%f)\n"
     "  -mu <value>        : Initial value of the augmented lagrangian mu (%f)\n"
     "  -ks <value>        : Standard deviation (mm) of Gaussian in flow kernel (%f)\n"
+    "  -is <value>        : Standard deviation (in voxels) of the image smoothing kernel (%f)\n"
     "  -n <int> <int>     : Number of aug. lag.  (%d) and inner BFGS (%d) iterations\n"
     "  -t <int>           : Number of flow time steps (%d)\n"
     "  -T                 : Flag, specifies that constraints applied at all time points.\n"
@@ -3424,7 +3427,7 @@ int usage()
     "Debugging Parameters:\n"
     "  -D                 : Enable derivative checks\n"
     "  -noslack           : Use set of constraints without slack variables\n",
-    param.w_kinetic, param.mu_init, param.sigma, 
+    param.w_kinetic, param.mu_init, param.sigma, param.image_sigma,
     param.al_iter, param.gradient_iter,param.nt,
     param.loop_subdivision_level,
     param.bfgs_ftol, param.al_max_con
@@ -3525,6 +3528,10 @@ int main(int argc, char *argv[])
       {
       param.sigma = cl.read_double();
       }
+    else if(command == "-is")
+      {
+      param.image_sigma = cl.read_double();
+      }
     else if(command == "-n")
       {
       param.al_iter = (unsigned int) cl.read_integer();
@@ -3577,7 +3584,7 @@ int main(int argc, char *argv[])
     TestLimitSurface(&m_template);
 
   // Read the target image file
-  ImageDiceFunction idf(fn_target_image.c_str(), 0.02);
+  ImageDiceFunction idf(fn_target_image.c_str(), param.image_sigma);
 
   // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
