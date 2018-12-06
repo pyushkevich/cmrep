@@ -41,8 +41,9 @@
 #include <vnl/algo/vnl_svd.h>
 #include <vnl/algo/vnl_brent_minimizer.h>
 
-
 #include <nlopt.h>
+
+#include <cstdarg>
 
 class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
@@ -169,6 +170,17 @@ struct CMRep
 
   // Read from a VTK file (bcm-rep format)
   void ReadVTK(const char *file, bool compute_limit_surface_weights, const char *fn_init_transform);
+
+  // Get named array from the model
+  vtkDataArray *GetArray(const char *format, ...);
+
+  // Remap an array that is associated with boundary vertices to the medial axis
+  Vector RemapBoundaryToMedial(const Vector &src_bnd);
+  Matrix RemapBoundaryToMedial(const Matrix &src_bnd);
+
+  // Remap an array that is associated with medial vertices to the boundary
+  Vector RemapMedialToBoundary(const Vector &src_med);
+  Matrix RemapMedialToBoundary(const Matrix &src_med);
 };
 
 void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
@@ -366,17 +378,61 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
   
   std::cout << "Transform determinant " << m_tran_s << std::endl;
   
-  for(int k = 0; k < nv; k++)
+  for(unsigned int k = 0; k < nv; k++)
     {
     this->bnd_vtx.set_row(k, m_tran_A * this->bnd_vtx.get_row(k) + m_tran_B);
     this->bnd_nrm.set_row(k, (m_tran_A * this->bnd_nrm.get_row(k)) / m_tran_s);
     }
   
-  for(int k = 0; k < nmv; k++)
+  for(unsigned int k = 0; k < nmv; k++)
     {
     this->med_vtx.set_row(k, m_tran_A * this->med_vtx.get_row(k) + m_tran_B);
     this->med_rad[k] *= m_tran_s;
     }
+}
+
+vtkDataArray *CMRep::GetArray(const char *format, ...)
+{
+  char buffer[256];
+  va_list args;
+  va_start (args, format);
+  vsprintf (buffer,format, args);
+  va_end (args);
+
+  return this->bnd_vtk->GetPointData()->HasArray(buffer) ?
+        this->bnd_vtk->GetPointData()->GetArray(buffer) : NULL;
+}
+
+CMRep::Vector CMRep::RemapBoundaryToMedial(const Vector &src_bnd)
+{
+  Vector trg_med(nmv);
+  for(unsigned int k = 0; k < nv; k++)
+    trg_med[bnd_mi[k]] = src_bnd[k];
+  return trg_med;
+}
+
+CMRep::Matrix CMRep::RemapBoundaryToMedial(const Matrix &src_bnd)
+{
+  Matrix trg_med(nmv, src_bnd.columns());
+  for(unsigned int k = 0; k < nv; k++)
+    trg_med.set_row(bnd_mi[k], src_bnd.get_row(k));
+  return trg_med;
+}
+
+CMRep::Vector CMRep::RemapMedialToBoundary(const Vector &src_med)
+{
+  Vector trg_bnd(nv);
+  for(unsigned int k = 0; k < nv; k++)
+    trg_bnd[k] = src_med[bnd_mi[k]];
+  return trg_bnd;
+}
+
+CMRep::Matrix CMRep::RemapMedialToBoundary(const Matrix &src_med)
+{
+  Matrix trg_bnd(nv, src_med.columns());
+  for(unsigned int k = 0; k < nv; k++)
+    trg_bnd.set_row(k, src_med.get_row(bnd_mi[k]));
+  return trg_bnd;
 }
 
 void vtk_save_polydata(vtkPolyData *pd, const char *file)
@@ -1285,13 +1341,46 @@ public:
 
   // Initialize the optimization variable for a timepoint. The input vector x contains the 
   // variables for just the current timepoint
-  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt)
+  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x,
+                                    unsigned int nt, unsigned int t)
     {
     // Get a pointer to the storage for timepoint t
     XComponents xcmp(model, x.data_block());
 
-    // The initial momentum
-    x.fill(0.0);
+    // If the template includes saved coefficient arrays use them for initialization
+    vtkDataArray *arr_U_bnd = model->GetArray("coeff_U_bnd_%03d", t);
+    vtkDataArray *arr_U_med = model->GetArray("coeff_U_med_%03d", t);
+    vtkDataArray *arr_N_bnd = model->GetArray("coeff_N_bnd_%03d", t);
+    vtkDataArray *arr_R_med = model->GetArray("coeff_R_med_%03d", t);
+
+    if(arr_U_bnd && arr_U_med && arr_N_bnd && arr_R_med)
+      {
+      for(unsigned int i = 0; i < model->nv; i++)
+        {
+        for(unsigned int j = 0; j < 3; j++)
+          {
+          xcmp.u_bnd(i, j) = arr_U_bnd->GetComponent(i, j);
+          xcmp.N_bnd(i, j) = arr_N_bnd->GetComponent(i, j);
+          xcmp.u_med(model->bnd_mi[i], j) = arr_U_med->GetComponent(i, j);
+          }
+        xcmp.R_med[model->bnd_mi[i]] = arr_R_med->GetComponent(i, 0);
+        }
+      }
+
+    else
+      {
+      // Initialize to all zeros
+      x.fill(0.0);
+
+      // Initialize slack vars to model values
+      for(int i = 0; i < model->nv; i++)
+        xcmp.N_bnd.set_row(i, model->bnd_nrm.get_row(i));
+
+      for(int j = 0; j < model->nmv; j++)
+        xcmp.R_med[j] = model->med_rad[j];
+      }
+
+
     // TODO: restore this?
     // xcmp.u_bnd.update((target->target_model->bnd_vtx - model->bnd_vtx) / nt, 0, 0);
     // xcmp.u_med.update((target->target_model->med_vtx - model->med_vtx) / nt, 0, 0);
@@ -1310,11 +1399,6 @@ public:
       }
     */
 
-    for(int i = 0; i < model->nv; i++)
-      xcmp.N_bnd.set_row(i, model->bnd_nrm.get_row(i));
-
-    for(int j = 0; j < model->nmv; j++)
-      xcmp.R_med[j] = model->med_rad[j];
     }
 
   // Return a vector of bounds on the optimization variables
@@ -1385,11 +1469,14 @@ public:
       AL += H->qf_F.Compute(Y, d_AL__d_Y);
 
       // Compute the Dice overlap
-      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
+      if(target->image_function && target->w_image_function > 0.0)
+        {
+        AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
 
-      // Compute the adjoint of the Dice overlap
-      target->image_function->ComputeAdjoint(
-        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+        // Compute the adjoint of the Dice overlap
+        target->image_function->ComputeAdjoint(
+          Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+        }
       }
 
     // Iterate over the constraints
@@ -1621,6 +1708,16 @@ public:
     UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.absolute_value_max());
     }
 
+  static void SaveTimepointCoefficients(CMRep *model, const Vector &X, unsigned int t, VTKMeshBuilder<vtkPolyData> &vmbb)
+    {
+    XComponents xcmp(model, const_cast<double *>(X.data_block()));
+
+    // Update various parts of the array
+    vmbb.AddArray(xcmp.u_bnd, "coeff_U_bnd_%03d", t);
+    vmbb.AddArray(xcmp.N_bnd, "coeff_N_bnd_%03d", t);
+    vmbb.AddArray(model->RemapMedialToBoundary(xcmp.u_med), "coeff_U_med_%03d", t);
+    vmbb.AddArray(model->RemapMedialToBoundary(xcmp.R_med), "coeff_R_med_%03d", t);
+    }
 
   static void ExportTimepoint(CMRep *model, TargetData *target, 
     const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
@@ -1642,36 +1739,28 @@ public:
 
     // Compute the adjoint of the image objective function on medial and boundary points
     Matrix d_obj__d_q_bnd(model->nv, 3, 0.0), d_obj__d_q_med(model->nmv, 3, 0.0);
-    target->image_function->Compute(ycmp.q_bnd, ycmp.q_med);
-    target->image_function->ComputeAdjoint(
-        ycmp.q_bnd, ycmp.q_med, -target->w_image_function, d_obj__d_q_bnd, d_obj__d_q_med);
-
-    // Map the radius and medial points to the boundary
-    Vector Rb(model->nv);
-    Matrix Mb(model->nv, 3);
-    Matrix d_obj__d_q_med_tobnd(model->nv, 3);
-    for(int i = 0; i < ycmp.q_bnd.rows(); i++)
+    if(target->image_function && target->w_image_function > 0.0)
       {
-      Rb[i] = ycmp.R_med(model->bnd_mi[i]);
-      Mb.set_row(i, ycmp.q_med.get_row(model->bnd_mi[i]));
-      d_obj__d_q_med_tobnd.set_row(i, d_obj__d_q_med.get_row(model->bnd_mi[i]));
+      target->image_function->Compute(ycmp.q_bnd, ycmp.q_med);
+      target->image_function->ComputeAdjoint(
+          ycmp.q_bnd, ycmp.q_med, -target->w_image_function, d_obj__d_q_bnd, d_obj__d_q_med);
       }
 
     // Add the boundary momentum
     vmbb.AddArray(ycmp.u_bnd, "InitialMomentum");
 
     // Add the radius array
-    vmbb.AddArray(Rb, "Radius");
+    vmbb.AddArray(model->RemapMedialToBoundary(ycmp.R_med), "Radius");
     
     // Store the medial points as a separate array
-    vmbb.AddArray(Mb, "MedialPoint");
+    vmbb.AddArray(model->RemapMedialToBoundary(ycmp.q_med), "MedialPoint");
 
     // Limit arrays
     vmbb.AddArray(Xlim, "LimitPoint");
 
     // Objective adjoint arrays
     vmbb.AddArray(-d_obj__d_q_bnd, "ImageFunctionAdjoint");
-    vmbb.AddArray(-d_obj__d_q_med_tobnd, "MedialImageFunctionAdjoint");
+    vmbb.AddArray(-model->RemapMedialToBoundary(d_obj__d_q_med), "MedialImageFunctionAdjoint");
 
     // Extract medial limit points (only for models that support them)
     if(model->med_wtl->GetNumberOfRows() > 0)
@@ -1784,10 +1873,32 @@ public:
 
   // Initialize the optimization variable for a timepoint. The input vector x contains the 
   // variables for just the current timepoint
-  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt)
+  static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt, unsigned int t)
     {
-    // Set the initial control to zero
-    x.fill(0.0);
+    // Get a pointer to the storage for timepoint t
+    XComponents xcmp(model, x.data_block());
+
+    // If the template includes saved coefficient arrays use them for initialization
+    vtkDataArray *arr_U_bnd = model->GetArray("coeff_U_bnd_%03d", t);
+    vtkDataArray *arr_U_med = model->GetArray("coeff_U_med_%03d", t);
+
+    if(arr_U_bnd && arr_U_med)
+      {
+      for(unsigned int i = 0; i < model->nv; i++)
+        {
+        for(unsigned int j = 0; j < 3; j++)
+          {
+          xcmp.u_bnd(i, j) = arr_U_bnd->GetComponent(i, j);
+          xcmp.u_med(model->bnd_mi[i], j) = arr_U_med->GetComponent(i, j);
+          }
+        }
+      }
+
+    else
+      {
+      // Set the initial control to zero
+      x.fill(0.0);
+      }
     }
 
   // Return a vector of bounds on the optimization variables
@@ -1852,11 +1963,14 @@ public:
       AL += H->qf_F.Compute(Y, d_AL__d_Y);
 
       // Compute the Dice overlap
-      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
+      if(target->image_function && target->w_image_function > 0.0)
+        {
+        AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
 
-      // Compute the adjoint of the Dice overlap
-      target->image_function->ComputeAdjoint(
-        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+        // Compute the adjoint of the Dice overlap
+        target->image_function->ComputeAdjoint(
+          Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
+        }
       }
 
     // Iterate over the constraints
@@ -1871,47 +1985,6 @@ public:
 
     return AL;
     }
-
-  /** 
-   * Experimental code: use kinetic-type constraints
-   */
-  /*
-  static double ComputeAugmentedLagrangianAndGradient(
-    CMRep *model, TargetData *target, const Vector &Y, Vector &d_AL__d_Y,
-    Vector &C, Vector &lambda, double mu, HessianData *H,
-    unsigned int t, unsigned int nt)
-    {
-    // Break the input and output vectors into components
-    YComponents Ycmp(model, const_cast<double *>(Y.data_block()));
-    YComponents d_Ycmp(model, d_AL__d_Y.data_block());
-
-    // The objective function is only computed at the last timepoint
-    double AL = 0.0;
-    if(t == nt - 1)
-      {
-      // Initialize the outputs with the f/grad of the function f
-      AL += H->qf_F.Compute(Y, d_AL__d_Y);
-
-      // Compute the Dice overlap
-      AL += target->w_image_function * (1.0 - target->image_function->Compute(Ycmp.q_bnd, Ycmp.q_med));
-
-      // Compute the adjoint of the Dice overlap
-      target->image_function->ComputeAdjoint(
-        Ycmp.q_bnd, Ycmp.q_med, -target->w_image_function, d_Ycmp.q_bnd, d_Ycmp.q_med);
-      }
-
-    // Iterate over the constraints
-    for(int j = 0; j < H->qf_C.size(); j++)
-      {
-      // Reference to the current quadratic form
-      QuadraticForm &Z = H->qf_C[j];
-
-      // Compute the constraint and its gradient
-      AL += Z.ComputeAL(Y, lambda[j], mu, C[j], d_AL__d_Y);
-      }
-
-    return AL;
-    }*/
 
   static IdxMatrix MakeIndexMatrix(unsigned int rows, unsigned int cols, unsigned int start_idx)
     {
@@ -2109,6 +2182,15 @@ public:
     UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.inf_norm());
     }
 
+  static void SaveTimepointCoefficients(CMRep *model, const Vector &X, unsigned int t, VTKMeshBuilder<vtkPolyData> &vmbb)
+    {
+    XComponents xcmp(model, const_cast<double *>(X.data_block()));
+
+    // Update various parts of the array
+    vmbb.AddArray(xcmp.u_bnd, "coeff_U_bnd_%03d", t);
+    vmbb.AddArray(model->RemapMedialToBoundary(xcmp.u_med), "coeff_U_med_%03d", t);
+    }
+
 
   static void ExportTimepoint(CMRep *model, TargetData *target, 
     const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
@@ -2232,10 +2314,10 @@ public:
     // Compute the initial u-vector and the bounds;
     x_init.set_size(nvar_total);
     x_lb.set_size(nvar_total); x_ub.set_size(nvar_total);
-    for(int t = 0; t < param.nt; t++)
+    for(unsigned int t = 0; t < param.nt; t++)
       {
       VectorRef x_init_t(nvar_t, x_init.data_block() + nvar_t * t);
-      Traits::ComputeInitialization(model, target, x_init_t, param.nt);
+      Traits::ComputeInitialization(model, target, x_init_t, param.nt, t);
 
       VectorRef x_lb_t(nvar_t, x_lb.data_block() + nvar_t * t);
       VectorRef x_ub_t(nvar_t, x_ub.data_block() + nvar_t * t);
@@ -2485,6 +2567,34 @@ public:
       }
     }
 
+  void SaveModel(const CMRep::Vector &x, const char *fname)
+    {
+    // Create a VTK Mesh
+    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
+
+    // Place the initial point coordinates into the mesh
+    vmbb.SetPoints(model->bnd_vtx);
+    vmbb.SetNormals(model->bnd_nrm);
+
+    // Add the radius array and medial points to the model
+    vmbb.AddArray(model->RemapMedialToBoundary(model->med_rad), "Radius");
+    vmbb.AddArray(model->RemapMedialToBoundary(model->med_vtx), "MedialPoint");
+
+    // Store the coefficients of the model. The coefficients are traits-specific
+    // and so they have to be stored by the traits.
+    for(int t = 0; t < param.nt; t++)
+      {
+      // Get the coefficients for time t
+      VectorRef xt(nvar_t, const_cast<double *>(x.data_block()) + nvar_t * t);
+
+      // Organize the coefficients into a boundary vertex array
+      Traits::SaveTimepointCoefficients(model, xt, t, vmbb);
+      }
+
+    // Write the mesh
+    vmbb.Save(fname);
+    }
+
 protected:
 
   // The cm-rep template
@@ -2557,7 +2667,7 @@ public:
 
     // Compute the initial variables
     x_init.set_size(nvar_t);
-    Traits::ComputeInitialization(model, target, x_init, param.nt);
+    Traits::ComputeInitialization(model, target, x_init, param.nt, 0);
 
     // Compute the bounds
     x_lb.set_size(nvar_t); x_ub.set_size(nvar_t);
@@ -2932,6 +3042,27 @@ public:
 
   double Mu() const { return mu; }
 
+  void SaveModel(const CMRep::Vector &x, const char *fname)
+    {
+    // Create a VTK Mesh
+    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
+
+    // Place the initial point coordinates into the mesh
+    vmbb.SetPoints(model->bnd_vtx);
+    vmbb.SetNormals(model->bnd_nrm);
+
+    // Add the radius array and medial points to the model
+    vmbb.AddArray(model->RemapMedialToBoundary(model->med_rad), "Radius");
+    vmbb.AddArray(model->RemapMedialToBoundary(model->med_vtx), "MedialPoint");
+
+    // Store the coefficients of the model. The coefficients are traits-specific
+    // and so they have to be stored by the traits.
+    Traits::SaveTimepointCoefficients(model, x, 0, vmbb);
+
+    // Write the mesh
+    vmbb.Save(fname);
+    }
+
   void Export(const CMRep::Vector &x, const char *fn_pattern)
     {
     Vector Yt = Y;
@@ -3202,8 +3333,13 @@ public:
     Matrix qb = transform_points(xc, model->bnd_vtx);
     Matrix qm = transform_points(xc, model->med_vtx);
 
-    // TODO: we are missing the least squares part
-    *f =  target->w_image_function * (1.0 - target->image_function->Compute(qb, qm));
+    // Compute the distance to target term
+    double fnorm = (target->target_model->bnd_vtx - qb).fro_norm();
+    *f = fnorm * fnorm * target->w_target_model;
+
+    // Compute the image term
+    if(target->image_function && target->w_image_function > 0.0)
+      *f +=  target->w_image_function * (1.0 - target->image_function->Compute(qb, qm));
 
     // Print the results
     printf("Affine: Rot = %8.4f %8.4f %8.4f;  Scale = %8.4f;  Tran = %8.4f %8.4f %8.4f;  Obj = %8.4f\n",
@@ -3230,6 +3366,34 @@ public:
     // Scale the radii
     m->med_rad = transform_radii(xc, m->med_rad);
     }
+
+  // Export the transformation as a C3D matrix
+  void save_matrix(const CMRep::Vector &x, const char *fname)
+  {
+    Coeff xc(x);
+
+    // Output matrix
+    vnl_matrix_fixed<double, 4, 4> M;
+    M.set_identity();
+
+    // Affine matrix and offset
+    Mat3 A = xc.R * xc.x_scale;
+    Vec3 b = qctr - (A * qctr) + xc.x_off;
+
+    // Compute the elements of A
+    for(unsigned int r = 0; r < 3; r++)
+      {
+      for(unsigned int c = 0; c < 3; c++)
+        {
+        M(r,c) = A(r,c);
+        }
+      M(r,3) = b(r);
+      }
+
+    ofstream fout(fname);
+    fout << M << std::endl;
+    fout.close();
+  }
 
 protected:
   CMRep *model;
@@ -3283,6 +3447,11 @@ void optimize_similarity(
 
   // Apply the transformation to the model
   sim_obj.apply(x_opt, model);
+
+  // Save the matrix
+  char buffer[4096];
+  sprintf(buffer, "%s/similarity.mat", param.fnOutputDir.c_str());
+  sim_obj.save_matrix(x_opt, buffer);
 }
 
 
@@ -3363,7 +3532,8 @@ void optimize_auglag(
     printf("Elapsed time %12.8f seconds\n", (clock() - t_start) / CLOCKS_PER_SEC);
 
     // Export the DICE
-    obj.get_target()->image_function->Export("/tmp/dicer_export.vtk");
+    if(obj.get_target()->image_function)
+      obj.get_target()->image_function->Export("/tmp/dicer_export.vtk");
 
     // Update the lambdas
     obj.update_lambdas();
@@ -3389,9 +3559,14 @@ void optimize_auglag(
     if(ICM < param.al_max_con)
       {
       printf("Termination condition for Aug. Lag. reached\n");
-      return;
+      break;
       }
     }
+
+  // Save the model
+  char fn_model[4096];
+  sprintf(fn_model, "%s/al_coeff.vtk", param.fnOutputDir.c_str());
+  obj.SaveModel(x_opt, fn_model);
 }
 
 int usage()
@@ -3446,10 +3621,19 @@ int do_optimization(
 {
   // Set up the target data
   typename TProblemTraits::TargetData td;
-  td.w_target_model = 0.0;
-  td.w_image_function = 100.0;
   td.target_model = m_target;
   td.image_function = dicer;
+
+  if(td.image_function)
+    {
+    td.w_target_model = 0.0;
+    td.w_image_function = 100.0;
+    }
+  else
+    {
+    td.w_target_model = 1.0;
+    td.w_image_function = 0.0;
+    }
 
   // Perform similarity transform if requested
   if(param.do_similarity)
@@ -3584,38 +3768,46 @@ int main(int argc, char *argv[])
     TestLimitSurface(&m_template);
 
   // Read the target image file
-  ImageDiceFunction idf(fn_target_image.c_str(), param.image_sigma);
+  ImageDiceFunction *idf = NULL;
+  if(fn_target_image.size())
+    idf = new ImageDiceFunction(fn_target_image.c_str(), param.image_sigma);
 
   // Read the target mesh (TODO: figure out what we are doing with these target meshes)
   CMRep m_target;
   m_target.ReadVTK(fn_target_mesh.length() ? fn_target_mesh.c_str() : fn_model.c_str(), param.limit_surface_constraints, NULL);
 
-  if(param.check_deriv)
+  if(param.check_deriv && idf)
     {
     printf("Testing Dice derivatives with analytic function\n");
     TestFunction test_fun;
     TestDice(&m_template, test_fun, 1.0);
 
     printf("Testing Dice derivatives with actual image\n");
-    TestDice(&m_template, idf, idf.GetVolume(), 1e-4);
+    TestDice(&m_template, *idf, idf->GetVolume(), 1e-4);
     }
 
   // Initialize the Dice overlap computer
   typedef DiceOverlapComputation<ImageDiceFunction> DiceOverlapType;
-  DiceOverlapType dicer(&m_template, 5, param.loop_subdivision_level, 
-    !param.limit_surface_constraints, idf.GetVolume(), idf);
+  DiceOverlapType *dicer = NULL;
+  if(idf)
+    dicer = new DiceOverlapType(&m_template, 5, param.loop_subdivision_level,
+                                !param.limit_surface_constraints, idf->GetVolume(), *idf);
 
 
   if(param.use_slack)
     {
     // Define the traits for the AL objective
     typedef PointBasedMediallyConstrainedFittingTraits<DiceOverlapType> TraitsType;
-    do_optimization<TraitsType>(param, &m_template, &m_target, &dicer);
+    do_optimization<TraitsType>(param, &m_template, &m_target, dicer);
     }
   else
     {
     // Define the traits for the AL objective
     typedef PointBasedMediallyConstrainedWithoutSlackFittingTraits<DiceOverlapType> TraitsType;
-    do_optimization<TraitsType>(param, &m_template, &m_target, &dicer);
+    do_optimization<TraitsType>(param, &m_template, &m_target, dicer);
     }
+
+  // Delete the image pointer
+  if(idf)
+    delete idf;
 }

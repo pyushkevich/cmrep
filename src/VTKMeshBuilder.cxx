@@ -76,7 +76,7 @@ void VTKMeshBuilder<TDataSet>::SetNormals(const vnl_matrix<double> &x)
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArray(const vnl_matrix<double> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<double> &x, const char *name)
 {
   assert(pd->GetNumberOfPoints() == x.rows());
 
@@ -94,7 +94,7 @@ void VTKMeshBuilder<TDataSet>::AddArray(const vnl_matrix<double> &x, const char 
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArray(const vnl_vector<double> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<double> &x, const char *name)
 {
   assert(pd->GetNumberOfPoints() == x.size());
 
@@ -111,7 +111,7 @@ void VTKMeshBuilder<TDataSet>::AddArray(const vnl_vector<double> &x, const char 
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArray(const vnl_matrix<int> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<int> &x, const char *name)
 {
   assert(pd->GetNumberOfPoints() == x.rows());
 
@@ -129,7 +129,7 @@ void VTKMeshBuilder<TDataSet>::AddArray(const vnl_matrix<int> &x, const char *na
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArray(const vnl_vector<int> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<int> &x, const char *name)
 {
   assert(pd->GetNumberOfPoints() == x.size());
 

@@ -4,6 +4,7 @@
 #include <vtkSmartPointer.h>
 #include <vnl_matrix.h>
 #include <vnl_vector.h>
+#include <cstdarg>
 
 class TriangleMesh;
 
@@ -29,15 +30,26 @@ public:
 
   void SetNormals(const vnl_matrix<double> &x);
 
-  void AddArray(const vnl_matrix<double> &x, const char *name);
-  void AddArray(const vnl_vector<double> &x, const char *name);
-  void AddArray(const vnl_matrix<int> &x, const char *name);
-  void AddArray(const vnl_vector<int> &x, const char *name);
+  template<typename TArray> void AddArray(const TArray &arr, const char *format, ...)
+  {
+    char buffer[256];
+    va_list args;
+    va_start (args, format);
+    vsprintf (buffer,format, args);
+    AddArrayInternal(arr, buffer);
+    va_end (args);
+  }
 
   void Save(const char *fn);
 
 protected:
   vtkSmartPointer<TDataSet> pd;
+
+  void AddArrayInternal(const vnl_matrix<double> &x, const char *name);
+  void AddArrayInternal(const vnl_vector<double> &x, const char *name);
+  void AddArrayInternal(const vnl_matrix<int> &x, const char *name);
+  void AddArrayInternal(const vnl_vector<int> &x, const char *name);
+
 };
 
 
