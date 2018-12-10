@@ -956,6 +956,7 @@ void SaveBoundaryMesh(const char *file,
                       ConstrainedNonLinearProblem *p,
                       TriangleMesh *bmesh,
                       std::vector<int> &mIndex,
+                      std::vector<int> &subDepth,
                       std::vector<std::vector<int> > &mtbIndex,
                       VarVecArray &X,
                       VarVecArray &N,
@@ -974,6 +975,11 @@ void SaveBoundaryMesh(const char *file,
   mix->Allocate(X.size());
   mix->SetName("MedialIndex");
 
+  vtkSmartPointer<vtkIntArray> sdepth = vtkSmartPointer<vtkIntArray>::New();
+  sdepth->SetNumberOfComponents(1);
+  sdepth->Allocate(X.size());
+  sdepth->SetName("SubdivisionDepth");
+
   vtkSmartPointer<vtkIntArray> mult = vtkSmartPointer<vtkIntArray>::New();
   mult->SetNumberOfComponents(1);
   mult->Allocate(X.size());
@@ -991,6 +997,7 @@ void SaveBoundaryMesh(const char *file,
     rad->InsertNextTuple1(R[j]->Evaluate());
     mix->InsertNextTuple1(j);
     mult->InsertNextTuple1(mtbIndex[j].size());
+    sdepth->InsertNextTuple1(subDepth[i]);
     }
 
   vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
@@ -1000,6 +1007,7 @@ void SaveBoundaryMesh(const char *file,
   pd->GetPointData()->AddArray(mix);
   pd->GetPointData()->AddArray(mult);
   pd->GetPointData()->AddArray(rad);
+  pd->GetPointData()->AddArray(sdepth);
 
   for(int i = 0; i < bmesh->triangles.size(); i++)
     {
@@ -2203,8 +2211,13 @@ bool ReverseEngineerSubdivisionMesh(
 
   // Just copy the mindex
   tParent.mIndex.resize(tParent.bmesh.nVertices);
+  tParent.subDepth.resize(tParent.bmesh.nVertices);
   for(int i = 0; i < tParent.bmesh.nVertices; i++)
+    {
     tParent.mIndex[i] = tChild.mIndex[i];
+    tParent.subDepth[i] = tChild.subDepth[i];
+    }
+
 
   return true;
 }
@@ -2539,6 +2552,7 @@ int main(int argc, char *argv[])
 
   // Initialize the data we are extracting from the boundary mesh
   std::vector<int> &mIndex = tmpl.mIndex;
+  std::vector<int> &subDepth = tmpl.subDepth;
   std::vector<SMLVec3d> &xInput = tmpl.x;
 
   // Load the target vertex coordintates if requesting LSQ fit
@@ -3998,7 +4012,7 @@ int main(int argc, char *argv[])
 
   // Save the current state
   sprintf(buffer, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
-  SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
+  SaveBoundaryMesh(buffer, p, bmesh, mIndex, subDepth, mtbIndex, X, N, R);
 
   sprintf(buffer, "%s/%s_fit2tmp_med.vtk", fnOutDir.c_str(), fnOutBase.c_str());
   SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
@@ -4051,7 +4065,7 @@ int main(int argc, char *argv[])
       
       // Save the current state
       sprintf(buffer, "%s/%s_icp_%02d_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
-      SaveBoundaryMesh(buffer, p, bmesh, mIndex, mtbIndex, X, N, R);
+      SaveBoundaryMesh(buffer, p, bmesh, mIndex, subDepth, mtbIndex, X, N, R);
 
       sprintf(buffer, "%s/%s_icp_%02d_med.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
       SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);

@@ -165,6 +165,9 @@ struct CMRep
   // Number of boundary and medial triangles
   unsigned int nt, nmt;
 
+  // Subset of vertices at which constraints are computed
+  IdxVector c_mask;
+
   // Generate tangent vector and limit surface sparse matrices for a mesh
   static void ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[]);
 
@@ -181,6 +184,9 @@ struct CMRep
   // Remap an array that is associated with medial vertices to the boundary
   Vector RemapMedialToBoundary(const Vector &src_med);
   Matrix RemapMedialToBoundary(const Matrix &src_med);
+
+  // Mark vertices with depth greater than max_depth as non-constrained vertices
+  void MaskConstraintsByMaxDepth(unsigned int max_depth);
 };
 
 void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
@@ -247,7 +253,6 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
   
   // Allocate an array to hold the boundary radii
   vnl_vector<double> bnd_rad(nv, 0.0);
-  
 
   // Parse the boundary triangles
   TriangleMeshGenerator bnd_tmg(&this->bnd_tri, nv);
@@ -389,6 +394,23 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
     this->med_vtx.set_row(k, m_tran_A * this->med_vtx.get_row(k) + m_tran_B);
     this->med_rad[k] *= m_tran_s;
     }
+
+  // Initialize the constraint mask to all boundary vertices
+  this->c_mask.set_size(this->nv); this->c_mask.fill(1);
+}
+
+void CMRep::MaskConstraintsByMaxDepth(unsigned int max_depth)
+{
+  // Sometimes subdivision depth is included
+  vtkDataArray *b_subdepth = this->bnd_vtk->GetPointData()->GetArray("SubdivisionDepth");
+  if(!b_subdepth)
+    throw MedialModelException("Missing 'SubdivisionDepth' array in model, needed to mask constraints");
+  if(b_subdepth)
+    for(unsigned int k = 0; k < nv; k++)
+      {
+      printf("MaskConstraintsByMaxDepth %d : %f : %d\n", k,  b_subdepth->GetTuple1(k), max_depth);
+      this->c_mask[k] = b_subdepth->GetTuple1(k) <= max_depth ? 1 : 0;
+      }
 }
 
 vtkDataArray *CMRep::GetArray(const char *format, ...)
@@ -549,6 +571,10 @@ struct AugLagMedialFitParameters
   // Location for saving output models
   std::string fnOutputDir;
 
+  // Whether constraints are masked by subdivision depth
+  bool do_mask_constraints;
+  unsigned int max_constraint_depth;
+
   // Default initializer
   AugLagMedialFitParameters() 
     : nt(40), w_kinetic(0.05), sigma(2.0), image_sigma(0.2),
@@ -558,7 +584,8 @@ struct AugLagMedialFitParameters
       interp_mode(false), use_slack(true),
       loop_subdivision_level(2),
       limit_surface_constraints(false),
-      check_deriv(false), do_similarity(false) {}
+      check_deriv(false), do_similarity(false),
+      do_mask_constraints(false), max_constraint_depth(0) {}
 };
 
 
@@ -2034,6 +2061,10 @@ public:
     // Handle the boundary point ortho constraints
     for(int j = 0; j < model->nv; j++)
       {
+      // TODO: having zero-weighted constraints is totally wasteful. Remove this later
+      double w_con = (double) model->c_mask[j];
+      printf("vertex %d, w_con %f\n", j, w_con);
+
       // Iterate over the two tangent vectors at each vertex
       for(int d = 0; d < 2; d++)
         {
@@ -2048,10 +2079,10 @@ public:
             unsigned int ib_j = i_qb(j, a);
             unsigned int im_j = i_qm(model->bnd_mi(j), a);
             
-            H_Cj(ib_mov, ib_j) -= it.Value(); 
-            H_Cj(ib_j, ib_mov) -= it.Value();
-            H_Cj(ib_mov, im_j) += it.Value();
-            H_Cj(im_j, ib_mov) += it.Value();
+            H_Cj(ib_mov, ib_j) -= w_con * it.Value();
+            H_Cj(ib_j, ib_mov) -= w_con * it.Value();
+            H_Cj(ib_mov, im_j) += w_con * it.Value();
+            H_Cj(im_j, ib_mov) += w_con * it.Value();
             }
           }
 
@@ -2064,6 +2095,10 @@ public:
     for(int i = 0, ic = 0; i < model->med_bi.size(); i++)
       {
       int b0 = model->med_bi[i][0];
+
+      // TODO: having zero-weighted constraints is totally wasteful. Remove this later
+      double w_con = (double) model->c_mask[b0];
+
       if(model->med_bi[i].size() > 1)
         {
         for(int j = 1; j < model->med_bi[i].size(); j++, ic++)
@@ -2078,13 +2113,13 @@ public:
             unsigned int ib_j = i_qb(bj, a);
             unsigned int im = i_qm(i, a);
 
-            H_Cj(ib_j, ib_j) = 2.0;
-            H_Cj(im, ib_j) = -2.0;
-            H_Cj(ib_j, im) = -2.0;
+            H_Cj(ib_j, ib_j) = 2.0 * w_con;
+            H_Cj(im, ib_j) = -2.0 * w_con;
+            H_Cj(ib_j, im) = -2.0 * w_con;
 
-            H_Cj(ib_0, ib_0) = -2.0;
-            H_Cj(im, ib_0) = 2.0;
-            H_Cj(ib_0, im) = 2.0;
+            H_Cj(ib_0, ib_0) = -2.0 * w_con;
+            H_Cj(im, ib_0) = 2.0 * w_con;
+            H_Cj(ib_0, im) = 2.0 * w_con;
             }
 
           data->qf_C[ic_spk[ic]].Initialize(H_Cj, Vector(k, 0.0), 0.0);
@@ -3601,7 +3636,8 @@ int usage()
     "                       found before beginning model fitting\n"
     "Debugging Parameters:\n"
     "  -D                 : Enable derivative checks\n"
-    "  -noslack           : Use set of constraints without slack variables\n",
+    "  -noslack           : Use set of constraints without slack variables\n"
+    "  -cmd <value>       : Maximum subdivision depth at which constraints are applied\n",
     param.w_kinetic, param.mu_init, param.sigma, param.image_sigma,
     param.al_iter, param.gradient_iter,param.nt,
     param.loop_subdivision_level,
@@ -3757,11 +3793,20 @@ int main(int argc, char *argv[])
       {
       param.do_similarity = true;
       }
+    else if(command == "-cmd")
+      {
+      param.do_mask_constraints = true;
+      param.max_constraint_depth = cl.read_integer();
+      }
     }
 
   // Read the template mesh
   CMRep m_template;
   m_template.ReadVTK(fn_model.c_str(), param.limit_surface_constraints, fn_transform.c_str());
+
+  // Mask constraints if asked for
+  if(param.do_mask_constraints)
+    m_template.MaskConstraintsByMaxDepth(param.max_constraint_depth);
 
   // Test the Loop limit surface calculation (only valid for non-branching models currently)
   if(param.limit_surface_constraints)
