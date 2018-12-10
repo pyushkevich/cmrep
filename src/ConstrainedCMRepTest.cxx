@@ -1124,6 +1124,9 @@ public:
   std::vector<double> R;
   std::vector<int> mIndex;
 
+  // Subdivision depth (optional info)
+  std::vector<int> subDepth;
+
   void Load(const char *file);
   void Save(const char *file);
 
@@ -1154,13 +1157,18 @@ void BCMTemplate::Load(const char *file)
   if(!mix)
     throw MedialModelException("Missing a medial index in input mesh");
 
+  vtkSmartPointer<vtkDataArray> sdepth = pd->GetPointData()->GetArray("SubdivisionDepth");
+
   // Get the coordinates and the medial index
   x.resize(pd->GetNumberOfPoints());
   mIndex.resize(pd->GetNumberOfPoints());
+  subDepth.resize(pd->GetNumberOfPoints(), 0);
   for(int i = 0; i < pd->GetNumberOfPoints(); i++)
     {
     x[i].set(pd->GetPoint(i));
-    mIndex[i] = floor(0.5 + mix->GetTuple1(i));
+    mIndex[i] = (int) floor(0.5 + mix->GetTuple1(i));
+    if(sdepth)
+      subDepth[i] = (int) floor(0.5 + sdepth->GetTuple1(i));
     }
 }
 
@@ -1175,16 +1183,23 @@ void BCMTemplate::Save(const char *file)
   mix->Allocate(bmesh.nVertices);
   mix->SetName("MedialIndex");
 
+  vtkSmartPointer<vtkIntArray> sdepth = vtkSmartPointer<vtkIntArray>::New();
+  sdepth->SetNumberOfComponents(1);
+  sdepth->Allocate(bmesh.nVertices);
+  sdepth->SetName("SubdivisionDepth");
+
   for(int i = 0; i < bmesh.nVertices; i++)
     {
     pts->InsertNextPoint(x[i].data_block());
     mix->InsertNextTuple1(mIndex[i]);
+    sdepth->InsertNextTuple1(subDepth[i]);
     }
 
   vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
   pd->Allocate(bmesh.triangles.size());
   pd->SetPoints(pts);
   pd->GetPointData()->AddArray(mix);
+  pd->GetPointData()->AddArray(sdepth);
   
   if(Nx.size())
     {
@@ -1318,6 +1333,7 @@ void BCMTemplate::Subdivide(bool edges_only)
 
   // Compute the m-indices
   mIndex.resize(bmesh.nVertices, -1);
+  subDepth.resize(bmesh.nVertices, -1);
   for(int t = 0; t < src.triangles.size(); t++)
     {
     // The new vertices inserted into this triangle
@@ -1334,8 +1350,15 @@ void BCMTemplate::Subdivide(bool edges_only)
         mIndex[vnew[j]] = edgeIndex[e];
         std::cout << "Vertex " << vnew[j] << " MIndex " << mIndex[vnew[j]] << std::endl;
         }
+
+      if(subDepth[vnew[j]] == -1)
+        {
+        int max_depth = std::max(subDepth[vold[(j+1) % 3]], subDepth[vold[(j+2) % 3]]);
+        subDepth[vnew[j]] = max_depth + 1;
+        }
       }
     }
+
 
   // Set the current level as root
   bmesh.SetAsRoot();
