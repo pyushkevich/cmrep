@@ -329,7 +329,48 @@ ENDIF(USE_IPOPT AND USE_TETGEN)
 
 # Include the utilities
 IF(BUILD_UTILS)
-  SUBDIRS(src/util)
+
+  ADD_EXECUTABLE(sphere_splat src/util/SplatOntoSphere.cxx)
+  ADD_EXECUTABLE(vtkprocrustes 
+    src/util/MeshProcrustes.cxx 
+    src/util/ReadWriteVTK.cxx 
+    src/Procrustes.cxx)
+
+  ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx)
+  TARGET_LINK_LIBRARIES(vtklevelset cmrep ${PDE_LIBS} toms611)
+
+  ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
+
+  ADD_EXECUTABLE(mesh2img src/util/FillSTLMesh.cxx src/util/DrawTriangles.cpp)
+
+  ADD_EXECUTABLE(mesh_image_sample src/util/MeshImageSample.cxx)
+
+  ADD_EXECUTABLE(mesh_merge_arrays src/util/MeshMergeArrays.cxx src/util/ReadWriteVTK.cxx)
+
+  ADD_EXECUTABLE(mesh_area_element src/util/MeshAreaElement.cxx)
+
+  ADD_EXECUTABLE(meshglm 
+    src/util/SurfaceClusterGLM.cxx 
+    src/util/asa243.c
+    src/util/ReadWriteVTK.cxx 
+    src/Registry.cxx)
+
+  ADD_EXECUTABLE(meshcluster 
+    src/util/SurfaceClusterAnalysis.cxx 
+    src/util/ReadWriteVTK.cxx 
+    src/Registry.cxx)
+
+  ADD_EXECUTABLE(meshdiff src/util/CompareMeshes.cxx src/util/DrawFillInside.cpp src/util/DrawTriangles.cpp)
+  #TARGET_LINK_LIBRARIES(meshdiff ${ITK_LIBRARIES} ${VTK_LIBRARIES})
+
+  ADD_EXECUTABLE(warpmesh src/util/WarpMeshBackwards.cxx)
+
+  # Add to the list of binaries
+  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 
+    sphere_splat vtkprocrustes vtklevelset vtkcontour
+    mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
+    meshglm meshcluster meshdiff warpmesh)
+
 ENDIF(BUILD_UTILS)
 
 # Install all the targets
