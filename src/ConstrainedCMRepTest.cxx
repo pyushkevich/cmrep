@@ -2272,6 +2272,7 @@ int usage()
       "  -reg-el W                      : penalize the length of the crest\n"
       "                                           curve with weight specified\n"
       "  -max-iter N                    : maximum iterations for IpOpt (200)\n"
+      "  -icp-iter N                    : Number of ICP iterations (200)\n"
       "triangle shape constraints:\n"
       "  -bc alpha beta min_area        : Set boundary triangle constraints \n"
       "                                     alpha:    minimum triangle angle (def: 12)\n"
@@ -2297,12 +2298,12 @@ struct RegularizationOptions
   bool UseHessian;
 
   double EdgeLengthWeight;
-  unsigned int MaxIpOptIter;
+  unsigned int MaxIpOptIter, MaxICPIter;
 
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
       Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
-      EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200) {}
+      EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200), MaxICPIter(5) {}
 };
 
 class ObjectiveCombiner
@@ -2473,6 +2474,10 @@ int main(int argc, char *argv[])
     else if(cmd == "-max-iter")
       {
       regOpts.MaxIpOptIter = atoi(argv[++p]);
+      }
+    else if(cmd == "-icp-iter")
+      {
+      regOpts.MaxICPIter = atoi(argv[++p]);
       }
     else if(cmd == "-solver")
       {
@@ -4029,7 +4034,7 @@ int main(int argc, char *argv[])
 
     // Repeat this several times
     Expression *objSqDist, *objRecipSqDist;
-    for(int i = 0; i < 5; i++)
+    for(int i = 0; i < regOpts.MaxICPIter; i++)
       {
       // ------------------------------------------------------------------------
       // Construct the first part of the objective function

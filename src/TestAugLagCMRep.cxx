@@ -2241,7 +2241,7 @@ public:
 
     // Update the medial coordinates, normals, and radii
     Vector Rb(model->nv);
-    Matrix Mb(model->nv, 3), Nb(model->nv, 3);
+    Matrix Mb(model->nv, 3), Ub(model->nv, 3);
     for(unsigned int i = 0; i < ycmp.q_bnd.rows(); i++)
       {
       auto m = ycmp.q_med.get_row(model->bnd_mi[i]);
@@ -2249,11 +2249,29 @@ public:
 
       Mb.set_row(i, m);
       Rb[i] = (x - m).magnitude();
-      Nb.set_row(i, (x-m) / Rb[i]);
+      Ub.set_row(i, (x-m) / Rb[i]);
       }
 
     vmbb.AddArray(Rb, "Radius");
     vmbb.AddArray(Mb, "MedialPoint");
+    vmbb.AddArray(Ub, "UnitSpoke");
+
+    // Compute the angle between XM and the normal at X (a more visual representation of Ct_N)
+    Vector norm_angle(model->nv);
+    Matrix X_t1(model->nv, 3), X_t2(model->nv, 3), Nb(model->nv, 3);
+    for(unsigned int a = 0; a < 3; a++)
+      {
+      X_t1.set_column(a, model->bnd_wtl[0].MultiplyByVector(ycmp.q_bnd.get_column(a)));
+      X_t2.set_column(a, model->bnd_wtl[1].MultiplyByVector(ycmp.q_bnd.get_column(a)));
+      }
+
+    for(unsigned int i = 0; i < ycmp.q_bnd.rows(); i++)
+      {
+      Nb.set_row(i, vnl_cross_3d(X_t1.get_row(i), X_t2.get_row(i)).normalize());
+      norm_angle[i] = acos(dot_product(Ub.get_row(i), Nb.get_row(i))) / vnl_math::pi_over_180;
+      }
+
+    vmbb.AddArray(norm_angle, "SpokeNormalAngle");
     vmbb.SetNormals(Nb);
 
     // Get the constraint values for the current timeslice
@@ -2261,7 +2279,7 @@ public:
     VectorRef Ct_spklen(C.size() - 2 * model->nv, const_cast<double *>(C.data_block() + 2 * model->nv));
 
     // Assign the spoke constraints
-    Vector Ct_spklen_b(model->nv);
+    Vector Ct_spklen_b(model->nv, 0.0);
     for(unsigned int k = 0, m = 0; k < model->med_bi.size(); k++)
       {
       if(model->med_bi[k].size() > 1)
@@ -2278,8 +2296,28 @@ public:
         }
       }
 
+    // Compute actual spoke mismatch length mismatch (shortest vs. longest spoke at medial atom)
+    Vector spoke_mismatch(model->nv);
+    for(unsigned int k = 0; k < model->med_bi.size(); k++)
+      {
+      unsigned int b0 = model->med_bi[k][0];
+      double max_spoke_len = (ycmp.q_bnd.get_row(b0) - ycmp.q_med.get_row(k)).magnitude();
+      double min_spoke_len = max_spoke_len;
+      for(unsigned int j = 1; j < model->med_bi[k].size(); j++)
+        {
+        unsigned int bj = model->med_bi[k][j];
+        double sl = (ycmp.q_bnd.get_row(bj) - ycmp.q_med.get_row(k)).magnitude();
+        min_spoke_len = std::min(sl, min_spoke_len);
+        max_spoke_len = std::max(sl, max_spoke_len);
+        }
+
+      for(unsigned int j = 0; j < model->med_bi[k].size(); j++)
+        spoke_mismatch[model->med_bi[k][j]] = max_spoke_len - min_spoke_len;
+      }
+
     vmbb.AddArray(Ct_orth, "Ct_orth");
     vmbb.AddArray(Ct_spklen_b, "Ct_spklen");
+    vmbb.AddArray(spoke_mismatch, "SpokeLengthMismatch");
 
     // Write the model
     vmbb.Save(fname);
