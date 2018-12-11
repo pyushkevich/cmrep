@@ -1138,7 +1138,7 @@ public:
   void Load(const char *file);
   void Save(const char *file);
 
-  void Subdivide(bool edge_only);
+  void Subdivide(bool edge_only, bool flat_mode);
   void ImportFromCMRep(const char *file);
 };
 
@@ -1273,7 +1273,7 @@ void apply_subdivision(std::vector<T> &z, ImmutableSparseMatrix<double> &W)
     }
 }
 
-void BCMTemplate::Subdivide(bool edges_only)
+void BCMTemplate::Subdivide(bool edges_only, bool flat_mode)
 {
   // Make a copy of the boundary mesh
   bmesh.SetAsRoot();
@@ -1302,7 +1302,7 @@ void BCMTemplate::Subdivide(bool edges_only)
   else
     {
     // Subdivide into the current mesh
-    SubdivisionSurface::Subdivide(&src, &bmesh);
+    SubdivisionSurface::Subdivide(&src, &bmesh, flat_mode);
     }
 
   // Get the subdivision matrix
@@ -2061,7 +2061,7 @@ void FixCmrepMedialMesh(std::string fnInput, std::string fnOutput)
 int SubdivideBoundaryRepresentation(
     std::string fnTemplate,
     int subdivisionLevel,
-    bool edges_only,
+    bool edges_only, bool flat_mode,
     std::string fnOutput)
 {
   // Load the template!
@@ -2070,7 +2070,7 @@ int SubdivideBoundaryRepresentation(
 
   // Create the output template
   for(int i = 0; i < subdivisionLevel; i++)
-    tmpl.Subdivide(edges_only);
+    tmpl.Subdivide(edges_only, flat_mode);
 
   // Save the mesh
   tmpl.Save(fnOutput.c_str());
@@ -2253,7 +2253,6 @@ int usage()
       "  -icp template.vtk target.vtk   : fit template mesh to target mesh\n"
       "  -lsq template.vtk target.vtk   : least squares fit to target mesh\n"
       "  -sub template.vtk factor       : subdivide template by a factor\n"
-      "  -subedg template.vtk factor    : subdivide template, but only edge triangles\n"
       "  -cmr input.cmrep               : import a cm-rep template\n"
       "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
       "  -inf medial.vtk radius edgelab : inflate a medial model created with the GUI tool.\n"
@@ -2280,6 +2279,9 @@ int usage()
       "                                     min_area: minimum triangle area  (def: 0.1)\n"
       "  -mc alpha beta min_area        : Set medial triangle constraints (see above) \n"
       "                                     by default all three are set to 0 (no constraint)\n"
+      "subdivision-related options:\n"
+      "  -sub-edge                      : only subdivide trianges on free edges and branches\n"
+      "  -sub-flat                      : flat (as opposed to Loop) subdivision\n"
       "IPOpt options:\n"
       "  -solver NAME                   : select which solver to use (see IPOpt options. Def: ma86)\n"
       "  -no-hess                       : Turn off analytical hessian (does not work well)\n";
@@ -2300,10 +2302,13 @@ struct RegularizationOptions
   double EdgeLengthWeight;
   unsigned int MaxIpOptIter, MaxICPIter;
 
+  bool SubdivisionFlat, SubdivisionEdgeOnly;
+
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
       Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
-      EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200), MaxICPIter(5) {}
+      EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200), MaxICPIter(5),
+      SubdivisionFlat(false), SubdivisionEdgeOnly(false) {}
 };
 
 class ObjectiveCombiner
@@ -2422,11 +2427,13 @@ int main(int argc, char *argv[])
       fnTemplate = argv[++p];
       subdivisionLevel = atoi(argv[++p]);
       }
-    else if(cmd == "-subedg")
+    else if(cmd == "-sub-edge")
       {
-      action = ACTION_SUBDIVIDE_EDGE;
-      fnTemplate = argv[++p];
-      subdivisionLevel = atoi(argv[++p]);
+      regOpts.SubdivisionEdgeOnly = true;
+      }
+    else if(cmd == "-sub-flat")
+      {
+      regOpts.SubdivisionFlat = true;
       }
     else if(cmd == "-cmr")
       {
@@ -2526,14 +2533,9 @@ int main(int argc, char *argv[])
 
   else if(action == ACTION_SUBDIVIDE)
     {
-    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, false, fnOutput);
+    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, regOpts.SubdivisionEdgeOnly, regOpts.SubdivisionFlat, fnOutput);
     }
 
-  else if(action == ACTION_SUBDIVIDE_EDGE)
-    {
-    return SubdivideBoundaryRepresentation(fnTemplate, subdivisionLevel, true, fnOutput);
-    }
-  
   else if(action == ACTION_NONE)
     {
     std::cerr << "No action specified" << std::endl;

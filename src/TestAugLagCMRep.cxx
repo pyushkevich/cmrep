@@ -1287,6 +1287,96 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
 }
 
 
+
+
+struct ConstraintViolationData
+{
+  // Angle between actual normal and spoke
+  double normal_spoke_angle_deg;
+
+  // Mismatch between spoke lengths (in absolute terms)
+  double spoke_mismatch_abs;
+
+  // Mismatch between spoke lengths (in relative terms, i.e., as % of average spoke length)
+  double spoke_mismatch_rel;
+
+  ConstraintViolationData() :
+    normal_spoke_angle_deg(0.0), spoke_mismatch_abs(0.0), spoke_mismatch_rel(0.0) { }
+
+  void ApplyMax(const ConstraintViolationData &other)
+    {
+    normal_spoke_angle_deg = std::max(normal_spoke_angle_deg, other.normal_spoke_angle_deg);
+    spoke_mismatch_abs = std::max(spoke_mismatch_abs, other.spoke_mismatch_abs);
+    spoke_mismatch_rel = std::max(spoke_mismatch_rel, other.spoke_mismatch_rel);
+    }
+};
+
+
+ConstraintViolationData ComputeConstraintViolations(CMRep *model, const vnl_matrix<double> &q_bnd, const vnl_matrix<double> &q_med, unsigned int j)
+{
+  ConstraintViolationData cvd;
+
+  // Compute the two tangent vectors
+  vnl_vector_fixed<double, 3> X_t1(0.0), X_t2(0.0);
+  for(auto it = model->bnd_wtl[0].Row(j); !it.IsAtEnd(); ++it)
+    X_t1 += it.Value() * q_bnd.get_row(it.Column());
+  for(auto it = model->bnd_wtl[1].Row(j); !it.IsAtEnd(); ++it)
+    X_t2 += it.Value() * q_bnd.get_row(it.Column());
+
+
+  // Get the current spoke and normal vector
+  unsigned int k = model->bnd_mi[j];
+  vnl_vector_fixed<double, 3> Ub = (q_bnd.get_row(j) - q_med.get_row(k)).normalize();
+  vnl_vector_fixed<double, 3> Nb = vnl_cross_3d(X_t1, X_t2).normalize();
+
+  // Compute the range of spoke lengths
+  unsigned int b0 = model->med_bi[k][0];
+  double max_spoke_len = (q_bnd.get_row(b0) - q_med.get_row(k)).magnitude();
+  double min_spoke_len = max_spoke_len;
+  double avg_spoke_len = max_spoke_len;
+  for(unsigned int j = 1; j < model->med_bi[k].size(); j++)
+    {
+    unsigned int bj = model->med_bi[k][j];
+    double sl = (q_bnd.get_row(bj) - q_med.get_row(k)).magnitude();
+    min_spoke_len = std::min(sl, min_spoke_len);
+    max_spoke_len = std::max(sl, max_spoke_len);
+    avg_spoke_len += sl;
+    }
+
+  avg_spoke_len /= model->med_bi[k].size();
+  double mismatch_abs = max_spoke_len - min_spoke_len;
+  double mismatch_rel = mismatch_abs / avg_spoke_len;
+
+
+  cvd.normal_spoke_angle_deg = acos(dot_product(Ub, Nb)) / vnl_math::pi_over_180;
+  cvd.spoke_mismatch_abs = mismatch_abs;
+  cvd.spoke_mismatch_rel = mismatch_rel;
+
+  return cvd;
+}
+
+
+
+
+// Generic class for maintaining details about constraint violations. Each
+// type of constraint is identified by a string
+struct GenericConstraintDetail
+{
+  // Constraint data
+  std::map<std::string, double> cdata;
+
+  // Update constraint detail
+  void Update(const std::string &key, double value)
+  {
+    auto it = cdata.find(key);
+    if(it == cdata.end() || it->second < value)
+      cdata[key] = value;
+  }
+};
+
+
+
+
 /**
  * Specific implementation of constraints with slack variables N and R
  */
@@ -1705,34 +1795,20 @@ public:
     printf("Hessian has dimension %d x %d with %d non-empty values\n", k, k, (int) data->HL.GetNumberOfSparseValues());
     }
 
-  typedef std::vector<std::pair<std::string, double> > ConstraintDetail;
-
-  static void UpdateConstraintDetail(ConstraintDetail &con_info, const std::string label, double value)
-    {
-    for(auto p : con_info)
-      {
-      if(p.first == label)
-        {
-        p.second = std::max(value, p.second);
-        return;
-        }
-      }
-    con_info.push_back(std::make_pair(label, value));
-    }
 
   /**
    * Get details on different types of constraints and their maximum absolute value
    */
-  static void GetConstraintDetails(CMRep *model, const Vector &C, ConstraintDetail &con_info)
+  static void UpdateConstraintDetails(CMRep *model, const Vector &Y, const Vector &C, GenericConstraintDetail &con_info)
     {
     double *pc = const_cast<double *>(C.data_block());
     MatrixRef Ct_N(model->nv, 3, pc);   pc += Ct_N.size();
     MatrixRef Ct_Spk(model->nv, 3, pc); pc += Ct_Spk.size();
 
-    UpdateConstraintDetail(con_info, "C_NO", Ct_N.get_column(0).inf_norm());
-    UpdateConstraintDetail(con_info, "C_NO", Ct_N.get_column(1).inf_norm());
-    UpdateConstraintDetail(con_info, "C_NU", Ct_N.get_column(2).inf_norm());
-    UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.absolute_value_max());
+    con_info.Update("C_NO", Ct_N.get_column(0).inf_norm());
+    con_info.Update("C_NO", Ct_N.get_column(1).inf_norm());
+    con_info.Update("C_NU", Ct_N.get_column(2).inf_norm());
+    con_info.Update("C_Sp", Ct_Spk.absolute_value_max());
     }
 
   static void SaveTimepointCoefficients(CMRep *model, const Vector &X, unsigned int t, VTKMeshBuilder<vtkPolyData> &vmbb)
@@ -1753,9 +1829,10 @@ public:
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
 
     // Create a copy of the mesh in the model
-    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
+    VTKMeshBuilder<vtkPolyData> vmbb;
 
     // Add the points and normals
+    vmbb.SetTriangles(model->bnd_tri);
     vmbb.SetPoints(ycmp.q_bnd);
     vmbb.SetNormals(ycmp.N_bnd);
 
@@ -1815,8 +1892,6 @@ public:
     vmbb.Save(fname);
     }
 };
-
-
 
 
 /**
@@ -2189,33 +2264,36 @@ public:
     printf("Hessian has dimension %d x %d with %d non-empty values\n", k, k, (int) data->HL.GetNumberOfSparseValues());
     }
 
-  typedef std::vector<std::pair<std::string, double> > ConstraintDetail;
-
-  static void UpdateConstraintDetail(ConstraintDetail &con_info, const std::string label, double value)
-    {
-    for(auto p : con_info)
-      {
-      if(p.first == label)
-        {
-        p.second = std::max(value, p.second);
-        return;
-        }
-      }
-    con_info.push_back(std::make_pair(label, value));
-    }
 
   /**
    * Get details on different types of constraints and their maximum absolute value
    */
-  static void GetConstraintDetails(CMRep *model, const Vector &C, ConstraintDetail &con_info)
+  static void UpdateConstraintDetails(CMRep *model, const Vector &Y, const Vector &C, GenericConstraintDetail &con_info)
     {
+    // Get the references to all the data in vector Y
+    YComponents ycmp(model, const_cast<double *>(Y.data_block()));
+
+    // Report constraints in readable format, rather than the format they are computed in
+    ConstraintViolationData cvd_max;
+    for(unsigned int i = 0; i < model->nv; i++)
+      {
+      ConstraintViolationData cvd_i = ComputeConstraintViolations(model, ycmp.q_bnd, ycmp.q_med, i);
+      cvd_max.ApplyMax(cvd_i);
+      }
+
+    con_info.Update("C_Nrm", cvd_max.normal_spoke_angle_deg);
+    con_info.Update("C_Spk", cvd_max.spoke_mismatch_rel);
+
+    /*
     double *pc = const_cast<double *>(C.data_block());
     MatrixRef Ct_N(model->nv, 2, pc);   pc += Ct_N.size();
     VectorRef Ct_Spk(GetNumberOfConstraintsPerTimepoint(model) - Ct_N.size(), pc);
 
     UpdateConstraintDetail(con_info, "C_NO", Ct_N.absolute_value_max());
     UpdateConstraintDetail(con_info, "C_Sp", Ct_Spk.inf_norm());
+    */
     }
+
 
   static void SaveTimepointCoefficients(CMRep *model, const Vector &X, unsigned int t, VTKMeshBuilder<vtkPolyData> &vmbb)
     {
@@ -2234,10 +2312,11 @@ public:
     YComponents ycmp(model, const_cast<double *>(Y.data_block()));
 
     // Create a copy of the mesh in the model
-    VTKMeshBuilder<vtkPolyData> vmbb(model->bnd_vtk);
+    VTKMeshBuilder<vtkPolyData> vmbb;
 
     // Add the points
     vmbb.SetPoints(ycmp.q_bnd);
+    vmbb.SetTriangles(model->bnd_tri);
 
     // Update the medial coordinates, normals, and radii
     Vector Rb(model->nv);
@@ -2467,31 +2546,15 @@ public:
   TargetData *get_target() const { return this->target; }
 
   /** Print the problem status */
-  void iter_print(unsigned int iter, 
-    double m_distsq, double m_kinetic, 
-    double m_barrier, double m_lag, double m_total, double norm_g)
-    {
-    // We need to pool constraint details over timesteps
-    typename Traits::ConstraintDetail con_detail;
-    for(unsigned int t = 0; t < param.nt; t++)
-      {
-      // Get the reference to the constraints
-      VectorRef Ct(nc_t, C.data_block() + t * nc_t);
-
-      // Get the details of the constraints
-      typename Traits::ConstraintDetail con_detail_t;
-      Traits::GetConstraintDetails(model, Ct, con_detail_t);
-      if(t == 0)
-        con_detail = con_detail_t;
-      else
-        for(int i = 0; i < con_detail.size(); i++)
-          con_detail[i].second = std::max(con_detail[i].second, con_detail_t[i].second);
-      }
-
+  void iter_print(unsigned int iter,
+                  double m_distsq, double m_kinetic,
+                  double m_barrier, double m_lag, double m_total, double norm_g,
+                  GenericConstraintDetail &con_detail)
+  {
     // Combine into a string
     std::string con_text;
     char con_buffer[256]; 
-    for(auto ci : con_detail)
+    for(auto ci : con_detail.cdata)
       {
       sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
       con_text += con_buffer;
@@ -2547,6 +2610,9 @@ public:
     MatrixRef Y_qt(nvtx, 3, Y.data_block() + nvar_t);
     MatrixRef d_AL__d_Y_qt(nvtx, 3, d_AL__d_Y.data_block() + nvar_t);
 
+    // Accumulate the constraint statistics
+    GenericConstraintDetail con_detail;
+
     // Compute the constraint violations
     for(int t = 0; t < param.nt; t++)
       {
@@ -2574,6 +2640,10 @@ public:
         // Copy the derivatives wrt u and slack to output gradient
         VectorRef gt(nvar_t, g->data_block() + nvar_t * t);
         gt.copy_in(d_AL__d_Y.data_block());
+
+        // Accumulate the constraint detals
+        if(verbose)
+          Traits::UpdateConstraintDetails(model, Y, Ct, con_detail);
         }
       }
 
@@ -2603,7 +2673,7 @@ public:
 
       // Print status
       if(verbose)
-        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm());
+        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm(), con_detail);
       }
     }
 
@@ -2813,19 +2883,15 @@ public:
   TargetData *get_target() const { return this->target; }
 
   /** Print the problem status */
-  void iter_print(unsigned int iter, 
-    double m_distsq, double m_kinetic, 
-    double m_barrier, double m_lag, double m_total, 
-    double norm_g)
+  void iter_print(unsigned int iter,
+                  double m_distsq, double m_kinetic,
+                  double m_barrier, double m_lag, double m_total,
+                  double norm_g, GenericConstraintDetail &con_detail)
     {
-    // Get the details of the constraints
-    typename Traits::ConstraintDetail con_detail;
-    Traits::GetConstraintDetails(model, C, con_detail);
-
     // Combine into a string
     std::string con_text;
     char con_buffer[256]; 
-    for(auto ci : con_detail)
+    for(auto ci : con_detail.cdata)
       {
       sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
       con_text += con_buffer;
@@ -2881,7 +2947,6 @@ public:
     double AL = Traits::ComputeAugmentedLagrangianAndGradient(
       model, target, Y, d_AL__d_Y, C, lambda, mu, &hess_data, param.nt - 1, param.nt);
 
-
     // Compute the separate contributions of the constraints to the AL objective (for output)
     m_barrier = C.squared_magnitude();
     m_lag = dot_product(C, lambda);
@@ -2895,10 +2960,6 @@ public:
 
     if(g)
       {
-
-      // Before
-      // std::cout << "d_AL__d_Y[0]: " << std::endl << d_AL__d_Y << std::endl;
-
       // Expose the pointer to the gradient of AL with respect to p0
       MatrixRef d_AL__d_p0(nvtx, 3, d_AL__d_Y.data_block());
 
@@ -2922,9 +2983,13 @@ public:
       // Place the final gradient into g
       g->copy_in(d_AL__d_Y.data_block());
 
+      // Get constraint details
+      GenericConstraintDetail con_detail;
+      Traits::UpdateConstraintDetails(model, Y, C, con_detail);
+
       // Print status
       if(verbose)
-        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm());
+        iter_print(iter_count++, m_distsq, m_kinetic, m_barrier, m_lag, m_total, g->inf_norm(), con_detail);
 
       }
     }
