@@ -35,6 +35,8 @@
 #include <vtkQuadricClustering.h>
 #include <vnl/vnl_vector.h>
 #include <vnl/vnl_cross.h>
+#include <vtkLinearSubdivisionFilter.h>
+#include <vtkLoopSubdivisionFilter.h>
 
 #include <itkOrientedRASImage.h>
 #include <itkImageFileReader.h>
@@ -247,6 +249,8 @@ int usage()
   cout << "    output.vtk           Where to output the skeleton" << endl;
   cout << "General Options:         " << endl;
   cout << "    -Q PATH              Path to the qvoronoi executable" << endl;
+  cout << "    -z <level> <mode>    Subdivide input mesh prior to skeletonization" << endl;
+  cout << "                         mode is either 'loop' or 'linear'" << endl;
   cout << "Pruning Options:" << endl;
   cout << "    -e N                 Minimal number of mesh edges separating two generator" << endl;
   cout << "                         points of a VD face for it to be considered (try 2, 3)" << endl;
@@ -290,6 +294,8 @@ struct SamplingStruct {
   SamplingMode mode;
 };
 
+enum SubMode { LINEAR = 0, LOOP };
+
 int main(int argc, char *argv[])
 {
 
@@ -299,6 +305,8 @@ int main(int argc, char *argv[])
   double xPrune = 2.0, xSearchTol = 1e-6;
   int nComp = 0, nDegrees = 0, nRandSamp = 0, nBins = 0;
   bool flagGeodFull = false;
+  int subLevel = 0;
+  SubMode subMode = LINEAR;
 
   // Sampling stuff
   vector<SamplingStruct> sampling;
@@ -316,6 +324,12 @@ int main(int argc, char *argv[])
     if(arg == "-p")
       {
       xPrune = atof(argv[++iArg]);
+      }
+    else if(arg == "-z")
+      {
+      subLevel = atoi(argv[++iArg]);
+      std::string mode = argv[++iArg];
+      subMode = mode == "loop" ? LOOP : LINEAR;
       }
     else if(arg == "-t")
       {
@@ -393,6 +407,27 @@ int main(int argc, char *argv[])
   fClean->SetTolerance(1e-4);
   fClean->Update();
   vtkPolyData *bnd = fClean->GetOutput();
+
+  // Do we want subdivision?
+  if(subLevel > 0)
+    {
+    if(subMode == LINEAR)
+      {
+      vtkLinearSubdivisionFilter *fSub = vtkLinearSubdivisionFilter::New();
+      fSub->SetInputConnection(fClean->GetOutputPort());
+      fSub->SetNumberOfSubdivisions(subLevel);
+      fSub->Update();
+      bnd = fSub->GetOutput();
+      }
+    else
+      {
+      vtkLoopSubdivisionFilter *fSub = vtkLoopSubdivisionFilter::New();
+      fSub->SetInputConnection(fClean->GetOutputPort());
+      fSub->SetNumberOfSubdivisions(subLevel);
+      fSub->Update();
+      bnd = fSub->GetOutput();
+      }
+    }
 
   // Create a bounding box object
   bnd->GetPoints()->ComputeBounds();
