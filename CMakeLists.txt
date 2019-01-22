@@ -344,7 +344,7 @@ IF(BUILD_UTILS)
     src/Procrustes.cxx)
 
   ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx)
-  TARGET_LINK_LIBRARIES(vtklevelset cmrep ${PDE_LIBS} toms611)
+  TARGET_LINK_LIBRARIES(vtklevelset cmrep toms611)
 
   ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
 
