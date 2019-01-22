@@ -220,11 +220,18 @@ SET(DIJKSTRA_SRCS
 # Create library of shortest path routines
 ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
 
+# Set the core VTK libraries that don't require OpenGL
+SET(VTK_CORE_LIBRARIES
+  vtkCommonCore vtkCommonMath vtkCommonMisc vtkCommonSystem vtkCommonTransforms
+  vtkCommonDataModel vtkCommonColor vtkCommonExecutionModel vtkFiltersCore
+  vtkCommonComputationalGeometry vtkFiltersGeneral vtkFiltersGeometry vtkImagingCore
+  vtkIOCore vtkIOGeometry vtkIOImage vtkIOLegacy
+  vtkFiltersModeling)
+
 # Set the list of required libraries
 LINK_LIBRARIES(
   ${ITK_LIBRARIES}
-  ${VTK_LIBRARIES}
-  ${OPENGL_LIBRARIES}
+  ${VTK_CORE_LIBRARIES}
   ${SYSTEM_LIBS})
 
 # New: Geodesic shooting

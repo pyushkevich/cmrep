@@ -5,13 +5,7 @@
 #include <vtkSTLWriter.h>
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
-#include <vtkOBJExporter.h>
-#include <vtkOOGLExporter.h>
 #include <vtkOBJReader.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderer.h>
-#include <vtkActor.h>
-#include <vtkPolyDataMapper.h>
 
 using namespace std;
 
@@ -81,44 +75,9 @@ void WriteVTKData(vtkPolyData *data, string fn)
     writer->SetInputData(data);
     writer->Update();
     }
-  else if(fn.rfind(".obj") == fn.length() - 4)
-    {
-    vtkRenderer *renderer = vtkRenderer::New();
-    vtkPolyDataMapper *myDataMapper = vtkPolyDataMapper::New();
-    myDataMapper->SetInputData(data);
-    vtkActor *myActor = vtkActor::New();
-    myActor->SetMapper(myDataMapper);
-    renderer->AddActor(myActor);
-    vtkRenderWindow *renWin = vtkRenderWindow::New();
-    renWin->AddRenderer(renderer);
-
-    vtkOBJExporter *writer = vtkOBJExporter::New();
-    string prefix = fn.substr(0, fn.length() - 4);
-    writer->SetFilePrefix(prefix.c_str());
-    writer->SetRenderWindow(renWin);
-    writer->Update();
-    }
-  else if(fn.rfind(".off") == fn.length() - 4)
-    {
-    vtkRenderer *renderer = vtkRenderer::New();
-    vtkPolyDataMapper *myDataMapper = vtkPolyDataMapper::New();
-    myDataMapper->SetInputData(data);
-    vtkActor *myActor = vtkActor::New();
-    myActor->SetMapper(myDataMapper);
-    renderer->AddActor(myActor);
-    vtkRenderWindow *renWin = vtkRenderWindow::New();
-    renWin->AddRenderer(renderer);
-
-    vtkOOGLExporter *writer = vtkOOGLExporter::New();
-    writer->SetFileName(fn.c_str());
-    writer->SetRenderWindow(renWin);
-    writer->Update();
-    }
   else
     {
-    cout << "Could not find a writer for " << fn << endl;
-    cout << fn.rfind(".byu") << endl;
-    cout << fn.rfind(".vtk") << endl;
+    cerr << "Could not find a writer for " << fn << endl;
     return;
     }
 }

@@ -7,11 +7,6 @@
 #include <vtkCellLocator.h>
 #include <vtkPolyData.h>
 #include <vtkPointData.h>
-#include <vtkLODActor.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkPolyDataMapper.h>
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkBYUReader.h>
