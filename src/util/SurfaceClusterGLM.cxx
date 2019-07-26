@@ -115,7 +115,11 @@ const char *usage_text =
   "                 Specify a different step size for diffusion (default: 0.01).\n"
   "  -e / --edges   \n"
   "                 Generate separate output files containing cluster edges.\n"
-  "                 The file names are derived from the -m output parameters.\n";
+  "                 The file names are derived from the -m output parameters.\n"
+  "  -M / --missing \n"
+  "                 Input data (per-vertex observations) have missing data encoded\n"
+  "                 as NaNs. The algorithm will exclude these observations from the\n"
+  "                 GLM and compute the GLM with only non-missing observations\n";
 
 int usage()
 {
@@ -1137,6 +1141,7 @@ public:
     const vnl_matrix<double> &contrast_vector);
 
   void Compute(const vector<int> &permutation, bool need_t, bool need_p);
+  void ComputeWithMissingData(const vector<int> &permutation, bool need_t, bool need_p);
 
   double PtoT(double p);
 
@@ -1227,6 +1232,104 @@ GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool ne
         {
         int dummy;
         pval->SetTuple1(j, 1.0 - tnc(t, df, 0.0, &dummy)); 
+        }
+      }
+    }
+}
+
+void
+GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool need_t, bool need_p)
+{
+  // Shuffle the rows according to current permutation
+  for (size_t i = 0; i < permutation.size(); i++)
+    for (size_t j = 0; j < X.cols(); j++)
+      Xperm[i][j] = X[permutation[i]][j];
+
+  // Number of subjects
+  int ns = Y.rows();
+
+  // Matrix A
+  vnl_matrix<double> A, Xj, AXjT;
+  vnl_vector<double> Yj;
+  int df_j;
+  double cv_A_cvT;
+
+  // Iterate over all the elements
+  for (int j = 0; j < nelt; j++)
+    {
+    bool same_pattern = true;
+    int n_nans = 0;
+
+    // Determine which elements have missing data (nan) and if that matches the last element we processed
+    for(int k = 0; k < ns; k++)
+      {
+      if(isnan(Y(k, j))) 
+        {
+        n_nans++;
+        if(j == 0 || !isnan(Y(k,j-1)))
+          same_pattern = false;
+        }
+      else
+        {
+        if(j == 0 || isnan(Y(k,j-1)))
+          same_pattern = false;
+        }
+      }
+
+    // If the pattern is changed, we need to compute the new A matrix
+    if(!same_pattern) 
+      {
+      // Copy rows from Xperm into Xj
+      Xj.set_size(ns - n_nans, Xperm.cols());
+      for(int k = 0, p = 0; k < ns; k++)
+        if(!isnan(Y(k,j)))
+          Xj.set_row(p++, Xperm.get_row(k));
+
+      // Compute A
+      A = vnl_matrix_inverse<double>(Xperm.transpose() * Xperm).pinverse(rank);
+      AXjT = A * Xj.transpose();
+
+      // Compute cv * A * cv^T
+      cv_A_cvT = (cv * (A * cv.transpose()))(0,0);
+
+      // Compute the DF for this observation
+      rank = vnl_rank(Xj, vnl_rank_row);
+      df_j = Xj.rows() - rank;
+
+      // Resize Y
+      Yj.set_size(ns - n_nans);
+      }
+
+    // Copy the Y vector's elements into Yk
+    for(int k = 0, p = 0; k < ns; k++)
+      if(!isnan(Y(k,j)))
+        Yj[p++] = Y(k,j);
+
+    // Compute the estimated betas
+    vnl_vector<double> beta_j = AXjT * Yj;
+
+    // Store in output array
+    beta->SetTuple(j, beta_j.data_block());
+
+    // Compute the contrast
+    vnl_vector<double> con_j = cv * beta_j;
+    contrast->SetTuple1(j, con_j[0]);
+
+    // The rest only if we need the t-stat
+    if(need_t)
+      {
+      vnl_vector<double> Xj_beta = Xj * beta_j;
+      vnl_vector<double> residual = Yj - Xj * beta_j;
+      double resvar = residual.squared_magnitude() / (double) df_j;
+
+      // Compute t-stat / p-value
+      double den = cv_A_cvT * resvar;
+      double t = (den > 0) ? con_j[0] / sqrt(den) : 0.0;
+      tstat->SetTuple1(j, t);
+      if(need_p)
+        {
+        int dummy;
+        pval->SetTuple1(j, 1.0 - tnc(t, df_j, 0.0, &dummy)); 
         }
       }
     }
@@ -1367,12 +1470,16 @@ struct Parameters
   // Whether tubes are being used
   bool flag_edges;
 
+  // Whether the data has missing observations encoded as nans
+  bool flag_missing_data;
+
   // What is the threshold on
   ThresholdType ttype;
 
   Parameters()
     {
-    np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01;
+    np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
+    flag_missing_data = false;
     }
 };
 
@@ -1658,7 +1765,10 @@ int meshcluster(Parameters &p, bool isPolyData)
     for(size_t i = 0; i < mesh.size(); i++)
       {
       // Compute statistical arrays using GLM
-      glm[i]->Compute(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
+      if(p.flag_missing_data)
+        glm[i]->ComputeWithMissingData(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
+      else
+        glm[i]->Compute(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
 
       // Generate a list of clusters (based on current scalars)
       if(p.threshold > 0)
@@ -1695,7 +1805,10 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkSmartPointer<TMeshType> mout;
 
     // Compute GLM (get all arrays, this is for keeps)
-    glm[i]->Compute(true_order, true, true);
+    if(p.flag_missing_data)
+      glm[i]->ComputeWithMissingData(true_order, true, true);
+    else
+      glm[i]->Compute(true_order, true, true);
 
     // The rest is done only if permutations > 0
     if(p.np > 0)
@@ -1876,6 +1989,10 @@ int main(int argc, char *argv[])
       else if(arg == "-e" || arg == "--edges")
         {
         p.flag_edges = true;
+        }
+      else if(arg == "-M" || arg == "--missing")
+        {
+        p.flag_missing_data = true;
         }
       else if(arg == "-s" || arg == "--stat")
         {
