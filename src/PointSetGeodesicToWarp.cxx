@@ -4,6 +4,7 @@
 #include "util/ReadWriteVTK.h"
 #include "vtkPointData.h"
 #include "vtkDataArray.h"
+#include "vtkDoubleArray.h"
 #include "FastLinearInterpolator.h"
 
 #include <cstdarg>
@@ -90,7 +91,7 @@ public:
 private:
 
   static void UpdateAndWriteMesh(
-    vtkPolyData *mesh, const Matrix &x, 
+    vtkPolyData *mesh, const Matrix &x, const Matrix &v, const Matrix &x0,
     const std::string filePattern,
     int k);
 };
@@ -100,16 +101,34 @@ template <class TPixel, unsigned int VDim>
 void
 PointSetGeodesicToWarp<TPixel, VDim>
 ::UpdateAndWriteMesh(
-  vtkPolyData *mesh, const Matrix &x, 
+  vtkPolyData *mesh, const Matrix &x, const Matrix &v, const Matrix &x0,
   const std::string filePattern,
   int k)
 {
+  // Velocity array
+  vtkDoubleArray *arr_v = vtkDoubleArray::New();
+  arr_v->SetNumberOfComponents(VDim);
+  arr_v->SetNumberOfTuples(v.rows());
+  arr_v->SetName("Velocity");
+  mesh->GetPointData()->AddArray(arr_v);
+
+  // Initial position array
+  vtkDoubleArray *arr_x0 = vtkDoubleArray::New();
+  arr_x0->SetNumberOfComponents(VDim);
+  arr_x0->SetNumberOfTuples(v.rows());
+  arr_x0->SetName("InitialPosition");
+  mesh->GetPointData()->AddArray(arr_x0);
+
   // Assign new points to the mesh
   for(int i = 0; i < x.rows(); i++)
     {
     double x_out[VDim];
     for(int a = 0; a < VDim; a++) 
+      {
       x_out[a] = x(i,a);
+      arr_v->SetComponent(i,a,v(i,a));
+      arr_x0->SetComponent(i,a,x0(i,a));
+      }
     mesh->GetPoints()->SetPoint(i,x_out);
     }
 
@@ -202,6 +221,9 @@ PointSetGeodesicToWarp<TPixel, VDim>
       for(int a = 0; a < VDim; a++)
         m_x(i,a) = mesh_to_warp->GetPoint(i)[a];
 
+    // Store the initial array
+    Matrix m_x0 = m_x;
+
     // F for the Gaussian
     double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
 
@@ -221,15 +243,18 @@ PointSetGeodesicToWarp<TPixel, VDim>
       const Matrix &qt = hsys.GetQt(t);
       const Matrix &pt = hsys.GetPt(t);
 
+      // Create a vector for the velocity
+      Matrix v(m_x.rows(), VDim);
+
       // Compute the velocity for each landmark
       for(int i = 0; i < m_x.rows(); i++)
         {
         // Local arrays for speed
-        double vi[VDim], xi[VDim];
+        double xi[VDim];
         for(int a = 0; a < VDim; a++) 
           {
           xi[a] = m_x(i,a);
-          vi[a] = 0;
+          v(i,a) = 0;
           }
 
         // Loop over all q nodes
@@ -251,18 +276,18 @@ PointSetGeodesicToWarp<TPixel, VDim>
 
             // Scale momentum by exponent
             for(int a = 0; a < VDim; a++) 
-              vi[a] += g * pt(j,a);
+              v(i,a) += g * pt(j,a);
             }
           }
 
         // Use Euler's method to get position at next timepoint
         for(int a = 0; a < VDim; a++) 
-          m_x(i,a) += vi[a] * dt;
+          m_x(i,a) += v(i,a) * dt;
         }
 
       // If this is an animation frame, save it
       if((param.anim_freq > 0 && 0 == (t + 1) % param.anim_freq) || t + 1 == tEnd)
-        UpdateAndWriteMesh(mesh_to_warp, m_x, it->second, t + 1);
+        UpdateAndWriteMesh(mesh_to_warp, m_x, v, m_x0, it->second, t + 1);
 
       std::cout << "." << std::flush;
       }

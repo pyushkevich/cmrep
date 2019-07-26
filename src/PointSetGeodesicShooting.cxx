@@ -1063,6 +1063,12 @@ PointSetShootingProblem<TFloat, VDim>
     arr_v->SetName("Velocity");
     pTemplate->GetPointData()->AddArray(arr_v);
 
+    vtkDoubleArray *arr_p = vtkDoubleArray::New();
+    arr_p->SetNumberOfComponents(VDim);
+    arr_p->SetNumberOfTuples(np);
+    arr_p->SetName("Momentum");
+    pTemplate->GetPointData()->AddArray(arr_p);
+
     // Apply Euler method to the mesh points
     double dt = hsys.GetDeltaT();
     for(unsigned int t = 1; t < param.N; t++)
@@ -1083,6 +1089,12 @@ PointSetShootingProblem<TFloat, VDim>
 
         for(unsigned int a = 0; a < VDim; a++)
           pTemplate->GetPoints()->SetPoint(i, qi);
+
+        for(unsigned int a = 0; a < VDim; a++)
+          {
+          arr_v->SetComponent(i, a, vi[a]);
+          arr_p->SetComponent(i, a, hsys.GetPt(t)(i,a));
+          }
         }
 
       // Output the intermediate mesh
