@@ -1263,15 +1263,15 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
     // Determine which elements have missing data (nan) and if that matches the last element we processed
     for(int k = 0; k < ns; k++)
       {
-      if(isnan(Y(k, j))) 
+      if(vnl_math::isnan(Y(k, j))) 
         {
         n_nans++;
-        if(j == 0 || !isnan(Y(k,j-1)))
+        if(j == 0 || !vnl_math::isnan(Y(k,j-1)))
           same_pattern = false;
         }
       else
         {
-        if(j == 0 || isnan(Y(k,j-1)))
+        if(j == 0 || vnl_math::isnan(Y(k,j-1)))
           same_pattern = false;
         }
       }
@@ -1282,7 +1282,7 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
       // Copy rows from Xperm into Xj
       Xj.set_size(ns - n_nans, Xperm.cols());
       for(int k = 0, p = 0; k < ns; k++)
-        if(!isnan(Y(k,j)))
+        if(!vnl_math::isnan(Y(k,j)))
           Xj.set_row(p++, Xperm.get_row(k));
 
       // Compute A
@@ -1302,7 +1302,7 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
 
     // Copy the Y vector's elements into Yk
     for(int k = 0, p = 0; k < ns; k++)
-      if(!isnan(Y(k,j)))
+      if(!vnl_math::isnan(Y(k,j)))
         Yj[p++] = Y(k,j);
 
     // Compute the estimated betas
@@ -1627,7 +1627,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     bool keeprow = true;
     for(int j = 0; j < mat.cols(); j++)
       {
-      if(vnl_math_isnan(mat(i,j)))
+      if(vnl_math::isnan(mat(i,j)))
         {
         std::cout << "Discarding row " << i << " due to missing data" << std::endl;
         keeprow = false;
