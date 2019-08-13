@@ -19,6 +19,7 @@ int usage()
   cout << "  -n name        Name for output array (default: same as input)" << endl;
   cout << "  -r file.vtk    Use file as reference geometry (default: first mesh)" << endl;
   cout << "  -c             Apply to cell arrays (default: point arrays)" << endl;
+  cout << "  -B             Save mesh in binary format (default: ASCII format)" << endl;
   return -1;
 }
 
@@ -46,24 +47,28 @@ vtkPolyData *ReadMesh<>(const char *fname)
 
 
 template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname)
+void WriteMesh(TMeshType *mesh, const char *fname, bool flag_write_binary = false)
 { }
 
 template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
+void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool flag_write_binary)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(flag_write_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
 template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
+void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool flag_write_binary)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(flag_write_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
@@ -73,6 +78,7 @@ int MeshMergeArrays(int argc, char *argv[])
   int i;
   std::string arr_name, out_arr_name, fnout, fnref;
   bool flag_cell = false;
+  bool flag_binary = false;
   
   // Read the optional parameters
   for (i = 1; i < argc; i++)
@@ -83,6 +89,8 @@ int MeshMergeArrays(int argc, char *argv[])
       fnref = argv[++i];
     else if (0 == strcmp(argv[i],"-c"))
       flag_cell = true;
+    else if (0 == strcmp(argv[i],"-B"))
+      flag_binary = true;
     else
       break;
     }
@@ -142,7 +150,7 @@ int MeshMergeArrays(int argc, char *argv[])
     ref->GetPointData()->AddArray(array);
 
   // Write the output
-  WriteMesh<TMeshType>(ref, fnout.c_str());
+  WriteMesh<TMeshType>(ref, fnout.c_str(), flag_binary);
   return EXIT_SUCCESS;
 }
 

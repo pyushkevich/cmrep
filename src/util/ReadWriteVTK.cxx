@@ -52,7 +52,7 @@ vtkPolyData *ReadVTKData(string fn)
   return p1;
 }
 
-void WriteVTKData(vtkPolyData *data, string fn)
+void WriteVTKData(vtkPolyData *data, string fn, bool force_binary)
 {
   if(fn.rfind(".byu") == fn.length() - 4)
     {
@@ -73,6 +73,8 @@ void WriteVTKData(vtkPolyData *data, string fn)
     vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
     writer->SetFileName(fn.c_str());
     writer->SetInputData(data);
+    if(force_binary)
+      writer->SetFileTypeToBinary();
     writer->Update();
     }
   else

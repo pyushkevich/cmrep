@@ -119,7 +119,11 @@ const char *usage_text =
   "  -M / --missing \n"
   "                 Input data (per-vertex observations) have missing data encoded\n"
   "                 as NaNs. The algorithm will exclude these observations from the\n"
-  "                 GLM and compute the GLM with only non-missing observations\n";
+  "                 GLM and compute the GLM with only non-missing observations\n"
+  "                 NOTE: on some operating systems NaNs can only be read from VTK\n"
+  "                 meshes in binary (not ASCII) format.\n"
+  "  -B / --binary  Write output meshes in binary format. This is turned on automatically\n"
+  "                 when the -M flag is supplied\n";
 
 int usage()
 {
@@ -174,24 +178,28 @@ vtkPolyData *ReadMesh<>(const char *fname)
 }
 
 template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname)
+void WriteMesh(TMeshType *mesh, const char *fname, bool force_binary = false)
 { }
 
 template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
+void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool force_binary)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(force_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
 template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
+void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool force_binary)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(force_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
@@ -374,7 +382,6 @@ public:
   Edge(vtkIdType a, vtkIdType b) : std::pair<vtkIdType,vtkIdType>(min(a,b), max(a,b)) {}
 };
 
-
 void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *array)
 {
   // Diffusion simulates heat equation, dF/dt = -Laplacian(F), for t = time
@@ -386,6 +393,9 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
 
   // Report
   printf("Performing diffusion on point data (t = %f, delta_t = %f)\n", time, dt);
+
+  // Source array
+  vtkDataArray *f = mesh->GetPointData()->GetArray(array);
 
   // Get all edges into the edge set
   for(int i = 0; i < mesh->GetNumberOfCells(); i++)
@@ -418,7 +428,6 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
     }
 
   // Create an array for the updates
-  vtkDataArray *f = mesh->GetPointData()->GetArray(array);
   vtkFloatArray *f_upd = vtkFloatArray::New();
   f_upd->SetNumberOfComponents(f->GetNumberOfComponents());
   f_upd->SetNumberOfTuples(f->GetNumberOfTuples());
@@ -442,10 +451,14 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
 
       for(int j = 0; j < f->GetNumberOfComponents(); j++)
         {
-        f_upd->SetComponent(ia, j, 
-          f_upd->GetComponent(ia, j) + wa * (f->GetComponent(ib,j) - f->GetComponent(ia, j)));
-        f_upd->SetComponent(ib, j, 
-          f_upd->GetComponent(ib, j) + wb * (f->GetComponent(ia,j) - f->GetComponent(ib, j)));
+        double val_a_j = f->GetComponent(ia,j);
+        double val_b_j = f->GetComponent(ib,j);
+
+        if(!vnl_math::isnan(val_b_j))
+          f_upd->SetComponent(ia, j, f_upd->GetComponent(ia, j) + wa * (val_b_j - val_a_j));
+
+        if(!vnl_math::isnan(val_a_j))
+          f_upd->SetComponent(ib, j, f_upd->GetComponent(ib, j) + wb * (val_a_j - val_b_j));
         }
       }
 
@@ -547,10 +560,21 @@ void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *arr
 
       for(int j = 0; j < f->GetNumberOfComponents(); j++)
         {
+        double val_a_j = f->GetComponent(ia,j);
+        double val_b_j = f->GetComponent(ib,j);
+
+        if(!vnl_math::isnan(val_b_j))
+          f_upd->SetComponent(ia, j, f_upd->GetComponent(ia, j) + wa * (val_b_j - val_a_j));
+
+        if(!vnl_math::isnan(val_a_j))
+          f_upd->SetComponent(ib, j, f_upd->GetComponent(ib, j) + wb * (val_a_j - val_b_j));
+
+        /*
         f_upd->SetComponent(ia, j, 
           f_upd->GetComponent(ia, j) + wa * (f->GetComponent(ib,j) - f->GetComponent(ia, j)));
         f_upd->SetComponent(ib, j, 
           f_upd->GetComponent(ib, j) + wb * (f->GetComponent(ia,j) - f->GetComponent(ib, j)));
+          */
         }
       }
 
@@ -1473,13 +1497,16 @@ struct Parameters
   // Whether the data has missing observations encoded as nans
   bool flag_missing_data;
 
+  // Whether to write output in binary format
+  bool flag_write_binary;
+
   // What is the threshold on
   ThresholdType ttype;
 
   Parameters()
     {
     np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
-    flag_missing_data = false;
+    flag_missing_data = false; flag_write_binary = false;
     }
 };
 
@@ -1897,7 +1924,7 @@ int meshcluster(Parameters &p, bool isPolyData)
 
             string fnedge = p.fn_mesh_output[i];
             fnedge.replace(fnedge.length() - ext.length(), ext.length(), string("_edges") + ext);
-            WriteMesh<TMeshType>(emesh, fnedge.c_str());
+            WriteMesh<TMeshType>(emesh, fnedge.c_str(), p.flag_write_binary);
             }
           }
         else 
@@ -1931,7 +1958,7 @@ int meshcluster(Parameters &p, bool isPolyData)
 
     // Save the output mesh 
     cout << "Saving output mesh.." << endl;
-    WriteMesh<TMeshType>(mout, p.fn_mesh_output[i].c_str());
+    WriteMesh<TMeshType>(mout, p.fn_mesh_output[i].c_str(), p.flag_write_binary);
     }
     return EXIT_SUCCESS;
 
@@ -1993,6 +2020,11 @@ int main(int argc, char *argv[])
       else if(arg == "-M" || arg == "--missing")
         {
         p.flag_missing_data = true;
+        p.flag_write_binary = true;
+        }
+      else if(arg == "-B" || arg == "--binary")
+        {
+        p.flag_write_binary = true;
         }
       else if(arg == "-s" || arg == "--stat")
         {

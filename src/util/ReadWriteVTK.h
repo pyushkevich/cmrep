@@ -4,7 +4,7 @@
 #include "vtkPolyData.h"
 #include <string>
 
-void WriteVTKData(vtkPolyData *data, std::string fn);
+void WriteVTKData(vtkPolyData *data, std::string fn, bool force_binary = false);
 vtkPolyData *ReadVTKData(std::string fn);
 
 #endif
