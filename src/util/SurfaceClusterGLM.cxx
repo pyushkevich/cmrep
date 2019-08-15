@@ -1310,7 +1310,7 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
           Xj.set_row(p++, Xperm.get_row(k));
 
       // Compute A
-      A = vnl_matrix_inverse<double>(Xperm.transpose() * Xperm).pinverse(rank);
+      A = vnl_matrix_inverse<double>(Xj.transpose() * Xj).pinverse(rank);
       AXjT = A * Xj.transpose();
 
       // Compute cv * A * cv^T
