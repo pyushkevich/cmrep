@@ -1205,7 +1205,7 @@ public:
           //printf("dice is %f for label %d \n", dice_per_label, l);
         }
         diceGen = 2.0 * (sumNumerator / sumDenominator);
-        printf("gendice %f\n", diceGen);
+        //printf("gendice %f\n", diceGen);
         return diceGen;
       }
 
