@@ -49,9 +49,9 @@ class FindMedialTriangleCenterObjective : public vnl_cost_function
 {
 public:
   typedef vnl_vector<double> Vector;
-  FindMedialTriangleCenterObjective(vnl_matrix<double> X) 
+  FindMedialTriangleCenterObjective(vnl_matrix<double> X)
     : vnl_cost_function(3)
-    { 
+    {
     this->X = X;
     }
 
@@ -117,10 +117,10 @@ vnl_vector<double> FindMedialTriangleCenter(const vnl_matrix<double> &bnd_vertic
   return Y;
 }
 
-/** 
+/**
  * A medial mesh representation
  */
-struct CMRep 
+struct CMRep
 {
   typedef vnl_vector<double> Vector;
   typedef vnl_matrix<double> Matrix;
@@ -195,7 +195,7 @@ void CMRep::ComputeTangentAndLimitWeights(TriangleMesh *tri, SparseMat wgt[])
 
   LoopTangentScheme lts;
   lts.SetMesh(tri);
-  
+
   for(int a = 0; a < 3; a++)
     {
     vnl_sparse_matrix<double> Wa(nv, nv);
@@ -220,7 +220,7 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
   reader->SetFileName(fn);
   reader->Update();
   this->bnd_vtk = reader->GetOutput();
-  
+
   // Read the normals
   vtkDataArray *b_norm = this->bnd_vtk->GetPointData()->GetNormals();
   vtkDataArray *b_rad = this->bnd_vtk->GetPointData()->GetArray("Radius");
@@ -239,7 +239,7 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
   // Read the point coordinates into a matrix and the medial index array
   this->bnd_mi.set_size(nv);
   this->bnd_vtx.set_size(nv, 3);
-  this->bnd_nrm.set_size(nv, 3); 
+  this->bnd_nrm.set_size(nv, 3);
   vtkDataArray *da_mi = this->bnd_vtk->GetPointData()->GetArray("MedialIndex");
   for(int k = 0; k < nv; k++)
     {
@@ -250,7 +250,7 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
       this->bnd_nrm(k, d) = b_norm ? b_norm->GetComponent(k,d) : 0.0;
       }
     }
-  
+
   // Allocate an array to hold the boundary radii
   vnl_vector<double> bnd_rad(nv, 0.0);
 
@@ -365,7 +365,7 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
     // Do the same for the medial surface
     ComputeTangentAndLimitWeights(&this->med_tri, this->med_wtl);
     }
-  
+
   // Read the initial transform matrix
   vnl_matrix_fixed<double, 4, 4> m_tran; m_tran.set_identity();
   if(fn_init_transform != NULL)
@@ -375,20 +375,20 @@ void CMRep::ReadVTK(const char *fn, bool compute_limit_surface_weights, const ch
     matrix_file.close();
     std::cout << "Read initial matrix " << m_tran << std::endl;
     }
-  
+
   // Apply the transform to the boundary and normals
   vnl_matrix_fixed<double, 3, 3> m_tran_A = m_tran.extract(3,3);
   vnl_vector_fixed<double, 3> m_tran_B = m_tran.get_column(3).extract(3);
   double m_tran_s = vnl_determinant(m_tran_A);
-  
+
   std::cout << "Transform determinant " << m_tran_s << std::endl;
-  
+
   for(unsigned int k = 0; k < nv; k++)
     {
     this->bnd_vtx.set_row(k, m_tran_A * this->bnd_vtx.get_row(k) + m_tran_B);
     this->bnd_nrm.set_row(k, (m_tran_A * this->bnd_nrm.get_row(k)) / m_tran_s);
     }
-  
+
   for(unsigned int k = 0; k < nmv; k++)
     {
     this->med_vtx.set_row(k, m_tran_A * this->med_vtx.get_row(k) + m_tran_B);
@@ -472,7 +472,7 @@ void TestLimitSurface(CMRep *model)
   lts.SetMesh(&model->bnd_tri);
 
   // Compute limit surface of the boundary mesh
-  CMRep::Matrix X(model->nv, 3); 
+  CMRep::Matrix X(model->nv, 3);
   for(int k = 0; k < model->nv; k++)
     {
     CMRep::Vector xk = model->bnd_vtx.get_row(k) * lts.GetOwnWeight(2, k);
@@ -484,7 +484,7 @@ void TestLimitSurface(CMRep *model)
   // Compute limit surface of the medial mesh
   LoopTangentScheme ltsm;
   ltsm.SetMesh(&model->med_tri);
-  CMRep::Matrix Xm(model->nmv, 3); 
+  CMRep::Matrix Xm(model->nmv, 3);
   for(int k = 0; k < model->nmv; k++)
     {
     CMRep::Vector xk = model->med_vtx.get_row(k) * ltsm.GetOwnWeight(2, k);
@@ -539,7 +539,7 @@ struct AugLagMedialFitParameters
 
   // Sigma for the image smoothing
   double image_sigma;
-  
+
   // Schedule for mu
   double mu_init, mu_scale;
   unsigned int gradient_iter;
@@ -576,7 +576,7 @@ struct AugLagMedialFitParameters
   unsigned int max_constraint_depth;
 
   // Default initializer
-  AugLagMedialFitParameters() 
+  AugLagMedialFitParameters()
     : nt(40), w_kinetic(0.05), sigma(2.0), image_sigma(0.2),
       mu_init(1), mu_scale(1.0),
       gradient_iter(6000), al_iter(10),
@@ -589,7 +589,7 @@ struct AugLagMedialFitParameters
 };
 
 
-struct QuadraticForm 
+struct QuadraticForm
 {
   typedef vnl_vector<double> Vector;
   typedef ImmutableSparseMatrix<double> SparseMat;
@@ -731,8 +731,8 @@ public:
   typedef vnl_matrix<double> Matrix;
   typedef vnl_vector<double> Vector;
 
-  MeshFunctionVolumeIntegral(CMRep *model, 
-    unsigned int n_layers, unsigned int sub_level, 
+  MeshFunctionVolumeIntegral(CMRep *model,
+    unsigned int n_layers, unsigned int sub_level,
     bool flat_subdivision_mode, TFunction &f, size_t label = NOID)
     : func(f)
     {
@@ -773,7 +773,7 @@ public:
 
     // Initialize the triangles of the wedges. The quadrilateral faces must be divided into
     // triangles and this is done in such a way that adjacent wedges have the same triangles,
-    // so that there is no overlap between wedge triangulations and no holes. 
+    // so that there is no overlap between wedge triangulations and no holes.
     for(unsigned int k = 0; k < n_layers; k++)
       {
       for(auto &tri : S.triangles)
@@ -793,14 +793,14 @@ public:
         unsigned int F = W.V[5] = si(k+1, tri.vertices[2]);
 
         // Lambda to set a row in a wedge
-        auto set_row = [&](unsigned int row, unsigned int v1, unsigned int v2, unsigned int v3) 
+        auto set_row = [&](unsigned int row, unsigned int v1, unsigned int v2, unsigned int v3)
           { W.T(row,0) = v1; W.T(row,1) = v2, W.T(row,2) = v3; };
 
         // The triangles at the top and bottom of the wedge
         set_row(0, A, B, C);
         set_row(1, D, F, E);
 
-        // The remaining triangles - here we use the ordering of the samples to get consistent 
+        // The remaining triangles - here we use the ordering of the samples to get consistent
         // splitting of quad faces
         if(A < C)
           { set_row(2, A, C, F); set_row(3, A, F, D); }
@@ -903,7 +903,7 @@ public:
       grad_f.set_row(i, s.grad_f);
       d_obj__d_x.set_row(i, s.d_obj__d_x);
       f[i] = s.f;
-      ve[i] = s.vol_elt; 
+      ve[i] = s.vol_elt;
       }
 
     vnl_matrix<unsigned int> tri(wedges.size() * 8, 3);
@@ -925,7 +925,7 @@ public:
     }
 
   void ComputeAdjoint(
-    const Matrix &qb, const Matrix &qm, 
+    const Matrix &qb, const Matrix &qm,
     double d_obj__d_v, double d_obj__d_fv,
     Matrix &d_obj__d_qb, Matrix &d_obj__d_qm)
     {
@@ -964,7 +964,7 @@ public:
         }
       }
 
-    // Now compute the derivative of the objective with respect to the subdivided 
+    // Now compute the derivative of the objective with respect to the subdivided
     // vertex coordinates
     d_obj__d_qb_sub.fill(0.0); d_obj__d_qm_sub.fill(0.0);
 
@@ -1035,7 +1035,7 @@ protected:
   std::vector<Sample> samples;
 
   // A wedge
-  struct Wedge 
+  struct Wedge
     {
     // A wedge constitutes eight triangles, each one references a sample
     vnl_matrix_fixed<unsigned int, 8, 3> T;
@@ -1113,7 +1113,7 @@ private:
 };
 
 
-class ImageDiceFunction 
+class ImageDiceFunction
 {
 public:
   typedef itk::Image<double, 3> ImageType;
@@ -1168,7 +1168,7 @@ public:
     double *grad_vox_p = grad_vox.data_block();
 
     // Interpolate
-    InterpolatorType::InOut rc = 
+    InterpolatorType::InOut rc =
       m_Interp->InterpolateWithGradient(x_vox.data_block(), &f, &grad_vox_p);
 
     // Map gradient back to physical space
@@ -1177,7 +1177,7 @@ public:
     if(rc == InterpolatorType::OUTSIDE)
       grad.fill(0.0);
 
-    return f; 
+    return f;
     }
 
   double GetVolume() const { return m_Volume; }
@@ -1231,12 +1231,12 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
 
   double *py = y.data_block();
   MatrixRef qb(model->nv, 3, py);      py += qb.size();
-  MatrixRef qm(model->nmv, 3, py); 
-  
+  MatrixRef qm(model->nmv, 3, py);
+
   double *pdy = d_y.data_block();
   MatrixRef d_qb(model->nv, 3, pdy);   pdy += qb.size();
-  MatrixRef d_qm(model->nmv, 3, pdy);  
-  
+  MatrixRef d_qm(model->nmv, 3, pdy);
+
   // Assign variables
   qb.update(model->bnd_vtx);
   qm.update(model->med_vtx);
@@ -1281,7 +1281,7 @@ void TestDice(CMRep *model, TFunction &tf, double img_vol, double eps = 1.0e-6)
 
     double d_f__d_yj_num = (f1 - f2) / (2 * eps);
 
-    printf("Dice Test: Var: %4d  An: %16.12f  Nu: %16.12f  Del: %16.12f\n", 
+    printf("Dice Test: Var: %4d  An: %16.12f  Nu: %16.12f  Del: %16.12f\n",
       j, d_y[j], d_f__d_yj_num, fabs(d_y[j] - d_f__d_yj_num));
     }
 }
@@ -1456,7 +1456,7 @@ public:
     return 6 * model->nv;
     }
 
-  // Initialize the optimization variable for a timepoint. The input vector x contains the 
+  // Initialize the optimization variable for a timepoint. The input vector x contains the
   // variables for just the current timepoint
   static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x,
                                     unsigned int nt, unsigned int t)
@@ -1549,7 +1549,7 @@ public:
   // with very sparse A and b
   //
   // This data structure holds the A, b and c for the main objective and the constraints
-  struct HessianData 
+  struct HessianData
     {
     // Quadratic parameters of each of the constraints
     std::vector<QuadraticForm> qf_C;
@@ -1562,8 +1562,8 @@ public:
     };
 
 
-  /** 
-   * Compute the Augmented Lagrangian and its derivative using precomputed quantities. 
+  /**
+   * Compute the Augmented Lagrangian and its derivative using precomputed quantities.
    * The input vector Y and the output vector d_AL__d_y refer to the concatenation of
    * the optimization variables x and the geodesic landmarks qt for the current time
    * point. The same applies to the Hessian - it is a matrix containing second derivatives
@@ -1626,13 +1626,13 @@ public:
     return M;
     }
 
-  /** 
-   * This function precomputes different terms used to compute the Hessian that 
+  /**
+   * This function precomputes different terms used to compute the Hessian that
    * do not change between iterations (exploiting wide use of quadratic functions
    * in the objective
    */
   static void PrecomputeHessianData(
-    CMRep *model, const TargetData *target, 
+    CMRep *model, const TargetData *target,
     bool limit_surface_constraints,
     HessianData *data)
     {
@@ -1676,10 +1676,10 @@ public:
 
             // Index of the boundary normal vector
             unsigned int i_Nb_j = i_Nb(j, a);
-            
+
             // Set the Hessian terms
-            H_Cj(i_qb_mov, i_Nb_j) += it.Value(); 
-            H_Cj(i_Nb_j, i_qb_mov) += it.Value(); 
+            H_Cj(i_qb_mov, i_Nb_j) += it.Value();
+            H_Cj(i_Nb_j, i_qb_mov) += it.Value();
             }
           }
 
@@ -1733,7 +1733,7 @@ public:
         }
       }
 
-    // Handle the objective function - it's a symmetric quadratic form in q_b's 
+    // Handle the objective function - it's a symmetric quadratic form in q_b's
     vnl_sparse_matrix<double> M_f(k, k);
     Vector d_f(k, 0.0);
 
@@ -1822,7 +1822,7 @@ public:
     vmbb.AddArray(model->RemapMedialToBoundary(xcmp.R_med), "coeff_R_med_%03d", t);
     }
 
-  static void ExportTimepoint(CMRep *model, TargetData *target, 
+  static void ExportTimepoint(CMRep *model, TargetData *target,
     const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
     {
     // Get the references to all the data in vector Y
@@ -1837,7 +1837,7 @@ public:
     vmbb.SetNormals(ycmp.N_bnd);
 
     // Extract boundary and medial limit points
-    Matrix Xlim(model->nv, 3);    
+    Matrix Xlim(model->nv, 3);
     for(int a = 0; a < 3; a++)
       Xlim.set_column(a, model->bnd_wtl[2].MultiplyByVector(ycmp.q_bnd.get_column(a)));
 
@@ -1855,7 +1855,7 @@ public:
 
     // Add the radius array
     vmbb.AddArray(model->RemapMedialToBoundary(ycmp.R_med), "Radius");
-    
+
     // Store the medial points as a separate array
     vmbb.AddArray(model->RemapMedialToBoundary(ycmp.q_med), "MedialPoint");
 
@@ -1973,7 +1973,7 @@ public:
     return nc_t;
     }
 
-  // Initialize the optimization variable for a timepoint. The input vector x contains the 
+  // Initialize the optimization variable for a timepoint. The input vector x contains the
   // variables for just the current timepoint
   static void ComputeInitialization(CMRep *model, const TargetData *target, Vector &x, unsigned int nt, unsigned int t)
     {
@@ -2028,7 +2028,7 @@ public:
   // with very sparse A and b
   //
   // This data structure holds the A, b and c for the main objective and the constraints
-  struct HessianData 
+  struct HessianData
     {
     // Quadratic parameters of each of the constraints
     std::vector<QuadraticForm> qf_C;
@@ -2041,8 +2041,8 @@ public:
     };
 
 
-  /** 
-   * Compute the Augmented Lagrangian and its derivative using precomputed quantities. 
+  /**
+   * Compute the Augmented Lagrangian and its derivative using precomputed quantities.
    * The input vector Y and the output vector d_AL__d_y refer to the concatenation of
    * the optimization variables x and the geodesic landmarks qt for the current time
    * point. The same applies to the Hessian - it is a matrix containing second derivatives
@@ -2104,13 +2104,13 @@ public:
     return M;
     }
 
-  /** 
-   * This function precomputes different terms used to compute the Hessian that 
+  /**
+   * This function precomputes different terms used to compute the Hessian that
    * do not change between iterations (exploiting wide use of quadratic functions
    * in the objective
    */
   static void PrecomputeHessianData(
-    CMRep *model, const TargetData *target, 
+    CMRep *model, const TargetData *target,
     bool limit_surface_constraints,
     HessianData *data)
     {
@@ -2153,7 +2153,7 @@ public:
             unsigned int ib_mov = i_qb(it.Column(), a);
             unsigned int ib_j = i_qb(j, a);
             unsigned int im_j = i_qm(model->bnd_mi(j), a);
-            
+
             H_Cj(ib_mov, ib_j) -= w_con * it.Value();
             H_Cj(ib_j, ib_mov) -= w_con * it.Value();
             H_Cj(ib_mov, im_j) += w_con * it.Value();
@@ -2202,7 +2202,7 @@ public:
         }
       }
 
-    // Handle the objective function - it's a symmetric quadratic form in q_b's 
+    // Handle the objective function - it's a symmetric quadratic form in q_b's
     vnl_sparse_matrix<double> M_f(k, k);
     Vector d_f(k, 0.0);
 
@@ -2305,7 +2305,7 @@ public:
     }
 
 
-  static void ExportTimepoint(CMRep *model, TargetData *target, 
+  static void ExportTimepoint(CMRep *model, TargetData *target,
     const Vector &Y, const Vector &C, const Vector &lambda, const char *fname)
     {
     // Get the references to all the data in vector Y
@@ -2422,7 +2422,7 @@ public:
     }
 
   double f(const vnl_vector<double>& alpha_vec)
-     { 
+     {
      double alpha = alpha_vec[0];
      Vector xa = x + alpha * grad;
      double f=0.0;
@@ -2516,7 +2516,7 @@ public:
     }
 
   /** Destructor */
-  ~PointMatchingWithTimeConstraintsAugLagObjective() 
+  ~PointMatchingWithTimeConstraintsAugLagObjective()
     {
     delete ocsys;
     }
@@ -2553,7 +2553,7 @@ public:
   {
     // Combine into a string
     std::string con_text;
-    char con_buffer[256]; 
+    char con_buffer[256];
     for(auto ci : con_detail.cdata)
       {
       sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
@@ -2565,7 +2565,7 @@ public:
       "\u03BC=%6.2f |\u03BB|=%6.2f Obj=%8.4f KE=%8.4f "
       "Bar=%8.4f Lag=%8.4f%s E=%8.4f |\u2207|=%8.4f\n",
       iter,
-      mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
+      mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag,
       con_text.c_str(), m_total, norm_g);
     }
 
@@ -2778,7 +2778,7 @@ protected:
 
   // Verbosity
   bool verbose;
- 
+
   // Iteration counter
   unsigned int iter_count;
 };
@@ -2788,7 +2788,7 @@ protected:
  * This one does geodesic shooting, constraints at the end
  */
 template <class Traits>
-class PointMatchingWithEndpointConstraintsAugLagObjective 
+class PointMatchingWithEndpointConstraintsAugLagObjective
 {
 public:
 
@@ -2853,7 +2853,7 @@ public:
     }
 
   /** Destructor */
-  ~PointMatchingWithEndpointConstraintsAugLagObjective() 
+  ~PointMatchingWithEndpointConstraintsAugLagObjective()
     {
     delete hsys;
     }
@@ -2890,7 +2890,7 @@ public:
     {
     // Combine into a string
     std::string con_text;
-    char con_buffer[256]; 
+    char con_buffer[256];
     for(auto ci : con_detail.cdata)
       {
       sprintf(con_buffer, " |%s|=%8.4f", ci.first.c_str(), ci.second);
@@ -2902,7 +2902,7 @@ public:
       "\u03BC=%6.2f |\u03BB|=%6.2f Obj=%8.4f KE=%8.4f "
       "Bar=%8.4f Lag=%8.4f%s E=%8.4f |\u2207|=%8.4f\n",
       iter,
-      mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag, 
+      mu, lambda.inf_norm(), m_distsq, m_kinetic * param.w_kinetic, m_barrier * mu / 2, m_lag,
       con_text.c_str(), m_total, norm_g);
     }
 
@@ -3029,7 +3029,7 @@ public:
       }
     }
 
-  // Compute the Allassonniere transversality terms G and DG 
+  // Compute the Allassonniere transversality terms G and DG
   void ComputeTransversalityAndJacobian(CMRep::Vector &x, Vector &G, Matrix &DG)
     {
     // TODO: this copy-in is a waste of time and space
@@ -3139,7 +3139,7 @@ public:
 
         Vector dG_i = (G2-G1)/(2.0*eps);
 
-        printf("i = %04d,   |AG| = %12.8f,  |NG| = %12.8f,  |Del| = %12.8f\n", 
+        printf("i = %04d,   |AG| = %12.8f,  |NG| = %12.8f,  |Del| = %12.8f\n",
           i, DG.get_column(i).inf_norm(), dG_i.inf_norm(), (DG.get_column(i) - dG_i).inf_norm());
         }
       }
@@ -3152,7 +3152,7 @@ public:
       if(svd.W()(i,i) != 0.0)
         nnz++;
 
-    printf("SVD min: %12.8f, max: %12.8f, nnz: %d, rank: %d\n", 
+    printf("SVD min: %12.8f, max: %12.8f, nnz: %d, rank: %d\n",
       svd.sigma_min(), svd.sigma_max(), nnz, svd.rank());
 
     // Compute inv(DG) * G
@@ -3241,7 +3241,7 @@ protected:
 
   // The vector of lagrange multipliers
   Vector lambda;
- 
+
   // Vector of initial values and bounds
   Vector x_init, x_lb, x_ub;
 
@@ -3290,8 +3290,8 @@ void DerivativeCheck(TObjective &obj, CMRep::Vector &x, int iter)
     xtest[i] = x[i] + eps;
     obj.compute(xtest, &f2, NULL);
 
-    printf("i = %04d,   AG = %12.8f,  NG = %12.8f,  Del = %12.8f\n", 
-      i, test_grad[i], (f2 - f1) / (2 * eps), 
+    printf("i = %04d,   AG = %12.8f,  NG = %12.8f,  Del = %12.8f\n",
+      i, test_grad[i], (f2 - f1) / (2 * eps),
       fabs(test_grad[i] - (f2-f1)/(2*eps)));
     }
 
@@ -3309,7 +3309,7 @@ template <class TInnerFunction>
 class vnl_func_wrapper : public vnl_cost_function
 {
 public:
-  vnl_func_wrapper(TInnerFunction &in_func) 
+  vnl_func_wrapper(TInnerFunction &in_func)
     : func(in_func), vnl_cost_function(in_func.get_xinit().size()) {}
 
   virtual void compute(const CMRep::Vector &x, double *f, CMRep::Vector *g)
@@ -3329,7 +3329,7 @@ double nlopt_vnl_func(unsigned n, const double *x, double *grad, void *my_func_d
   vnl_cost_function *vnl_cf = static_cast<vnl_cost_function *>(my_func_data);
   vnl_vector_ref<double> x_vec(n, const_cast<double *>(x));
   double f = 0.0;
-  
+
   if(grad)
     {
     vnl_vector_ref<double> grad_vec(n, grad);
@@ -3416,7 +3416,7 @@ public:
     qctr.fill(0.0);
     for(unsigned int i = 0; i < model->bnd_vtx.rows(); i++)
       qctr += model->bnd_vtx.get_row(i) / model->bnd_vtx.rows();
-    } 
+    }
 
   /** breakdown of coefficient vector into similarity transform coefficients */
   struct Coeff
@@ -3481,10 +3481,10 @@ public:
 
     // Print the results
     printf("Affine: Rot = %8.4f %8.4f %8.4f;  Scale = %8.4f;  Tran = %8.4f %8.4f %8.4f;  Obj = %8.4f\n",
-      xc.x_rot[0] * 180.0 / vnl_math::pi, 
+      xc.x_rot[0] * 180.0 / vnl_math::pi,
       xc.x_rot[1] * 180.0 / vnl_math::pi,
-      xc.x_rot[2] * 180.0 / vnl_math::pi, 
-      xc.x_scale, 
+      xc.x_rot[2] * 180.0 / vnl_math::pi,
+      xc.x_scale,
       xc.x_off[0], xc.x_off[1], xc.x_off[2], *f);
     }
 
@@ -3545,7 +3545,7 @@ protected:
 template <class TProblemTraits>
 void optimize_similarity(
   CMRep *model,
-  typename TProblemTraits::TargetData *target, 
+  typename TProblemTraits::TargetData *target,
   const AugLagMedialFitParameters &param)
 {
   // Create the similarity objective
@@ -3553,7 +3553,7 @@ void optimize_similarity(
   SimObjective sim_obj(model, target, param);
 
   // Create the initial solution
-  typename SimObjective::Vector x_opt = sim_obj.get_xinit(), 
+  typename SimObjective::Vector x_opt = sim_obj.get_xinit(),
                                 x_lb = sim_obj.get_x_lb(),
                                 x_ub = sim_obj.get_x_ub();
 
@@ -3617,7 +3617,7 @@ void optimize_auglag(
   // Set the initial mu
   obj.SetMu(mu);
 
-  // Evaluate before any optimization takes place 
+  // Evaluate before any optimization takes place
   printf("Initial evaluation of objective function:\n");
   obj.compute(x_opt, &f_current, &x_grad);
   obj.Export(x_opt, "/tmp/initial_%03d.vtk");
@@ -3754,7 +3754,7 @@ int usage()
 template <class TProblemTraits>
 int do_optimization(
   const AugLagMedialFitParameters &param,
-  CMRep *m_template, CMRep *m_target, 
+  CMRep *m_template, CMRep *m_target,
   typename TProblemTraits::ImageFunctionType *dicer)
 
 {
