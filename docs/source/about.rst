@@ -1,7 +1,6 @@
-# cmrep: Continuous Medial Representation
-
-This software repository contains the source code for the cm-rep algorithms described in a series of papers by Yushkevich et al. 
-
+*******
+About CM-Rep
+*******
 CM-Rep is a method for representing 3D biological objects (e.g, lungs, hippocampi) using a deformable model with predefined medial axis geometry. It allows the shape of these objects to be analyzed in terms of features derived from the medial axis, such as regional thickness. For more about the cm-rep methods, see these citations:
 
 * Yushkevich, P.A., Zhang, H. and Gee, J.C., 2006. Continuous medial representation for anatomical structures. IEEE transactions on medical imaging, 25(12), pp.1547-1564. http://ieeexplore.ieee.org/xpls/abs_all.jsp?arnumber=4016176
@@ -12,6 +11,4 @@ CM-Rep is a method for representing 3D biological objects (e.g, lungs, hippocamp
 
 * Pouch, A.M., Tian, S., Takebe, M., Yuan, J., Gorman, R., Cheung, A.T., Wang, H., Jackson, B.M., Gorman, J.H., Gorman, R.C. and Yushkevich, P.A., 2015. Medially constrained deformable modeling for segmentation of branching medial structures: Application to aortic valve segmentation and morphometry. Medical image analysis, 26(1), pp.217-231. http://www.sciencedirect.com/science/article/pii/S1361841515001401
 
-## Documentation:
-
-* https://cmrep.readthedocs.io/
+* Yushkevich, P.A., Aly, A., Wang, J., Xie, L., Gorman, R.C., Younes, L. and Pouch, A.M., 2019, June. Diffeomorphic Medial Modeling. In International Conference on Information Processing in Medical Imaging (pp. 208-220). Springer, Cham. https://arxiv.org/pdf/1902.02371 
