@@ -13,3 +13,6 @@ Thumbs.db
 CMakeLists.txt.user*
 CTestConfig.cmake.user*
 *.autosave
+
+# Sphinx
+docs/build
