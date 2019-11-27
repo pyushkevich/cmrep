@@ -1,4 +1,4 @@
-Grid.Model.Atom.SubdivisionLevel = 2
+Grid.Model.Atom.SubdivisionLevel = 1
 Grid.Model.Coefficient.FileName = t001_template_brute.vtk
 Grid.Model.Coefficient.FileType = VTK
 Grid.Model.SolverType = BruteForce

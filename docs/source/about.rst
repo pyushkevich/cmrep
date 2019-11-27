@@ -1,6 +1,6 @@
-*******
+************
 About CM-Rep
-*******
+************
 CM-Rep is a method for representing 3D biological objects (e.g, lungs, hippocampi) using a deformable model with predefined medial axis geometry. It allows the shape of these objects to be analyzed in terms of features derived from the medial axis, such as regional thickness. For more about the cm-rep methods, see these citations:
 
 * Yushkevich, P.A., Zhang, H. and Gee, J.C., 2006. Continuous medial representation for anatomical structures. IEEE transactions on medical imaging, 25(12), pp.1547-1564. http://ieeexplore.ieee.org/xpls/abs_all.jsp?arnumber=4016176
