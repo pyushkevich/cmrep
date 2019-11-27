@@ -12,6 +12,7 @@ Continuous Medial Representation (CM-Rep) Documentation
 
    about
    building
+   quickstart
 
 
 
