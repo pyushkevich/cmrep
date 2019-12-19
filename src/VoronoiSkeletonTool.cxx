@@ -37,6 +37,8 @@
 #include <vnl/vnl_cross.h>
 #include <vtkLinearSubdivisionFilter.h>
 #include <vtkLoopSubdivisionFilter.h>
+#include <vtkUnstructuredGrid.h>
+#include <vtkUnstructuredGridWriter.h>
 
 #include <itkOrientedRASImage.h>
 #include <itkImageFileReader.h>
@@ -68,6 +70,15 @@ void WriteVTKData(vtkPolyData *data, string fn)
   writer->SetInputData(data);
   writer->Update();
 }
+
+void WriteVTKData(vtkUnstructuredGrid *data, string fn)
+{
+  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
+  writer->SetFileName(fn.c_str());
+  writer->SetInputData(data);
+  writer->Update();
+}
+
 vtkPolyData *ReadVoronoiOutput(
   string fn,                  // Filename from which to read the points
   vtkBoundingBox *bbox,
@@ -278,6 +289,10 @@ int usage()
   cout << "                         The effect is to reduce the number of vertices in the skeleton" << endl;
   cout << "                         Parameter n_bins is the number of bins in each dimension" << endl;
   cout << "                         A good value for n_bins is 20-50" << endl;
+  cout << "    -d mesh.vtk          Generate a Delaunay tetrahedralization of the input point set, with" << endl;
+  cout << "                         the pruned parts of the skeleton excluded. Use with tetfill to generate" << endl;
+  cout << "                         a thickness map in image space (different from -I output, this is " << endl;
+  cout << "                         distance from the skeleton vertices to the boundary generator points" << endl;
   cout << "Other Options: " << endl;
   cout << "    -S image array mode  Sample from image 'image' and store as array 'array'" << endl;
   cout << "                         mode is one of 'mean', 'max'. Must be used together with -T command" << endl;
@@ -302,6 +317,7 @@ int main(int argc, char *argv[])
   // Command line arguments
   string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi", fnOutThickness;
   string fnImgRef, fnImgThick, fnImgDepth;
+  string fnTetraMesh;
   double xPrune = 2.0, xSearchTol = 1e-6;
   int nComp = 0, nDegrees = 0, nRandSamp = 0, nBins = 0;
   bool flagGeodFull = false;
@@ -386,6 +402,10 @@ int main(int argc, char *argv[])
       nRandSamp = atoi(argv[++iArg]);
       fnXYZ = argv[++iArg];
       fnDist = argv[++iArg];
+      }
+    else if(arg == "-d")
+      {
+      fnTetraMesh = argv[++iArg];
       }
     else
       {
@@ -482,6 +502,19 @@ int main(int argc, char *argv[])
   // Create an array of points
   vtkPoints *pts = vtkPoints::New();
   pts->SetNumberOfPoints(nv);
+
+  // Create a point array to hold radius information. The radius of the MIB
+  // is computed as distance from vertices of Voronoi cells to generating
+  // points.
+  vtkDoubleArray *daPointRadius = vtkDoubleArray::New();
+  daPointRadius->SetNumberOfComponents(1);
+  daPointRadius->SetNumberOfTuples(nv);
+  daPointRadius->SetName("VoronoiRadius");
+  daPointRadius->FillComponent(0, ::NAN);
+
+  // Set of tetrahedra corresponding to the Voronoi triangulation
+  typedef std::set<size_t> Hedron;
+  std::vector<Hedron> hedra(nv);
 
   // Create an array of in/out flags
   bool *ptin = new bool[nv];
@@ -615,6 +648,26 @@ int main(int argc, char *argv[])
 
         // add the pair of generators
         pgen.push_back(make_pair(ip1, ip2)); // TODO: is this numbering 0-based?
+
+
+        // For each vertex of the cell, add the generating points to its (tetra)hedra
+        for(size_t k = 0; k < m; k++)
+          {
+          hedra[ids[k]].insert(ip1);
+          hedra[ids[k]].insert(ip2);
+          }
+
+        // Compute the radius at each vertex of the cell
+        for(size_t k = 0; k < m; k++)
+          {
+          size_t v = ids[k];
+          vnl_vector_fixed<double, 3> Vk(pts->GetPoint(v));
+          vnl_vector_fixed<double, 3> G(bnd->GetPoint(ip1));
+          double r = (Vk - G).magnitude();
+          double r_old = daPointRadius->GetComponent(v, 0);
+          if(::isnan(r_old))
+            daPointRadius->SetComponent(v, 0, r);
+          }
         }
       }
 
@@ -639,6 +692,33 @@ int main(int argc, char *argv[])
     } 
   remove(fnPoints);
 
+  // Did we get tetrahedra?
+  if(fnTetraMesh.size()) 
+    {
+    vtkUnstructuredGrid *testtet = vtkUnstructuredGrid::New();
+    testtet->SetPoints(bnd->GetPoints());
+
+    vtkDoubleArray *tetrad = vtkDoubleArray::New();
+    tetrad->SetNumberOfComponents(1);
+    tetrad->SetName("VoronoiRadius");
+    testtet->GetCellData()->AddArray(tetrad);
+    for(unsigned int i = 0; i < nv; i++)
+      {
+      if(hedra[i].size() == 4)
+        {
+        vtkIdType tetids[4];
+        Hedron::const_iterator hit = hedra[i].begin();
+        for(unsigned int j = 0; j < 4; j++, hit++)
+          tetids[j] = *hit;
+        testtet->InsertNextCell(VTK_TETRA, 4, tetids);
+        tetrad->InsertNextTuple1(daPointRadius->GetComponent(i, 0));
+        }
+      }
+
+    // Write the tetrahedra
+    WriteVTKData(testtet, fnTetraMesh.c_str());
+    }
+
   // Create the vtk poly data
   vtkPolyData *skel = vtkPolyData::New();
   skel->SetPoints(pts);
@@ -646,6 +726,7 @@ int main(int argc, char *argv[])
   skel->GetCellData()->AddArray(daRad);
   skel->GetCellData()->AddArray(daGeod);
   skel->GetCellData()->AddArray(daPrune);
+  skel->GetPointData()->AddArray(daPointRadius);
   skel->BuildCells();
   skel->BuildLinks();
 
