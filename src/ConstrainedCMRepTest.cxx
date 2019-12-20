@@ -997,7 +997,8 @@ void SaveBoundaryMesh(const char *file,
     rad->InsertNextTuple1(R[j]->Evaluate());
     mix->InsertNextTuple1(j);
     mult->InsertNextTuple1(mtbIndex[j].size());
-    sdepth->InsertNextTuple1(subDepth[i]);
+    if(subDepth.size())
+      sdepth->InsertNextTuple1(subDepth[i]);
     }
 
   vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
@@ -1007,7 +1008,9 @@ void SaveBoundaryMesh(const char *file,
   pd->GetPointData()->AddArray(mix);
   pd->GetPointData()->AddArray(mult);
   pd->GetPointData()->AddArray(rad);
-  pd->GetPointData()->AddArray(sdepth);
+
+  if(subDepth.size())
+    pd->GetPointData()->AddArray(sdepth);
 
   for(int i = 0; i < bmesh->triangles.size(); i++)
     {
@@ -1200,14 +1203,16 @@ void BCMTemplate::Save(const char *file)
     {
     pts->InsertNextPoint(x[i].data_block());
     mix->InsertNextTuple1(mIndex[i]);
-    sdepth->InsertNextTuple1(subDepth[i]);
+    if(subDepth.size())
+      sdepth->InsertNextTuple1(subDepth[i]);
     }
 
   vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
   pd->Allocate(bmesh.triangles.size());
   pd->SetPoints(pts);
   pd->GetPointData()->AddArray(mix);
-  pd->GetPointData()->AddArray(sdepth);
+  if(subDepth.size())
+    pd->GetPointData()->AddArray(sdepth);
   
   if(Nx.size())
     {
