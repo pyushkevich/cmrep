@@ -39,22 +39,29 @@ IF(USE_PARDISO)
     ADD_DEFINITIONS(-DHAVE_PARDISO -DPARDISO_DYNLOAD)  
   ELSE(WIN32)
 
+    # On Linux, Lapack is also required
+    INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
+
     # Search for PARDISO
     FIND_LIBRARY(PARDISO_LIB pardiso DOC "The location of the PARDISO shared library")
     IF(PARDISO_LIB)
       ADD_DEFINITIONS(-DHAVE_PARDISO)
       SET(SOLVER_SRC src/PardisoInterface.cxx)
+
+      FIND_LIBRARY(GOMP_LIB gomp DOC "The location of the libgomp library")
+      IF(NOT GOMP_LIB)
+        MESSAGE(ERROR "GNU OpenMP (gomp) library required for PARDISO")
+      ENDIF(NOT GOMP_LIB) 
+
+      IF(NOT LAPACK_LIB)
+        MESSAGE(ERROR "Lapack is required for PARDISO")
+      ENDIF(NOT LAPACK_LIB)
+
+      # Set the PDE libraries variable
+      SET(PDE_LIBS ${PARDISO_LIB} ${LAPACK_LIB} ${GOMP_LIB})
+      MESSAGE(STATUS "PDE_LIBS: ${PDE_LIBS}")
     ENDIF(PARDISO_LIB)  
 
-    # On Linux, Lapack is also required
-    INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
-
-    FIND_LIBRARY(GOMP_LIB gomp DOC "The location of the libgomp library")
-
-    # Set the PDE libraries variable
-    IF(PARDISO_LIB AND LAPACK_FOUND)
-      SET(PDE_LIBS ${PARDISO_LIB} ${LAPACK_LIBS} ${GOMP_LIB})
-    ENDIF(PARDISO_LIB AND LAPACK_FOUND)
 
   ENDIF(WIN32)
 ELSE(USE_PARDISO)
@@ -82,7 +89,7 @@ IF(USE_TAUCS)
 
     # Set the PDE libraries variable
     IF(TAUCS_LIB AND LAPACK_FOUND AND METIS_LIB)
-      SET(PDE_LIBS ${TAUCS_LIB} ${LAPACK_LIBS} ${METIS_LIB})
+      SET(PDE_LIBS ${TAUCS_LIB} ${LAPACK_LIB} ${METIS_LIB})
     ENDIF(TAUCS_LIB AND LAPACK_FOUND AND METIS_LIB)
 
   ENDIF(TAUCS_BUILD_DIR)
@@ -159,6 +166,15 @@ IF(USE_NLOPT)
   INCLUDE_DIRECTORIES(${NLOPT_INCLUDE_DIRS})
   GET_FILENAME_COMPONENT(NLOPT_LIBRARY_DIR ${NLOPT_LIBRARIES} DIRECTORY)
 ENDIF(USE_NLOPT)
+
+# VCG library (for some mesh utilities, like Taubin smooth)
+OPTION(USE_VCG "Use the VCG mesh geometry library (for some utilities)")
+IF(USE_VCG)
+  FIND_PATH(VCGLIB_DIR NAMES vcg/simplex/vertex/base.h)
+  IF(VCGLIB_DIR)
+    INCLUDE_DIRECTORIES(${VCGLIB_DIR} ${VCGLIB_DIR}/eigenlib)
+  ENDIF(VCGLIB_DIR)
+ENDIF(USE_VCG)
 
 # Include subdirectories
 SUBDIRS(extras/toms611)
@@ -372,11 +388,40 @@ IF(BUILD_UTILS)
 
   ADD_EXECUTABLE(warpmesh src/util/WarpMeshBackwards.cxx)
 
+  # This is a one-off tool for sampling from skeleton tetra meshes
+  ADD_EXECUTABLE(skel_tetra_max_thick_sphere src/util/SkelTetraMaxThicknessSphere.cxx)
+
+  # VCG-based utilities
+  IF(USE_VCG)
+    ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
+    ADD_EXECUTABLE(mesh_poisson_sample src/util/MeshPoissonSample.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
+    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} mesh_smooth_curv mesh_poisson_sample)
+  ENDIF(USE_VCG)
+
   # Add to the list of binaries
   SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 
     sphere_splat vtkprocrustes vtklevelset vtkcontour
     mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
-    meshglm meshcluster meshdiff warpmesh)
+    meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere)
+
+  # Tetrahedron tools
+  ADD_EXECUTABLE(tetdumpattr src/util/TetDumpAttr.cxx)
+  ADD_EXECUTABLE(tetfill src/util/TetraFill.cxx)
+  ADD_EXECUTABLE(tetjac src/util/TetJacobian.cxx)
+  ADD_EXECUTABLE(tetmergearr src/util/MergeVTKArrays.cxx)
+  ADD_EXECUTABLE(tetsample src/util/TetSampleImage.cxx)
+
+  # TetGen tetra tools
+  IF(USE_TETGEN)
+    ADD_EXECUTABLE(tetgen2vtk 
+      src/util/TetGenToVTK.cxx src/util/ReadWriteVTK.cxx src/util/TetraLib.cxx)
+    ADD_EXECUTABLE(surf2tet
+      src/util/SurfMesh2VolMesh.cxx src/util/ReadWriteVTK.cxx src/util/TetraLib.cxx)
+    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} tetgen2vtk surf2tet)
+  ENDIF(USE_TETGEN)
+
+  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS}
+    tetdumpattr tetfill tetjac tetmergearr tetsample)
 
 ENDIF(BUILD_UTILS)
 

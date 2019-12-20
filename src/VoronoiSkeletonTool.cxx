@@ -702,6 +702,12 @@ int main(int argc, char *argv[])
     tetrad->SetNumberOfComponents(1);
     tetrad->SetName("VoronoiRadius");
     testtet->GetCellData()->AddArray(tetrad);
+
+    vtkDoubleArray *tetra_ctr = vtkDoubleArray::New();
+    tetra_ctr->SetNumberOfComponents(3);
+    tetra_ctr->SetName("VoronoiCenter");
+    testtet->GetCellData()->AddArray(tetra_ctr);
+
     for(unsigned int i = 0; i < nv; i++)
       {
       if(hedra[i].size() == 4)
@@ -712,6 +718,9 @@ int main(int argc, char *argv[])
           tetids[j] = *hit;
         testtet->InsertNextCell(VTK_TETRA, 4, tetids);
         tetrad->InsertNextTuple1(daPointRadius->GetComponent(i, 0));
+
+        double *ctr = pts->GetPoint(i);
+        tetra_ctr->InsertNextTuple3(ctr[0], ctr[1], ctr[2]);
         }
       }
 

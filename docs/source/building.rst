@@ -75,6 +75,7 @@ PARDISO
 Sparse solver, needed for PDE-based cm-rep programs (2005 IPMI, 2008 NeuroImage)
 * Download from https://www.pardiso-project.org/
 * Get license and follow instructions for how to use it
+* The easiest is to put the library into ``/usr/local/lib``
 
 
 Building CM-Rep
@@ -102,6 +103,12 @@ Building CM-Rep
   * ``TETGEN_INCLUDE_DIR:`` (e.g., ``/home/pauly/tk/tetgen``)
   * ``NLOPT_LIBRARIES:`` (e.g., ``/home/pauly/tk/nlopt/build/lib/libnlopt.so``)
   * ``NLOPT_INCLUDE_DIRS:`` (e.g., ``/home/pauly/tk/nlopt/include``)
+
+* When using PARDISO:
+
+  * ``PARDISO_LIB`` (point to the shared library)
+  * ``LAPACK_LIB`` (point to the system Lapack)
+  * ``GOMP_LIB`` (point to the system GOMP: GNU OpenMP library)
   
 * Set compilation flags:
 

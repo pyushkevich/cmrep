@@ -19,11 +19,11 @@ warpmesh template_fix_fit2tmp_bnd.vtk procrustes_template_fix_fit2tmp_bnd.vtk pr
 warpmesh template_fix_fit2tmp_med.vtk procrustes_template_fix_fit2tmp_med.vtk proc.mat
 
 # Fit the template to target using lsq and then icp
-./contest -lsq ./procrustes_template_fix_fit2tmp_bnd.vtk $CMR_TARGET \
+contest -lsq ./procrustes_template_fix_fit2tmp_bnd.vtk $CMR_TARGET \
   -reg-weight 10 -reg-ss 1 -o deform_template.vtk \
   -mc 20 135 0.25
 
-./contest -icp ./deform_template_fit2tmp_bnd.vtk $CMR_TARGET \
+contest -icp ./deform_template_fit2tmp_bnd.vtk $CMR_TARGET \
   -reg-weight 10 -reg-ss 1 -o icp_template.vtk \
   -mc 20 135 0.25
 

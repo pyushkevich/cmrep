@@ -16,11 +16,29 @@ This example will fit a cm-rep model of the hippocampus to a binary image::
 
     ./cmrep_fit $CMREP_SRC/testing/t001_param.txt \
       $CMREP_SRC/testing/t001_template_brute.cmrep \
-      $CMREP_SRC/testing/t001_img_binary.nii.gz test_brute
+      $CMREP_SRC/testing/t001_img_binary.nii.gz \
+      test_brute
       
 Fitting is done in four stages (align by moments, affine, coarse deformable, fine deformable). Output cm-rep models are in ``test_brute/cmrep`` and full-resolution medial and boundary meshes are in ``test_brute/mesh``. Below the fitting is visualized in ParaView.
 
 .. image:: images/test1_paraview.png
    :align: center
    
+PDE-Based CM-Rep Model
+======================
+
+This model from the 2008 NeuroImage paper uses the biharmonic PDE to implement cm-rep geometric constraints. To use it, you must enable ``PARDISO`` and have an up to date PARDISO license. 
+
+This example will fit a cm-rep model of a caudate to a binary image::
+
+    ./cmrep_fit $CMREP_SRC/testing/caudate_pde_param.txt \
+      $CMREP_SRC/testing/caudate_pde_model.cmrep \
+      $CMREP_SRC//testing/caudate_target.nii.gz \
+      test_caudate
+
+Fitting is done in two stages (align by moments, deformable). Output cm-rep models are in ``test_brute/cmrep`` and full-resolution medial and boundary meshes are in ``test_brute/mesh``. Below the fitting is visualized in ParaView.
+
+.. image:: images/test2_paraview.png
+   :align: center
    
+
