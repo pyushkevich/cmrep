@@ -17,6 +17,7 @@
 #include "vtkCleanPolyData.h"
 #include "vtkTriangleFilter.h"
 #include "vtkCell.h"
+#include "vtkContourFilter.h"
 
 #include "MeshTraversal.h"
 
@@ -33,6 +34,7 @@ int usage()
   cout << "  -v                 : export mesh in voxel coordinates (not physical)" << endl;
   cout << "  -k                 : apply clean filter to the mesh" << endl;
   cout << "  -d                 : perform Delaunay edge flipping" << endl;
+  cout << "  -2                 : use 2D algorithm" << endl;
   return -1;
 }
 
@@ -85,7 +87,7 @@ int main(int argc, char *argv[])
   // Clip image
   const char *imClip = NULL;
   bool voxelSpace = false;
-  bool flag_clean = false, flag_delaunay = false;
+  bool flag_clean = false, flag_delaunay = false, flag_2d = false;
   for(int i = 1; i < argc - 3; i++)
     {
     if(!strcmp(argv[i], "-c"))
@@ -104,7 +106,11 @@ int main(int argc, char *argv[])
       {
       flag_clean = true;
       }
-    else 
+    else if(!strcmp(argv[i], "-2"))
+      {
+      flag_2d = true;
+      }
+    else
       { 
       cerr << "Unknown option " << argv[i] << endl;
       return -1;
@@ -141,16 +147,31 @@ int main(int argc, char *argv[])
   ConnectITKToVTK(fltExport.GetPointer(), fltImport);
 
   // Run marching cubes on the input image
-  vtkMarchingCubes *fltMarching = vtkMarchingCubes::New();
-  fltMarching->SetInputConnection(fltImport->GetOutputPort());
-  fltMarching->ComputeScalarsOff();
-  fltMarching->ComputeGradientsOff();
-  fltMarching->ComputeNormalsOn();
-  fltMarching->SetNumberOfContours(1);
-  fltMarching->SetValue(0,cut);
-  fltMarching->Update();
-
-  vtkPolyData *pipe_tail = fltMarching->GetOutput();
+  vtkPolyData *pipe_tail;
+  if(!flag_2d)
+    {
+    vtkMarchingCubes *fltMarching = vtkMarchingCubes::New();
+    fltMarching->SetInputConnection(fltImport->GetOutputPort());
+    fltMarching->ComputeScalarsOff();
+    fltMarching->ComputeGradientsOff();
+    fltMarching->ComputeNormalsOn();
+    fltMarching->SetNumberOfContours(1);
+    fltMarching->SetValue(0,cut);
+    fltMarching->Update();
+    pipe_tail = fltMarching->GetOutput();
+    }
+  else
+    {
+    vtkContourFilter *fltContour = vtkContourFilter::New();
+    fltContour->SetInputConnection(fltImport->GetOutputPort());
+    fltContour->ComputeScalarsOff();
+    fltContour->ComputeGradientsOff();
+    fltContour->ComputeNormalsOn();
+    fltContour->SetNumberOfContours(1);
+    fltContour->SetValue(0,cut);
+    fltContour->Update();
+    pipe_tail = fltContour->GetOutput();
+    }
 
   // If the clean option is requested, use it
   if(flag_clean || flag_delaunay) 

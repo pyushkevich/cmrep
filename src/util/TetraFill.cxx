@@ -19,7 +19,6 @@
 #include <vnl/vnl_matrix_fixed.h>
 #include <vnl/vnl_det.h>
 #include "ReadWriteVTK.h"
-#include "TetraLib.h"
 
 #include <itkVectorImage.h>
 #include "itkImageFileReader.h"

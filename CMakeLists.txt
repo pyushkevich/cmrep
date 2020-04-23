@@ -391,6 +391,9 @@ IF(BUILD_UTILS)
   # This is a one-off tool for sampling from skeleton tetra meshes
   ADD_EXECUTABLE(skel_tetra_max_thick_sphere src/util/SkelTetraMaxThicknessSphere.cxx)
 
+  # This uses triangle library to triangulate a 2d contour
+  ADD_EXECUTABLE(contour2surf src/util/ContourMesh2SurfMesh.cxx src/util/ReadWriteVTK.cxx)
+
   # VCG-based utilities
   IF(USE_VCG)
     ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
