@@ -510,7 +510,7 @@ int main(int argc, char *argv[])
   daPointRadius->SetNumberOfComponents(1);
   daPointRadius->SetNumberOfTuples(nv);
   daPointRadius->SetName("VoronoiRadius");
-  daPointRadius->FillComponent(0, ::NAN);
+  daPointRadius->FillComponent(0, NAN);
 
   // Set of tetrahedra corresponding to the Voronoi triangulation
   typedef std::set<size_t> Hedron;
