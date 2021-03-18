@@ -123,7 +123,13 @@ const char *usage_text =
   "                 NOTE: on some operating systems NaNs can only be read from VTK\n"
   "                 meshes in binary (not ASCII) format.\n"
   "  -B / --binary  Write output meshes in binary format. This is turned on automatically\n"
-  "                 when the -M flag is supplied\n";
+  "                 when the -M flag is supplied\n"
+  "  -f / --flane   Use the Freedman-Lane procedure for permutation testing\n"
+  "  -n / --nuissance nuissance.txt	\n"
+  "		    Optional Freedman-Lane specification. The nuissance vector is 1 x m, where\n"
+  "		    m is the number of independent variables. Nuissance variables should \n"
+  "		    be set to 1. Default specification assumes 0 variables in the \n"
+  "		    contrast vector are nuissance variables. \n";
 
 int usage()
 {
@@ -865,7 +871,7 @@ ClusterArray ComputeClusters(
   vtkSmartPointer<vtkDataSet> fin = NULL, fout = NULL; 
 
   if (dom == POINT)
-    {
+	{
     // Initialize mesh
     vtkSmartPointer<vtkClipPolyData> fContour = vtkClipPolyData::New();
 
@@ -1160,27 +1166,29 @@ class GeneralLinearModel
 public:
   GeneralLinearModel(
     vtkDataArray *data, vtkDataArray *contrast, 
-    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
+    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta, vtkDataArray *residual,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector);
 
-  void Compute(const vector<int> &permutation, bool need_t, bool need_p);
-  void ComputeWithMissingData(const vector<int> &permutation, bool need_t, bool need_p);
-
+  void Compute(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res);
+  void ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res);
+  //int compute_rank(vnl_matrix <double> D); 
   double PtoT(double p);
+  vnl_matrix<double> Y; // data matrix for permutations
 
 private:
   // Pointers to the data arrays
-  vtkDataArray *data, *contrast, *tstat, *pval, *beta;
+  vtkDataArray *data, *contrast, *tstat, *pval, *beta, *residual;
 
   // Copies of the matrix, other data
-  vnl_matrix<double> X, Y, Xperm, cv;
+  vnl_matrix<double> X,cv;
   int nelt, rank, df;
 };
 
 GeneralLinearModel::GeneralLinearModel(
     vtkDataArray *data, vtkDataArray *contrast, 
     vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
+    vtkDataArray *residual,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector)
 {
@@ -1192,33 +1200,34 @@ GeneralLinearModel::GeneralLinearModel(
   this->beta = beta;
   this->X = design_matrix;
   this->cv = contrast_vector;
+  this->residual = residual;
 
   // Initialize other stuff
   nelt = data->GetNumberOfTuples();
-  Xperm = X;
 
   // Rank and degrees of freedom
-  rank = vnl_rank(X, vnl_rank_row);
+  rank = vnl_rank(X.transpose() * X, vnl_rank_row);
   df = X.rows() - rank;
-
+ 
   // Y matrix
   Y.set_size(X.rows(), nelt);
   for(size_t i = 0; i < X.rows(); i++)
     for(int j = 0; j < nelt; j++)
       Y(i,j) = data->GetComponent(j,i); 
+  
 }
 
 void
-GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool need_p)
+GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res)
 {
-  // Shuffle the rows according to current permutation
-  for (size_t i = 0; i < permutation.size(); i++)
-    for (size_t j = 0; j < X.cols(); j++)
-      Xperm[i][j] = X[permutation[i]][j];
+
+  // Shuffle the rows according to current permutan_resr (size_t i = 0; i < permutation.size(); i++)
+  //  for (size_t j = 0; j < X.cols(); j++)
+  //    	Xperm[i][j] = X[permutation[i]][j];
 
   // Standard GLM calculation
-  vnl_matrix<double> A = vnl_matrix_inverse<double>(Xperm.transpose() * Xperm).pinverse(rank);
-  vnl_matrix<double> bhat = (A * Xperm.transpose()) * Y;
+  vnl_matrix<double> A = vnl_matrix_inverse<double>(X.transpose() * X).pinverse(rank);
+  vnl_matrix<double> bhat = (A * X.transpose()) * Y;
   
   // Compute the contrast
   vnl_matrix<double> res = cv * bhat;
@@ -1233,17 +1242,30 @@ GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool ne
   // The rest only if we need the t-stat
   if(need_t)
     {
-    vnl_matrix<double> errmat = Y - Xperm * bhat;
-
+    vnl_matrix<double> errmat = Y - X * bhat;
+    
     // Residual variance
     vnl_matrix<double> resvar(1, nelt);
     resvar.fill(0.0);
     for(int j = 0; j < nelt; j++)
        {
-       for(size_t i = 0; i < Xperm.rows(); i++)
+       for(size_t i = 0; i < X.rows(); i++)
           resvar(0, j) += errmat(i,j) * errmat(i,j);
+       if(j==0){
+	 std::cout << "res_mag" << resvar(0,j) << std::endl;
+	std::cout << "df" << df << std::endl;
+	}
        resvar(0, j) = resvar(0, j) / (double) df;
        }
+
+    //if we need the residual, copy to the output vector
+    if(need_res)
+    {	
+      for (int j = 0; j< nelt; j++)
+      {
+      residual->SetTuple(j, errmat.get_column(j).data_block());
+      }
+    }
 
     // Compute t-stat / p-value
     vnl_matrix<double> den(1, nelt);
@@ -1259,43 +1281,44 @@ GeneralLinearModel::Compute(const vector<int> &permutation, bool need_t, bool ne
         }
       }
     }
+
 }
 
 void
-GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool need_t, bool need_p)
+GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res)
 {
   // Shuffle the rows according to current permutation
-  for (size_t i = 0; i < permutation.size(); i++)
-    for (size_t j = 0; j < X.cols(); j++)
-      Xperm[i][j] = X[permutation[i]][j];
+  //for (size_t i = 0; i < permutation.size(); i++)
+  //  for (size_t j = 0; j < X.cols(); j++)
+  //    Xperm[i][j] = X[permutation[i]][j];
 
   // Number of subjects
-  int ns = Y.rows();
+  int ns = Yperm.rows();
 
   // Matrix A
   vnl_matrix<double> A, Xj, AXjT;
   vnl_vector<double> Yj;
-  int df_j;
   double cv_A_cvT;
 
   // Iterate over all the elements
   for (int j = 0; j < nelt; j++)
     {
+    
     bool same_pattern = true;
     int n_nans = 0;
 
     // Determine which elements have missing data (nan) and if that matches the last element we processed
     for(int k = 0; k < ns; k++)
       {
-      if(vnl_math::isnan(Y(k, j))) 
+      if(vnl_math::isnan(Yperm(k, j))) 
         {
         n_nans++;
-        if(j == 0 || !vnl_math::isnan(Y(k,j-1)))
+        if(j == 0 || !vnl_math::isnan(Yperm(k,j-1)))
           same_pattern = false;
         }
       else
         {
-        if(j == 0 || vnl_math::isnan(Y(k,j-1)))
+        if(j == 0 || vnl_math::isnan(Yperm(k,j-1)))
           same_pattern = false;
         }
       }
@@ -1304,48 +1327,62 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
     if(!same_pattern) 
       {
       // Copy rows from Xperm into Xj
-      Xj.set_size(ns - n_nans, Xperm.cols());
+      Xj.set_size(ns - n_nans, X.cols());
       for(int k = 0, p = 0; k < ns; k++)
-        if(!vnl_math::isnan(Y(k,j)))
-          Xj.set_row(p++, Xperm.get_row(k));
+        if(!vnl_math::isnan(Yperm(k,j)))
+          Xj.set_row(p++, X.get_row(k));
 
-      // Compute A
+      
+      // Compute A - should be Xj?
       A = vnl_matrix_inverse<double>(Xj.transpose() * Xj).pinverse(rank);
       AXjT = A * Xj.transpose();
 
       // Compute cv * A * cv^T
       cv_A_cvT = (cv * (A * cv.transpose()))(0,0);
-
-      // Compute the DF for this observation
-      rank = vnl_rank(Xj, vnl_rank_row);
-      df_j = Xj.rows() - rank;
-
+	
       // Resize Y
       Yj.set_size(ns - n_nans);
-      }
+	}
 
     // Copy the Y vector's elements into Yk
     for(int k = 0, p = 0; k < ns; k++)
-      if(!vnl_math::isnan(Y(k,j)))
-        Yj[p++] = Y(k,j);
-
+      if(!vnl_math::isnan(Yperm(k,j)))
+        Yj[p++] = Yperm(k,j);
+    
     // Compute the estimated betas
     vnl_vector<double> beta_j = AXjT * Yj;
 
     // Store in output array
     beta->SetTuple(j, beta_j.data_block());
 
-    // Compute the contrast
+    // Compute the contrast - con_j same as res
     vnl_vector<double> con_j = cv * beta_j;
     contrast->SetTuple1(j, con_j[0]);
+
+  //Compute the degrees of freedom
+  int df_j = Xj.rows()-rank;
 
     // The rest only if we need the t-stat
     if(need_t)
       {
       vnl_vector<double> Xj_beta = Xj * beta_j;
-      vnl_vector<double> residual = Yj - Xj * beta_j;
-      double resvar = residual.squared_magnitude() / (double) df_j;
-
+      vnl_vector<double> res_j = Yj - Xj * beta_j;
+     
+      double resvar = res_j.squared_magnitude() / (double) df_j;
+     
+      //if needed, copy the residuals to the output array
+      if(need_res)
+      {
+	vnl_vector<double> res_j_ns;
+        res_j_ns.set_size(ns);
+	for(int k = 0, p = 0; k < ns; k++)
+      	   if(!vnl_math::isnan(Yperm(k,j)))
+	      res_j_ns[k] = res_j[p++];
+	   else
+	      res_j_ns[k] = NAN;
+	residual->SetTuple(j,res_j_ns.data_block());
+      }
+	
       // Compute t-stat / p-value
       double den = cv_A_cvT * resvar;
       double t = (den > 0) ? con_j[0] / sqrt(den) : 0.0;
@@ -1358,6 +1395,39 @@ GeneralLinearModel::ComputeWithMissingData(const vector<int> &permutation, bool 
       }
     }
 }
+
+
+//int
+//GeneralLinearModel::compute_rank(vnl_matrix<double> D)
+//{
+
+//  int n = D.rows();
+//  int m = D.cols();
+//  const double eps = 1e-9;
+//  int rank = 0;
+//  vector<bool> row_selected(n,false);
+//  for ( int i = 0; i < m; i++){
+//	int j;
+//	for ( j = 0; j < n; j++){
+//		if( !row_selected[j] && abs(D[j][i] > eps))
+//			break;
+//	}
+//	if( j != n){
+//		++rank;
+//		row_selected[j] = true;
+//		for ( int p = i+1; p<m; ++p)
+//			D[j][p] /= D[j][i];
+//		for ( int k = 0; k < n; ++k) {
+//			if ( k != j && abs(D[k][i]) > eps){
+//				for(int p = i+1; p<m; ++p)
+//					D[k][p] -= D[j][p]*D[k][i];
+//			}
+//		}
+//	}
+//}
+//  return rank;
+
+//}
 
 double
 GeneralLinearModel::PtoT(double p)
@@ -1485,6 +1555,9 @@ struct Parameters
   // GLM parameters
   string glm_design, glm_contrast;
 
+  // Freedman-Lane parameters
+  string fl_nuissance;
+
   // T statistic threshold
   double threshold;
 
@@ -1500,13 +1573,16 @@ struct Parameters
   // Whether to write output in binary format
   bool flag_write_binary;
 
+  // Whether to use the freedman-lane procedure
+  bool flag_freedman_lane;
+
   // What is the threshold on
   ThresholdType ttype;
 
   Parameters()
     {
     np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
-    flag_missing_data = false; flag_write_binary = false;
+    flag_missing_data = false; flag_write_binary = false; flag_freedman_lane = false;
     }
 };
 
@@ -1619,30 +1695,32 @@ void ConvertToMeshType(vtkUnstructuredGrid *src, vtkSmartPointer<vtkUnstructured
   trg = src;
 }
 
+
 template <class TMeshType>
 int meshcluster(Parameters &p, bool isPolyData)
 {
-  // Load design matrix and contrast vector files
-  vnl_matrix<double> mat, con;
 
-  try 
-    {
-    mat = vnl_file_matrix<double>(p.glm_design.c_str());
-    }
-  catch(...)
-    {
-    throw MCException("Error reading design matrix from %s", p.glm_design.c_str());
-    }
+// Load design matrix and contrast vector files
+   vnl_matrix<double> mat, con;
 
-  try
-    { 
-    con = vnl_file_matrix<double>(p.glm_contrast.c_str());
-    }
-  catch(...)
-    {
-    throw MCException("Error reading contrast vector from %s", p.glm_contrast.c_str());
-    }
+ try 
+   {
+   mat = vnl_file_matrix<double>(p.glm_design.c_str());
+   }
+ catch(...)
+   {
+   throw MCException("Error reading design matrix from %s", p.glm_design.c_str());
+   }
 
+ try
+  { 
+   con = vnl_file_matrix<double>(p.glm_contrast.c_str());
+  }
+ catch(...)
+  {
+  throw MCException("Error reading contrast vector from %s", p.glm_contrast.c_str());
+  }
+	
   // Check the design matrix for missing values. Currently, we simply throw out the 
   // rows with missing (NaN) values. In the future, we should implement a GLM with 
   // missing data, or just move the whole package to R.
@@ -1678,8 +1756,8 @@ int meshcluster(Parameters &p, bool isPolyData)
 
   if(con.rows() != 1)
     throw MCException("Contrast vector must have one row");
-
-  // Create the shuffle arrays
+ 
+// Create the shuffle arrays
   vector<int> true_order, permutation;
   for(size_t i = 0; i < mat.rows(); i++)
     true_order.push_back(i);
@@ -1692,10 +1770,53 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Names for the statistics arrays
   string an_contrast = "Contrast", an_tstat = "T-statistic";
   string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
-  string an_beta = "Beta";
+  string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance";
 
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
+
+ // Create an array of GLM objects for the reduced model and initialize flm variables
+ vector <GeneralLinearModel *> glm_reduced;
+ vnl_matrix <double> nuiss, nuiss_mat, nuiss_con;
+
+ if(p.flag_freedman_lane){ // If using freedman_lane procedure for permutation testing
+	
+   if(p.fl_nuissance.c_str() == ""){ // check if string is empty, use zero entries in contrast to determine nuissance variables
+
+      nuiss.set_size(1, mat.cols());
+      nuiss.fill(0);
+      for( int i = 0; i < con.cols(); i++)
+         if(con[0][i] == 0)
+           nuiss[0][i] = 1;
+    }
+   else{ // if the user specified the nuissance vector
+    try
+       {
+       nuiss = vnl_file_matrix<double>(p.fl_nuissance.c_str());
+       }
+    catch(...)
+       {
+       throw MCException("Error reading nuissance vector from %s", p.fl_nuissance.c_str());
+       }
+
+      if(nuiss.columns() != mat.columns())
+       throw MCException("Matrix and nuissance vector must have same number of columns");
+
+      if(nuiss.rows() != 1)
+       throw MCException("Nuissance vector must have one row");
+   }
+
+      // Create a design matrix containing only the nuissance variables
+      nuiss_mat.set_size(mat.rows(), nuiss.array_one_norm());
+      int p = 0;
+      for( int i=0, p = 0; i < nuiss.cols(); i++){
+	 if(nuiss[0][i] == 1)
+		nuiss_mat.set_column(p++, mat.get_column(i));
+       }	
+      // Create a contarst matrix of the same size for consistency (not used in computation)
+      nuiss_con.set_size(1, nuiss.array_one_norm());
+      nuiss_con.fill(1);
+  }	
 
   // Read the meshes and initialize statistics arrays
   vector<TMeshType *> mesh;
@@ -1748,9 +1869,16 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, p.ttype != CONTRAST);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
+    vtkFloatArray * residual {0} ;	
+    vtkFloatArray * beta_nuiss {0};
 
     // Create new GLM
-    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, mat, con));
+    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, residual, mat, con));
+
+    if(p.flag_freedman_lane)
+	 residual = AddArrayToMesh(mesh[i], p.dom, an_res, mat.rows(), NAN, false);
+	 beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);	
+	 glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, nuiss_mat, nuiss_con));	
     }
     
   // If the threshold is on the p-value, convert it to a threshold on T-statistic
@@ -1777,25 +1905,79 @@ int meshcluster(Parameters &p, bool isPolyData)
         clustcomp.push_back(new ClusterComputer(mesh[i], p.dom, p.threshold)); 
       }
     }
+ // For Freedman-Lane procedure, need to perform GLM with the reduced model containing only nuissance variables
+   if(p.flag_freedman_lane){
+
+	 for(size_t i = 0; i < mesh.size(); i++)
+ 	{
+	  if(p.flag_missing_data)
+   	     glm_reduced[i]->ComputeWithMissingData(glm_reduced[i]->Y,true, false, true );  
+	  else
+	     glm_reduced[i]->Compute(glm_reduced[i]->Y,true, false, true);
+	}
+   }
 
   // Run permutation analysis
   vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
+   
   for(size_t ip = 0; ip < p.np; ip++)
     {
-    // Initialize the histogram at zero
+
+   // Initialize the histogram at zero
     hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
 
-    // Apply a random permutation to the labels array
+    // Apply a random permutation to the labels array and update P matrix
     random_shuffle(permutation.begin(), permutation.end());
-
+    
     // Build up the histogram of cluster areas (and powers)
     for(size_t i = 0; i < mesh.size(); i++)
       {
-      // Compute statistical arrays using GLM
-      if(p.flag_missing_data)
-        glm[i]->ComputeWithMissingData(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
-      else
-        glm[i]->Compute(permutation, p.ttype != CONTRAST, p.ttype == PVALUE);
+         vnl_matrix <double> Ytrue = glm[i]->Y;
+	 vnl_matrix<double> Yperm = Ytrue;
+
+	// Shuffle the data according to the current permutation
+	
+	if(p.flag_freedman_lane) // Permute Y using nuissance model
+	{
+	 // Read residual array from mesh
+	  vtkDataArray * res = GetArrayFromMesh(mesh[i], p.dom, an_res);
+	  vtkDataArray * beta_n = GetArrayFromMesh(mesh[i], p.dom, an_betan);
+	  vnl_matrix <double> res_mat;
+	  res_mat.set_size(Ytrue.rows(), Ytrue.cols());
+
+	// Shuffle the residuals according to the current permutation
+	  for(size_t i = 0; i < res_mat.rows(); i++)
+    	     for(int j = 0; j < res_mat.cols(); j++)
+      	        res_mat(i,j) = res->GetComponent(j,i);
+
+	  vnl_matrix <double> res_matperm = res_mat;
+	  
+	for (size_t i = 0; i < permutation.size(); i++)
+            res_matperm.set_row(i,res_mat.get_row(permutation[i]));
+	
+	// Read the nuissance model beta values from the mesh
+  	  vnl_matrix <double> beta_nuiss;
+	  beta_nuiss.set_size(nuiss_mat.cols(), Ytrue.cols());
+	  for(size_t i = 0; i < beta_nuiss.rows(); i++)
+             for(int j = 0; j < beta_nuiss.cols(); j++)
+                beta_nuiss(i,j) = beta_n->GetComponent(j,i);
+
+	// Compute the permuted values 
+	  
+	Yperm = res_matperm + nuiss_mat*beta_nuiss; 
+	}
+	else
+	{
+         for (size_t i = 0; i < permutation.size(); i++)
+            Yperm.set_row(i,Ytrue.get_row(permutation[i]));
+	}
+	
+	if(p.flag_missing_data){
+            glm[i]->ComputeWithMissingData(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+        }
+	else{
+            glm[i]->Compute(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+       	}
 
       // Generate a list of clusters (based on current scalars)
       if(p.threshold > 0)
@@ -1819,7 +2001,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     cout << "." << flush;
     if((ip+1) % 100 == 0 || (ip+1) == p.np) 
       cout << " " << ip+1 << endl;
-    }
+ } // end of permutation loop
 
   // Sort the histograms
   sort(hArea.begin(), hArea.end());
@@ -1833,9 +2015,9 @@ int meshcluster(Parameters &p, bool isPolyData)
 
     // Compute GLM (get all arrays, this is for keeps)
     if(p.flag_missing_data)
-      glm[i]->ComputeWithMissingData(true_order, true, true);
+      glm[i]->ComputeWithMissingData(glm[i]->Y, true, true, false);
     else
-      glm[i]->Compute(true_order, true, true);
+     glm[i]->Compute(glm[i]->Y, true, true, false);
 
     // The rest is done only if permutations > 0
     if(p.np > 0)
@@ -1997,6 +2179,15 @@ int main(int argc, char *argv[])
         p.glm_design = argv[++i];
         p.glm_contrast = argv[++i];
         }
+      else if(arg == "-fl" || arg == "--freedmanlane")
+	{
+	p.flag_freedman_lane = true;
+	p.fl_nuissance = "";
+	}
+      else if(arg == "-n" || arg == "--nuiss")
+	{
+	p.fl_nuissance = argv[++i];
+	}
       else if(arg == "-c" || arg == "--cell")
         {
         p.dom = CELL;
