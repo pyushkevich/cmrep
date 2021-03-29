@@ -40,7 +40,7 @@ int main(int argc, char **argv)
   if(argc < 3) return usage();
 
   // Read the mesh
-  in.load_tetmesh(argv[1]);
+  in.load_tet(argv[1]);
 
   // Write to a mesh
   WriteTetgenOutputAsUnstructuredMesh(in, argv[2]);
