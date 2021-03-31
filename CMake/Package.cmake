@@ -48,16 +48,61 @@ SET(CPACK_RESOURCE_FILE_LICENSE "${CMREP_SOURCE_DIR}/COPYING")
 IF(WIN32 AND NOT UNIX)
 
   SET(CPACK_GENERATOR "ZIP")
+  SET(CPACK_EXTENSION "zip")
 
 ELSE(WIN32 AND NOT UNIX)
 
   # Set the generator to either STGZ or Apple
   IF(NOT APPLE)
     SET(CPACK_GENERATOR "TGZ")
+    SET(CPACK_EXTENSION "tar.gz")
   ELSE(NOT APPLE)
     SET(CPACK_GENERATOR "ZIP")
+    SET(CPACK_EXTENSION "zip")
   ENDIF(NOT APPLE)
 
 ENDIF(WIN32 AND NOT UNIX)
 
+#--------------------------------------------------------------------------------
+# Uploading code to SourceForge
+#--------------------------------------------------------------------------------
+
+#--------------------------------------------------------------------------------
+# Configure SCP
+
+FIND_PROGRAM(SCP_PROGRAM NAMES scp DOC "Location of the scp program (optional)")
+MARK_AS_ADVANCED(SCP_PROGRAM)
+
+SET(SCP_ARGUMENTS "-v" CACHE STRING "Optional arguments to the scp command for uploads to SourceForge")
+MARK_AS_ADVANCED(SCP_ARGUMENTS)
+
+SET(SCP_USERNAME "" CACHE STRING "SourceForge.net account id for uploads")
+MARK_AS_ADVANCED(SCP_USERNAME)
+
+SET(NIGHTLY_TARGET "cmrep-nightly-${CPACK_SYSTEM_NAME}.${CPACK_EXTENSION}")
+SET(EXPERIMENTAL_TARGET "cmrep-experimental-${CPACK_SYSTEM_NAME}.${CPACK_EXTENSION}")
+
+SET(SCP_ROOT "frs.sourceforge.net:/home/frs/project/c/cm/cmrep/cmrep")
+
+#--------------------------------------------------------------------------------
+# Create targets
+
+SET(CPACK_PACKAGE_FILE_NAME_WEXT "${CPACK_PACKAGE_FILE_NAME}.${CPACK_EXTENSION}")
+
+ADD_CUSTOM_TARGET(cmrep_upload_nightly
+  VERBATIM COMMAND "${SCP_PROGRAM}" ${SCP_ARGUMENTS}
+  ${CPACK_PACKAGE_FILE_NAME_WEXT} ${SCP_USERNAME},itk-snap@${SCP_ROOT}/Nightly/${NIGHTLY_TARGET}
+  DEPENDS ${CPACK_TARGET}
+  WORKING_DIRECTORY ${CMREP_BINARY_DIR}
+  COMMENT "Uploading package ${CPACK_PACKAGE_FILE_NAME_WEXT} to SourceForge.net as ${NIGHTLY_TARGET}")
+
+ADD_CUSTOM_TARGET(cmrep_upload_experimental
+  VERBATIM COMMAND "${SCP_PROGRAM}" ${SCP_ARGUMENTS} 
+    ${CPACK_PACKAGE_FILE_NAME_WEXT} ${SCP_USERNAME},itk-snap@${SCP_ROOT}/Experimental/${EXPERIMENTAL_TARGET}
+  DEPENDS ${CPACK_TARGET}
+  WORKING_DIRECTORY ${CMREP_BINARY_DIR}
+  COMMENT "Uploading package ${CPACK_PACKAGE_FILE_NAME_WEXT} to SourceForge.net as ${EXPERIMENTAL_TARGET}")
+
+
+# This has to be at the end
 INCLUDE(CPack)
