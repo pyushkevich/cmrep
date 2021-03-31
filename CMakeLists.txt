@@ -31,6 +31,18 @@ SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
 # Keep track of all binaries that will be compiled
 SET(CMREP_BINARY_TOOLS "")
 
+# Optionally, use Eigen (provides sparse solvers)
+OPTION(USE_EIGEN "Use the EIGEN sparse solvers" OFF)
+IF(USE_EIGEN)
+  FIND_PACKAGE (Eigen3 3.3 REQUIRED)
+  IF(EIGEN3_FOUND)
+    ADD_DEFINITIONS(-DHAVE_EIGEN)
+    SET(PDE_LIBS Eigen3::Eigen)
+    SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+    INCLUDE_DIRECTORIES(${EIGEN3_INCLUDE_DIR})
+  ENDIF(EIGEN3_FOUND)
+ENDIF(USE_EIGEN)
+
 # Optionally, support PARDISO
 OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
 IF(USE_PARDISO)
