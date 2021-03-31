@@ -39,8 +39,18 @@ SparseSolver
     MKLSolverInterface::UNSYMMETRIC);
 }
 
+#elif HAVE_EIGEN
 
+#include "EigenSolverInterface.h"
 
+SparseSolver* 
+SparseSolver
+::MakeSolver(bool symmetric)
+{
+  return new EigenSolverInterface(symmetric ? 
+    EigenSolverInterface::SPD : 
+    EigenSolverInterface::UNSYMMETRIC);
+}
 
 #else
 
