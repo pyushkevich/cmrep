@@ -20,6 +20,9 @@ int usage()
   cout << "  -r file.vtk    Use file as reference geometry (default: first mesh)" << endl;
   cout << "  -c             Apply to cell arrays (default: point arrays)" << endl;
   cout << "  -B             Save mesh in binary format (default: ASCII format)" << endl;
+  cout << "  -s <file>      Only add selected arrays based on file. The file must" << endl;
+  cout << "                 have a 0 (drop) or 1 (select) on a separate line for each" << endl;
+  cout << "                 input array." << endl;
   return -1;
 }
 
@@ -76,7 +79,7 @@ template <class TMeshType>
 int MeshMergeArrays(int argc, char *argv[])
 {
   int i;
-  std::string arr_name, out_arr_name, fnout, fnref;
+  std::string arr_name, out_arr_name, fnout, fnref, fnsel;
   bool flag_cell = false;
   bool flag_binary = false;
   
@@ -87,6 +90,8 @@ int MeshMergeArrays(int argc, char *argv[])
       out_arr_name = argv[++i];
     else if (0 == strcmp(argv[i],"-r"))
       fnref = argv[++i];
+    else if (0 == strcmp(argv[i],"-s"))
+      fnsel = argv[++i];
     else if (0 == strcmp(argv[i],"-c"))
       flag_cell = true;
     else if (0 == strcmp(argv[i],"-B"))
@@ -112,16 +117,11 @@ int MeshMergeArrays(int argc, char *argv[])
   // Read the reference mesh
   TMeshType *ref = fnref.length() ? ReadMesh<TMeshType>(fnref.c_str()) : ReadMesh<TMeshType>(fnin[0]);
 
-  // Create output array
-  vtkFloatArray *array = vtkFloatArray::New();
-  array->SetNumberOfComponents(nin);
-  array->SetNumberOfTuples(flag_cell ? ref->GetNumberOfCells() : ref->GetNumberOfPoints());
-
   // Read each of the input meshes
+  std::vector<vtkDataArray *> da;
+  unsigned int comp_total = 0;
   for(int j = 0; j < argc - i; j++)
     {
-    // Read one of the meshes
-    cout << "Reading " << fnin[j] << endl;
     TMeshType *src = ReadMesh<TMeshType>(fnin[j]);
 
     // Get the corresponding array
@@ -137,9 +137,61 @@ int MeshMergeArrays(int argc, char *argv[])
       return -1;
       }
 
+    // Get number of components
+    unsigned int nc = arr->GetNumberOfComponents();
+    cout << "Read " << fnin[j] << " with " << nc << " components." << std::endl;
+
+    // Push back the array
+    da.push_back(arr);
+    comp_total += nc;
+    }
+
+  // Read the selection file
+  vector<bool> selection;
+  unsigned int comp_selected = 0;
+  if(fnsel.size())
+    {
+    ifstream sfile(fnsel);
+    bool sel;
+    while(sfile >> sel)
+      {
+      selection.push_back(sel);
+      if(sel)
+        comp_selected++;
+      }
+
+    if(selection.size() != comp_total)
+      {
+      cerr << "Selection file size " << selection.size() 
+        << " does not match total components " << comp_total << endl;
+      return -1;
+      }
+    }
+  else
+    comp_selected = comp_total;
+
+
+  // Create output array
+  cout << "Output array will contain " << comp_selected << " components" << endl;
+  vtkFloatArray *array = vtkFloatArray::New();
+  array->SetNumberOfComponents(comp_selected);
+  array->SetNumberOfTuples(flag_cell ? ref->GetNumberOfCells() : ref->GetNumberOfPoints());
+
+  // Read each of the input meshes and merge their arrays
+  int target_index = 0, source_index = 0;
+  for(int j = 0; j < argc - i; j++)
+    {
     // Add array to main accumulator
-    for(int k = 0; k < arr->GetNumberOfTuples(); k++)
-      array->SetComponent(k, j, arr->GetComponent(k, 0));
+    for(unsigned int q = 0; q < da[j]->GetNumberOfComponents(); q++)
+      {
+      if(selection.size() == 0 || selection[source_index])
+        {
+        for(int k = 0; k < da[j]->GetNumberOfTuples(); k++)
+          array->SetComponent(k, target_index, da[j]->GetComponent(k, q));
+        target_index++;
+        }
+      source_index++;
+      }
     }
 
   // Stick the array in the output

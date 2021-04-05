@@ -406,6 +406,8 @@ IF(BUILD_UTILS)
   # This uses triangle library to triangulate a 2d contour
   ADD_EXECUTABLE(contour2surf src/util/ContourMesh2SurfMesh.cxx src/util/ReadWriteVTK.cxx)
 
+  ADD_EXECUTABLE(apply_remeshing_to_another src/util/ApplyRemeshingToAnotherMesh.cxx src/util/ReadWriteVTK.cxx)
+
   # VCG-based utilities
   IF(USE_VCG)
     ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
@@ -417,7 +419,8 @@ IF(BUILD_UTILS)
   SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 
     sphere_splat vtkprocrustes vtklevelset vtkcontour
     mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
-    meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere)
+    meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere
+    apply_remeshing_to_another)
 
   # Tetrahedron tools
   ADD_EXECUTABLE(tetdumpattr src/util/TetDumpAttr.cxx)

@@ -4,13 +4,15 @@
 #include <iostream>
 #include "SparseSolver.h"
 #include "SparseMatrix.h"
-#include <Eigen/Sparse>
+
+template <class TIndex>
+class EigenSolverInterfaceInternal;
 
 class EigenSolverInterface : public SparseSolver
 {
 public:
 
-  enum ProblemType { SSD=0, UNSYMMETRIC }
+  enum ProblemType { SPD=0, UNSYMMETRIC };
 
   // Factor the system for arbitrary right hand sides and matrices of the same
   // non-zer element structure
@@ -37,17 +39,18 @@ public:
   void SetVerbose(bool flag)
     { flagVerbose = flag; }
 
-protected:
-
-  typedef Eigen::SparseMatrix<double, Eigen::RowMajor> SparseType;
-  typedef Eigen::Map<SparseType> SparseMap;
-  SparseMap m_SparseMatrix;
-  
   // Constructor, takes the problem type
   EigenSolverInterface(ProblemType ptype) : m_Type(ptype) {}
 
-  // Destructor
-  virtual ~EigenSolverInterface() {}; 
+  // Destructor, get rid of matrix
+  virtual ~EigenSolverInterface();
+
+protected:
+
+  EigenSolverInterfaceInternal<int> *m_InternalSolver_Int = nullptr;
+  EigenSolverInterfaceInternal<long> *m_InternalSolver_SizeT = nullptr;
+
+  ProblemType m_Type;
 
   // Reset the index arrays()
   void ResetIndices() {};
