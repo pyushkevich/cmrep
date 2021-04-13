@@ -6,6 +6,7 @@
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkOBJReader.h>
+#include <vtkPLYReader.h>
 
 using namespace std;
 
@@ -39,6 +40,13 @@ vtkPolyData *ReadVTKData(string fn)
   else if(fn.rfind(".obj") == fn.length() - 4)
     {
     vtkOBJReader *reader = vtkOBJReader::New();
+    reader->SetFileName(fn.c_str());
+    reader->Update();
+    p1 = reader->GetOutput();
+    }
+  else if(fn.rfind(".ply") == fn.length() - 4)
+    {
+    vtkPLYReader *reader = vtkPLYReader::New();
     reader->SetFileName(fn.c_str());
     reader->Update();
     p1 = reader->GetOutput();

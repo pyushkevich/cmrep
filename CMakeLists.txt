@@ -165,6 +165,12 @@ IF(USE_TETGEN)
   FIND_PACKAGE(TetGen REQUIRED)
 ENDIF(USE_TETGEN)
 
+OPTION(USE_LAPACK "Use LAPACK and BLAS libraries")
+IF(USE_LAPACK)
+  FIND_PACKAGE(LAPACK REQUIRED)
+  SET(PDE_LIBS ${LAPACK_LIB} ${BLAS_LIB})
+ENDIF(USE_LAPACK)
+
 # Set the include directories
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
@@ -253,7 +259,7 @@ SET(VTK_CORE_LIBRARIES
   vtkCommonCore vtkCommonMath vtkCommonMisc vtkCommonSystem vtkCommonTransforms
   vtkCommonDataModel vtkCommonColor vtkCommonExecutionModel vtkFiltersCore
   vtkCommonComputationalGeometry vtkFiltersGeneral vtkFiltersGeometry vtkImagingCore
-  vtkIOCore vtkIOGeometry vtkIOImage vtkIOLegacy
+  vtkIOCore vtkIOGeometry vtkIOImage vtkIOLegacy vtkIOPLY
   vtkFiltersModeling)
 
 # Set the list of required libraries
