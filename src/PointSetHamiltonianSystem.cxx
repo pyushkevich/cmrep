@@ -709,6 +709,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   return H0;
 }
 
+/*
 extern "C" {
   int dgemm_(char *, char *, int *, int *, int *, double *, double *, int *, 
     double *, int *, double *, double *, int *);
@@ -716,6 +717,7 @@ extern "C" {
   int sgemm_(char *, char *, int *, int *, int *, float *, float *, int *,
     float *, int *, float *, float *, int *);
 };
+*/
 
 /** WARNING - this is only meant for square matrices! */
 template <class TFloat> class BlasInterface
@@ -725,11 +727,15 @@ public:
   static void add_AB_to_C(const Mat &A, const Mat &B, Mat &C);
   static void add_AtB_to_C(const Mat &A, const Mat &B, Mat &C);
 
+  /*
 private:
   static void gems(char *opA, char *opB, int *M, int *N, int *K, TFloat *alpha, TFloat *A, int *LDA,
                    TFloat *B, int *LDB, TFloat *beta, TFloat *C, int *LDC);
+                   */
 
 };
+
+#include <Eigen/Core>
 
 /** WARNING - this is only meant for square matrices! */
 template <class TFloat>
@@ -737,6 +743,18 @@ void
 BlasInterface<TFloat>
 ::add_AB_to_C(const Mat &A, const Mat &B, Mat &C)
 {
+  typedef Eigen::Matrix<TFloat, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> EigenMatrix;
+  typedef Eigen::Map<EigenMatrix> EigenMatrixMap;
+  typedef Eigen::Map<const EigenMatrix> EigenMatrixConstMap;
+
+  EigenMatrixConstMap map_A(A.data_block(), A.rows(), A.cols());
+  EigenMatrixConstMap map_B(B.data_block(), B.rows(), B.cols());
+  EigenMatrixMap map_C(C.data_block(), C.rows(), C.cols());
+
+  // Do the Eigen version of GEMS
+  map_C.noalias() += map_A * map_B;
+
+  /*
   assert(
     A.rows() == B.rows() && A.rows() == C.rows() && A.rows() == A.columns() 
     && A.rows() == B.columns() && A.rows() == C.columns());
@@ -749,6 +767,7 @@ BlasInterface<TFloat>
     const_cast<TFloat *>(A.data_block()),&LDB,
     &beta,
     C.data_block(),&LDC);
+    */
 }
 
 template <class TFloat>
@@ -756,6 +775,18 @@ void
 BlasInterface<TFloat>
 ::add_AtB_to_C(const Mat &A, const Mat &B, Mat &C)
 {
+  typedef Eigen::Matrix<TFloat, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> EigenMatrix;
+  typedef Eigen::Map<EigenMatrix> EigenMatrixMap;
+  typedef Eigen::Map<const EigenMatrix> EigenMatrixConstMap;
+
+  EigenMatrixConstMap map_A(A.data_block(), A.rows(), A.cols());
+  EigenMatrixConstMap map_B(B.data_block(), B.rows(), B.cols());
+  EigenMatrixMap map_C(C.data_block(), C.rows(), C.cols());
+
+  // Do the Eigen version of GEMS
+  map_C.noalias() += map_A * map_B;
+
+  /*
   assert(
     A.rows() == B.rows() && A.rows() == C.rows() && A.rows() == A.columns() 
     && A.rows() == B.columns() && A.rows() == C.columns());
@@ -768,7 +799,10 @@ BlasInterface<TFloat>
     const_cast<TFloat *>(A.data_block()),&LDB,
     &beta,
     C.data_block(),&LDC);
+    */
 }
+
+/*
 
 template <>
 void
@@ -787,6 +821,8 @@ BlasInterface<float>
 {
   sgemm_(opA, opB, M,N,K,alpha,A,LDA,B,LDB,beta,C,LDC);
 }
+
+*/
 
 
 

@@ -375,7 +375,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
       cout << "." << flush;
 
       // Save the warp if needed
-      if(0 == (t + 1) % param.anim_freq || t + 1 == tEnd)
+      if(t + 1 == tEnd || (param.anim_freq && 0 == (t + 1) % param.anim_freq))
         {
         char buffer[2048];
         sprintf(buffer, param.fnOutWarp.c_str(), t + 1);
