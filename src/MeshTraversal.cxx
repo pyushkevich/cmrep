@@ -502,7 +502,7 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
   // Structures to store edges
   std::vector<FullEdge> edges;
   typedef vnl_vector_fixed<unsigned int, 3> ShVec;
-  std::vector<ShVec> teidx(triangles.size(), ShVec((size_t) 0));
+  std::vector<ShVec> teidx(triangles.size(), ShVec((unsigned int) 0));
 
   // Create a queue to store edges to process
   std::deque<size_t> edge_que;
