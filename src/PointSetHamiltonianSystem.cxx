@@ -784,7 +784,7 @@ BlasInterface<TFloat>
   EigenMatrixMap map_C(C.data_block(), C.rows(), C.cols());
 
   // Do the Eigen version of GEMS
-  map_C.noalias() += map_A * map_B;
+  map_C.noalias() += map_A.transpose() * map_B;
 
   /*
   assert(

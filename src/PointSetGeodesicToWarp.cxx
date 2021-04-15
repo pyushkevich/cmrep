@@ -26,6 +26,8 @@ int usage()
   cout << "Additional options:" << endl;
   cout << "  -d dim             : problem dimension (3)" << endl;
   cout << "  -n N               : number of time steps (100)" << endl;
+  cout << "  -g mask.nii        : limit warp computation to a masked region" << endl;
+  cout << "  -B                 : use brute force warp computation (not approximation)" << endl;
   cout << "Mesh warping mode:" << endl;
   cout << "  -M in.vtk out.vtk  : additional meshes to apply warp to" << endl;
   cout << "                       when using -M, -r/-o are optional" << endl;
@@ -56,16 +58,17 @@ struct WarpGenerationParameters
 {
   typedef std::pair<string, string> MeshPair;
 
-  string fnReference, fnMesh, fnOutWarp;
+  string fnReference, fnMesh, fnOutWarp, fnMask;
   double sigma;
   unsigned int dim;
   unsigned int N;
   unsigned int anim_freq;
+  bool brute;
 
   std::list<MeshPair> fnWarpMeshes;
 
   WarpGenerationParameters():
-    N(100), dim(3), sigma(0.0), anim_freq(0) {}
+    N(100), dim(3), sigma(0.0), anim_freq(0), brute(false) {}
 };
 
 template <class TPixel, unsigned int VDim>
@@ -88,6 +91,10 @@ public:
   typedef itk::ContinuousIndex<TPixel,VDim> ContIndexType;
 
   static int run(const WarpGenerationParameters &param);
+
+  static VectorImagePointer brute_force_method(
+      const WarpGenerationParameters &param,
+      HSystem &hsys, int tdir, int tStart, int tEnd);
 
 private:
 
@@ -137,6 +144,147 @@ PointSetGeodesicToWarp<TPixel, VDim>
   char buffer[2048];
   sprintf(buffer, filePattern.c_str(), k);
   WriteVTKData(mesh, buffer);
+}
+
+template <class TPixel, unsigned int VDim>
+typename PointSetGeodesicToWarp<TPixel, VDim>::VectorImagePointer
+PointSetGeodesicToWarp<TPixel, VDim>
+::brute_force_method(
+    const WarpGenerationParameters &param,
+    HSystem &hsys, int tdir, int tStart, int tEnd)
+{
+  // Read the reference image
+  ImagePointer imRef = LDDMM::img_read(param.fnReference.c_str());
+
+  // Read the optional mask image. If not supplied, create a mask of all ones
+  // to simplify the code below (fewer ifs)
+  ImagePointer imMask;
+  if(param.fnMask.size())
+    {
+    imMask = LDDMM::img_read(param.fnMask.c_str());
+    itkAssertOrThrowMacro(imMask->GetBufferedRegion() == imRef->GetBufferedRegion(),
+                          "Region mismatch between mask and reference");
+    }
+  else
+    {
+    imMask = LDDMM::new_img(imRef);
+    imMask->FillBuffer(1.0);
+    }
+
+  // Count the number of masked pixels
+  unsigned int nv_masked = 0;
+  typedef itk::ImageRegionIteratorWithIndex<ImageType> IterType;
+  for(IterType it(imMask, imMask->GetBufferedRegion()); !it.IsAtEnd(); ++it)
+    nv_masked += it.Value() >= 1.0 ? 1 : 0;
+
+  // Create an array to store the RAS coordinates of the points
+  vnl_matrix<TPixel> X(nv_masked, VDim);
+
+  // Initialize all the points inside the mask
+  unsigned int ix = 0;
+  itk::Point<double, VDim> pt_lps;
+  for(IterType it(imMask, imMask->GetBufferedRegion()); !it.IsAtEnd(); ++it)
+    {
+    if(it.Value() >= 1.0)
+      {
+      // Compute the RAS coordinate of the current vertex position (applying displacement phi)
+      imMask->TransformIndexToPhysicalPoint(it.GetIndex(), pt_lps);
+      for(unsigned int a = 0; a < VDim; a++)
+        X(ix,a) = a < 2 ? -pt_lps[a] : pt_lps[a];
+      ++ix;
+      }
+    }
+
+  // F for the Gaussian
+  double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
+
+  // Cutoff where the Gaussian is < 1e-6
+  double d2_cutoff = 27.63102 * param.sigma * param.sigma;
+
+  // Delta-t
+  double dt = tdir * 1.0 / (param.N - 1);
+
+  // Perform iteration over time
+  for(int t = tStart; t != tEnd; t+=tdir)
+    {
+    // Get all landmarks
+    const Matrix &qt = hsys.GetQt(t);
+    const Matrix &pt = hsys.GetPt(t);
+
+    // Multithread the vertices
+    itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+    itk::ImageRegion<1> full_region({{0}}, {{nv_masked}});
+    mt->ParallelizeImageRegion<1>(
+          full_region,
+          [&qt, &pt, &X, dt, d2_cutoff, gaussian_f](const itk::ImageRegion<1> &thread_region)
+      {
+        int i0 = thread_region.GetIndex(0);
+        int i1 = i0 + thread_region.GetSize(0);
+        for(int i = i0; i < i1; i++)
+          {
+          // Velocity at this index
+          TPixel xi[VDim], vi[VDim];
+          for(unsigned int a = 0; a < VDim; a++)
+            {
+            xi[a] = X(i,a);
+            vi[a] = 0.0;
+            }
+
+          // Loop over all q nodes
+          for(unsigned int j = 0; j < qt.rows(); j++)
+            {
+            // Compute distance to that point
+            double delta, d2 = 0;
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              delta = xi[a] - qt(j,a);
+              d2 += delta * delta;
+              }
+
+            // Only proceed if distance is below cutoff
+            if(d2 < d2_cutoff)
+              {
+              // Take the exponent
+              double g = exp(gaussian_f * d2);
+
+              // Scale momentum by exponent
+              for(unsigned int a = 0; a < VDim; a++)
+                vi[a] += g * pt(j,a);
+              }
+            }
+
+          // Use Euler's method to get position at next timepoint, encoding it as a LPS
+          // displacement
+          for(unsigned int a = 0; a < VDim; a++)
+            X(i,a) += vi[a] * dt;
+          }
+      }, nullptr);
+
+    std::cout << "." << std::flush;
+    }
+
+  // Form the phi image
+  VectorImagePointer imPhi = LDDMM::new_vimg(imRef);
+  ix = 0;
+  IterType it(imMask, imMask->GetBufferedRegion());
+  itk::ImageRegionIteratorWithIndex<VectorImageType> itPhi(imPhi, imMask->GetBufferedRegion());
+  for(; !it.IsAtEnd(); ++it,++itPhi)
+    {
+    if(it.Value() >= 1.0)
+      {
+      // Compute the RAS coordinate of the current vertex position (applying displacement phi)
+      imMask->TransformIndexToPhysicalPoint(it.GetIndex(), pt_lps);
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        double x_lps = a < 2 ? -X(ix,a) : X(ix,a);
+        double phi_lps = x_lps - pt_lps[a];
+        itPhi.Value()[a] = phi_lps;
+        }
+      ++ix;
+      }
+    }
+
+  return imPhi;
 }
 
 template <class TPixel, unsigned int VDim>
@@ -300,54 +448,44 @@ PointSetGeodesicToWarp<TPixel, VDim>
   // Compute warp if that was requested
   if(param.fnReference.size() && param.fnOutWarp.size())
     {
-    // Read the reference image
-    ImagePointer imRef;
-    LDDMM::img_read(param.fnReference.c_str(), imRef);
-
-    // Image for splatting
-    VectorImagePointer imSplat, imVelocity, imLagragean, imPhi;
-    LDDMM::alloc_vimg(imSplat, imRef);
-    LDDMM::alloc_vimg(imVelocity, imRef);
-    LDDMM::alloc_vimg(imLagragean, imRef);
-    LDDMM::alloc_vimg(imPhi, imRef);
-
-    // Compute the scaling factor for the Gaussian smoothing
-    double scaling = 1.0;
-    for(unsigned int a = 0; a < VDim; a++)
+    if(param.brute)
       {
-      scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
+      VectorImagePointer imPhi = brute_force_method(param, hsys, tdir, tStart, tEnd);
+      LDDMM::vimg_write(imPhi, param.fnOutWarp.c_str());
       }
-
-    bool splat = false;
-    if(!splat)
+    else
       {
-      // Initialize phi to hold the physical RAS coordinate of each point in the reference space
-      itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
-      mt->ParallelizeImageRegion<VDim>(
-            imPhi->GetBufferedRegion(),
-            [imPhi](const itk::ImageRegion<VDim> &thread_region)
-        {
-        itk::ImageRegionIteratorWithIndex<VectorImageType> it(imPhi, thread_region);
-        itk::Point<double, VDim> pt;
-        for(; !it.IsAtEnd(); ++it)
-          {
-          imPhi->TransformIndexToPhysicalPoint(it.GetIndex(), pt);
-          for(unsigned int d = 0; d < VDim; d++)
-            it.Value()[d] = d < 2 ? -pt[d] : pt[d];
-          }
-        }, nullptr);
-      }
+      // Read the reference image
+      ImagePointer imRef;
+      LDDMM::img_read(param.fnReference.c_str(), imRef);
 
-    // Iterate over time
-    // for(unsigned int t = 0; t < param.N; t++)
-    for(int t = tStart; t != tEnd; t+=tdir)
-      {
-      // Get all landmarks
-      const Matrix &qt = hsys.GetQt(t);
-      const Matrix &pt = hsys.GetPt(t);
+      // If mask specified, read the mask
+      ImagePointer imMask;
+      if(param.fnMask.size())
+        imMask = LDDMM::img_read(param.fnMask.c_str());
 
-      if(splat)
+      // Image for splatting
+      VectorImagePointer
+          imSplat = LDDMM::new_vimg(imRef),
+          imVelocity = LDDMM::new_vimg(imRef),
+          imLagragean = LDDMM::new_vimg(imRef),
+          imPhi = LDDMM::new_vimg(imRef);
+
+      // Compute the scaling factor for the Gaussian smoothing
+      double scaling = 1.0;
+      for(unsigned int a = 0; a < VDim; a++)
         {
+        scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
+        }
+
+      // Iterate over time
+      // for(unsigned int t = 0; t < param.N; t++)
+      for(int t = tStart; t != tEnd; t+=tdir)
+        {
+        // Get all landmarks
+        const Matrix &qt = hsys.GetQt(t);
+        const Matrix &pt = hsys.GetPt(t);
+
         // Splatting approach
         // Splat each landmark onto the splat image
         imSplat->FillBuffer(typename VectorImageType::PixelType(0.0));
@@ -394,80 +532,18 @@ PointSetGeodesicToWarp<TPixel, VDim>
         // Euler interpolation
         LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
         LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
-        }
-      else
-        {
-        // Brute force approach, treat each voxel in the reference image as a point and flow
-        // the points through the geodesic shooting
-        itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
 
-        // Parallelize over all the vertices.
-        mt->ParallelizeImageRegion<VDim>(
-              imPhi->GetBufferedRegion(),
-              [imPhi, qt, pt, dt, d2_cutoff, gaussian_f](const itk::ImageRegion<VDim> &thread_region)
+        cout << "." << flush;
+
+        // Save the warp if needed
+        if(t + 1 == tEnd || (param.anim_freq && 0 == (t + 1) % param.anim_freq))
           {
-          itk::ImageRegionIteratorWithIndex<VectorImageType> it(imPhi, thread_region);
-          itk::Point<double, VDim> pt_lps;
-          for(; !it.IsAtEnd(); ++it)
-            {
-            // Get the LPS coordinate of the point in the reference space
-            imPhi->TransformIndexToPhysicalPoint(it.GetIndex(), pt_lps);
+          char buffer[2048];
+          sprintf(buffer, param.fnOutWarp.c_str(), t + 1);
 
-            // Position and velocity at this vertex, in RAS coordinates
-            double xi[VDim], vi[VDim];
-
-            // Compute the RAS coordinate of the current vertex position (applying displacement phi)
-            for(unsigned int a = 0; a < VDim; a++)
-              {
-              double x_lps = it.Value()[a] + pt_lps[a];
-              xi[a] = a < 2 ? -x_lps : x_lps;
-              vi[a] = 0.0;
-              }
-
-            // Loop over all q nodes
-            for(unsigned int j = 0; j < qt.rows(); j++)
-              {
-              // Compute distance to that point
-              double delta, d2 = 0;
-              for(unsigned int a = 0; a < VDim; a++)
-                {
-                delta = xi[a] - qt(j,a);
-                d2 += delta * delta;
-                }
-
-              // Only proceed if distance is below cutoff
-              if(d2 < d2_cutoff)
-                {
-                // Take the exponent
-                double g = exp(gaussian_f * d2);
-
-                // Scale momentum by exponent
-                for(unsigned int a = 0; a < VDim; a++)
-                  vi[a] += g * pt(j,a);
-                }
-              }
-
-            // Use Euler's method to get position at next timepoint, encoding it as a LPS
-            // displacement
-            for(unsigned int a = 0; a < VDim; a++)
-              {
-              double dx_ras = vi[a] * dt;
-              it.Value()[a] += a < 2 ? -dx_ras : dx_ras;
-              }
-            }
-          }, nullptr);
-        }
-
-      cout << "." << flush;
-
-      // Save the warp if needed
-      if(t + 1 == tEnd || (param.anim_freq && 0 == (t + 1) % param.anim_freq))
-        {
-        char buffer[2048];
-        sprintf(buffer, param.fnOutWarp.c_str(), t + 1);
-
-        // Save the warp
-        LDDMM::vimg_write(imPhi, buffer);
+          // Save the warp
+          LDDMM::vimg_write(imPhi, buffer);
+          }
         }
       }
     }
@@ -500,6 +576,10 @@ int main(int argc, char *argv[])
       {
       param.fnOutWarp = argv[++i];
       }
+    else if(arg == "-g" && i < argc-1)
+      {
+      param.fnMask = argv[++i];
+      }
     else if(arg == "-s" && i < argc-1)
       {
       param.sigma = atof(argv[++i]);
@@ -515,6 +595,10 @@ int main(int argc, char *argv[])
     else if(arg == "-a" && i < argc-1)
       {
       param.anim_freq = (unsigned int) atoi(argv[++i]);
+      }
+    else if(arg == "-B")
+      {
+      param.brute = true;
       }
     else if(arg == "-M" && i < argc-2)
       {
