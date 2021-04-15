@@ -472,7 +472,7 @@ struct FullEdge
 
 void SanityCheck(
                  TriangleMesh *mesh,
-                 std::vector< vnl_vector_fixed<size_t, 3> > &tdidx,
+                 std::vector< vnl_vector_fixed<unsigned int, 3> > &tdidx,
                  std::vector<FullEdge> &edges)
   {
   for(size_t i = 0; i < edges.size(); i++)
@@ -501,7 +501,7 @@ void TriangleMesh::MakeDelaunay(vnl_vector_fixed<double,3> *V)
 {
   // Structures to store edges
   std::vector<FullEdge> edges;
-  typedef vnl_vector_fixed<size_t, 3> ShVec;
+  typedef vnl_vector_fixed<unsigned int, 3> ShVec;
   std::vector<ShVec> teidx(triangles.size(), ShVec((size_t) 0));
 
   // Create a queue to store edges to process

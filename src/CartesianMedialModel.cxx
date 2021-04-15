@@ -469,7 +469,7 @@ double CartesianMedialModel::ComputeNewtonRHS(const Mat& x, Mat &b)
   for(i = 0; i < m; i++) for(j = 0; j < n; j++)
     {
     b[i][j] = - xSites[xSiteIndex[i][j]]->ComputeEquation(x);
-    if(vnl_math_isnan(b[i][j]))
+    if(std::isnan(b[i][j]))
       throw MedialModelException("NAN in CartesianMedialModel::ComputeNewtonRHS");
     }
   return dot_product(b, b);

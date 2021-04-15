@@ -825,12 +825,12 @@ MeshMedialPDESolver
 
   // Check validity (TODO: remove later)
   for(size_t i = 0; i < xRHS.size(); i++)
-    if(vnl_math_isinf(xRHS[i]) || vnl_math_isnan(xRHS[i]))
+    if(std::isinf(xRHS[i]) || std::isnan(xRHS[i]))
       throw MedialModelException("PDE r.h.s. infinite or nan");
 
   // Check validity (TODO: remove later)
   for(size_t i = 0; i < M.GetNumberOfSparseValues(); i++)
-    if(!vnl_math_isfinite(M.GetSparseData()[i]))
+    if(!std::isfinite(M.GetSparseData()[i]))
       throw MedialModelException("PDE sparse matrix infinite or nan");
 
   // Use pardiso to solve the problem
@@ -856,7 +856,7 @@ MeshMedialPDESolver
     {
     for(size_t i = 0; i < topology->nVertices; i++)
       {
-      if(!vnl_math_isfinite(xSolution[i]))
+      if(!std::isfinite(xSolution[i]))
         {
         // Dump the matrix for examination
         ofstream ofs("sparsematdump.txt");

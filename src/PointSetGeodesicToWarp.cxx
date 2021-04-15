@@ -6,6 +6,7 @@
 #include "vtkDataArray.h"
 #include "vtkDoubleArray.h"
 #include "FastLinearInterpolator.h"
+#include "itkMultiThreaderBase.h"
 
 #include <cstdarg>
 
@@ -201,6 +202,15 @@ PointSetGeodesicToWarp<TPixel, VDim>
   int tStart = (tdir > 0) ? 0 : param.N - 1;
   int tEnd = (tdir > 0) ? param.N : 0;
 
+  // F for the Gaussian
+  double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
+
+  // Cutoff where the Gaussian is < 1e-6
+  double d2_cutoff = 27.63102 * param.sigma * param.sigma;
+
+  // Delta-t
+  double dt = tdir * 1.0 / (param.N - 1);
+
   // Apply the warp to other meshes
   std::list<WarpGenerationParameters::MeshPair>::const_iterator it;
   for(it = param.fnWarpMeshes.begin(); it != param.fnWarpMeshes.end(); ++it)
@@ -223,15 +233,6 @@ PointSetGeodesicToWarp<TPixel, VDim>
 
     // Store the initial array
     Matrix m_x0 = m_x;
-
-    // F for the Gaussian
-    double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
-
-    // Cutoff where the Gaussian is < 1e-6
-    double d2_cutoff = 27.63102 * param.sigma * param.sigma;
-
-    // Delta-t 
-    double dt = tdir * 1.0 / (param.N - 1);
 
     // Some print-out
     std::cout << "Warping mesh " << it->first << " : " << std::flush;
@@ -317,6 +318,26 @@ PointSetGeodesicToWarp<TPixel, VDim>
       scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
       }
 
+    bool splat = false;
+    if(!splat)
+      {
+      // Initialize phi to hold the physical RAS coordinate of each point in the reference space
+      itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+      mt->ParallelizeImageRegion<VDim>(
+            imPhi->GetBufferedRegion(),
+            [imPhi](const itk::ImageRegion<VDim> &thread_region)
+        {
+        itk::ImageRegionIteratorWithIndex<VectorImageType> it(imPhi, thread_region);
+        itk::Point<double, VDim> pt;
+        for(; !it.IsAtEnd(); ++it)
+          {
+          imPhi->TransformIndexToPhysicalPoint(it.GetIndex(), pt);
+          for(unsigned int d = 0; d < VDim; d++)
+            it.Value()[d] = d < 2 ? -pt[d] : pt[d];
+          }
+        }, nullptr);
+      }
+
     // Iterate over time
     // for(unsigned int t = 0; t < param.N; t++)
     for(int t = tStart; t != tEnd; t+=tdir)
@@ -325,52 +346,117 @@ PointSetGeodesicToWarp<TPixel, VDim>
       const Matrix &qt = hsys.GetQt(t);
       const Matrix &pt = hsys.GetPt(t);
 
-      // Splatting approach
-      // Splat each landmark onto the splat image
-      imSplat->FillBuffer(0.0);
-
-      // Create an interpolator for splatting
-      FastInterpolator flint(imSplat);
-
-      for(int i = 0; i < k; i++)
+      if(splat)
         {
-        // Map landmark point to continuous index
-        ContIndexType cix;
-        PointType point;
-        typename VectorImageType::InternalPixelType vec;
-        for(unsigned int a = 0; a < VDim; a++)
+        // Splatting approach
+        // Splat each landmark onto the splat image
+        imSplat->FillBuffer(typename VectorImageType::PixelType(0.0));
+
+        // Create an interpolator for splatting
+        FastInterpolator flint(imSplat);
+
+        for(int i = 0; i < k; i++)
           {
-          // Here we have to correct for the fact that the landmark coordinates are 
-          // assumed to be in RAS space, but point is in LPS space. We therefore have
-          // to apply the LPS/RAS transform before splatting
-          if(a < 2)
+          // Map landmark point to continuous index
+          ContIndexType cix;
+          PointType point;
+          typename VectorImageType::InternalPixelType vec;
+          for(unsigned int a = 0; a < VDim; a++)
             {
-            point[a] = -qt(i,a);
-            vec[a] = -pt(i,a);
-            }
-          else
-            {
-            point[a] = qt(i,a);
-            vec[a] = pt(i,a);
-            }
+            // Here we have to correct for the fact that the landmark coordinates are
+            // assumed to be in RAS space, but point is in LPS space. We therefore have
+            // to apply the LPS/RAS transform before splatting
+            if(a < 2)
+              {
+              point[a] = -qt(i,a);
+              vec[a] = -pt(i,a);
+              }
+            else
+              {
+              point[a] = qt(i,a);
+              vec[a] = pt(i,a);
+              }
 
+            }
+          imRef->TransformPhysicalPointToContinuousIndex(point, cix);
+
+          // Splat landmark's momentum at the point location
+          flint.Splat(cix.GetVnlVector().data_block(), &vec);
           }
-        imRef->TransformPhysicalPointToContinuousIndex(point, cix);
 
-        // Splat landmark's momentum at the point location
-        flint.Splat(cix.GetVnlVector().data_block(), &vec);
+        // Now all the momenta have been splatted. The next step is to smooth with a Gaussian
+        typename LDDMM::Vec vec_sigma; vec_sigma.Fill(param.sigma);
+        LDDMM::vimg_smooth(imSplat, imVelocity, vec_sigma);
+
+        // Accumulate the velocity into phi - using imSplat as a temporary
+        LDDMM::vimg_scale_in_place(imVelocity, scaling);
+
+        // Euler interpolation
+        LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
+        LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
         }
+      else
+        {
+        // Brute force approach, treat each voxel in the reference image as a point and flow
+        // the points through the geodesic shooting
+        itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
 
-      // Now all the momenta have been splatted. The next step is to smooth with a Gaussian
-      typename LDDMM::Vec vec_sigma; vec_sigma.Fill(param.sigma);
-      LDDMM::vimg_smooth(imSplat, imVelocity, vec_sigma);
+        // Parallelize over all the vertices.
+        mt->ParallelizeImageRegion<VDim>(
+              imPhi->GetBufferedRegion(),
+              [imPhi, qt, pt, dt, d2_cutoff, gaussian_f](const itk::ImageRegion<VDim> &thread_region)
+          {
+          itk::ImageRegionIteratorWithIndex<VectorImageType> it(imPhi, thread_region);
+          itk::Point<double, VDim> pt_lps;
+          for(; !it.IsAtEnd(); ++it)
+            {
+            // Get the LPS coordinate of the point in the reference space
+            imPhi->TransformIndexToPhysicalPoint(it.GetIndex(), pt_lps);
 
-      // Accumulate the velocity into phi - using imSplat as a temporary
-      LDDMM::vimg_scale_in_place(imVelocity, scaling);
+            // Position and velocity at this vertex, in RAS coordinates
+            double xi[VDim], vi[VDim];
 
-      // Euler interpolation
-      LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
-      LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
+            // Compute the RAS coordinate of the current vertex position (applying displacement phi)
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              double x_lps = it.Value()[a] + pt_lps[a];
+              xi[a] = a < 2 ? -x_lps : x_lps;
+              vi[a] = 0.0;
+              }
+
+            // Loop over all q nodes
+            for(unsigned int j = 0; j < qt.rows(); j++)
+              {
+              // Compute distance to that point
+              double delta, d2 = 0;
+              for(unsigned int a = 0; a < VDim; a++)
+                {
+                delta = xi[a] - qt(j,a);
+                d2 += delta * delta;
+                }
+
+              // Only proceed if distance is below cutoff
+              if(d2 < d2_cutoff)
+                {
+                // Take the exponent
+                double g = exp(gaussian_f * d2);
+
+                // Scale momentum by exponent
+                for(unsigned int a = 0; a < VDim; a++)
+                  vi[a] += g * pt(j,a);
+                }
+              }
+
+            // Use Euler's method to get position at next timepoint, encoding it as a LPS
+            // displacement
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              double dx_ras = vi[a] * dt;
+              it.Value()[a] += a < 2 ? -dx_ras : dx_ras;
+              }
+            }
+          }, nullptr);
+        }
 
       cout << "." << flush;
 

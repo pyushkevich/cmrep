@@ -442,12 +442,12 @@ int main(int argc, char **argv)
 
   // Compute the maximum and average distances (this should be a surface integral...)
   double xOneNorm[2], xTwoNorm[2], xInfNorm[2];
-  xOneNorm[0] = dot_product(d1, ae1); 
-  xTwoNorm[0] = sqrt( dot_product(d1.apply(vnl_math_sqr), ae1) );
+  xOneNorm[0] = dot_product(d1, ae1);
+  xTwoNorm[0] = sqrt( dot_product(d1.apply(vnl_math::sqr), ae1) );
   xInfNorm[0] = d1.inf_norm();
   
   xOneNorm[1] = dot_product(d2, ae2); 
-  xTwoNorm[1] = sqrt( dot_product(d2.apply(vnl_math_sqr), ae2) );
+  xTwoNorm[1] = sqrt( dot_product(d2.apply(vnl_math::sqr), ae2) );
   xInfNorm[1] = d2.inf_norm();
   
   // Report our findings

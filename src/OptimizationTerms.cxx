@@ -1161,7 +1161,7 @@ UnifiedComputeEnergy(SolutionData *S, bool gradient_mode)
   // Return the mean penalty scaled by the total area
   xTotalPenalty = saPenalty.GetSum() / S->xBoundaryArea;
 
-  if(vnl_math_isnan(xTotalPenalty))
+  if(std::isnan(xTotalPenalty))
     throw MedialModelException("NAN");
 
   return xTotalPenalty;

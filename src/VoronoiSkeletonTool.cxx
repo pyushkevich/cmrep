@@ -867,12 +867,12 @@ int main(int argc, char *argv[])
 
     // Vector of sampling images and arrays
     typedef itk::VectorImage<double, 3> SampleImageType;
-    vector<SampleImageType::Pointer> imgSam(sampling.size(), NULL);
+    vector<SampleImageType::Pointer> imgSam(sampling.size(), nullptr);
     vector<vtkDoubleArray *> daSam(sampling.size(), NULL);
 
     // Interpolators
     typedef itk::LinearInterpolateImageFunction<SampleImageType, double> SampleInterpType;
-    vector<SampleInterpType::Pointer> interp(sampling.size(), NULL);
+    vector<SampleInterpType::Pointer> interp(sampling.size(), nullptr);
 
     // Vector of step sizes for each image
     vector<double> stepsize(sampling.size(), 0);

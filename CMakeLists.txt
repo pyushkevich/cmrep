@@ -6,6 +6,7 @@ endif(COMMAND cmake_policy)
 
 # Project name
 PROJECT(CMREP)
+SET(CMAKE_CXX_STANDARD 11)
 
 # Testing
 ENABLE_TESTING()
@@ -191,6 +192,9 @@ ENDIF(USE_VCG)
 # Include subdirectories
 SUBDIRS(extras/toms611)
 SUBDIRS(testing)
+
+# Add triangle to include path
+INCLUDE_DIRECTORIES(extras/triangle)
 
 OPTION(BUILD_UTILS "Build some cm-rep utilities" ON)
 
