@@ -18,6 +18,9 @@
 #include "vtkTriangleFilter.h"
 #include "vtkCell.h"
 #include "vtkContourFilter.h"
+#include <vtkDiscreteMarchingCubes.h>
+#include <vtkUnsignedShortArray.h>
+#include <vtkAppendPolyData.h>
 
 #include "MeshTraversal.h"
 
@@ -35,6 +38,7 @@ int usage()
   cout << "  -k                 : apply clean filter to the mesh" << endl;
   cout << "  -d                 : perform Delaunay edge flipping" << endl;
   cout << "  -2                 : use 2D algorithm" << endl;
+  cout << "  -pl                : preserve labels" << endl; // issue #4: added label preserving option
   return -1;
 }
 
@@ -87,6 +91,7 @@ int main(int argc, char *argv[])
   // Clip image
   const char *imClip = NULL;
   bool voxelSpace = false;
+  bool preserveLabels = false;
   bool flag_clean = false, flag_delaunay = false, flag_2d = false;
   for(int i = 1; i < argc - 3; i++)
     {
@@ -109,6 +114,10 @@ int main(int argc, char *argv[])
     else if(!strcmp(argv[i], "-2"))
       {
       flag_2d = true;
+      }
+    else if(!strcmp(argv[i], "-pl"))
+      {
+      preserveLabels = true;
       }
     else
       { 
@@ -148,7 +157,47 @@ int main(int argc, char *argv[])
 
   // Run marching cubes on the input image
   vtkPolyData *pipe_tail;
-  if(!flag_2d)
+  if(preserveLabels)
+    {
+      std::cout << "Preserving Labels Mode" << std::endl;
+
+      // Append filter for assembling labels
+      vtkAppendPolyData *fltAppend = vtkAppendPolyData::New();
+
+      // Extracting one label at a time and assigning label value
+      for (float i = cut; i <= imax; i += 1.0)
+        {
+        float lbl = floor(i);
+
+        std::cout << "  -- Processing Label: " << lbl << std::endl;
+
+        // Extract one label
+        vtkDiscreteMarchingCubes *fltDMC = vtkDiscreteMarchingCubes::New();
+        fltDMC->SetInputConnection(fltImport->GetOutputPort());
+        fltDMC->ComputeGradientsOff();
+        fltDMC->ComputeScalarsOff();
+        fltDMC->SetNumberOfContours(1);
+        fltDMC->ComputeNormalsOn();
+        fltDMC->SetValue(0, lbl);
+        fltDMC->Update();
+
+        vtkPolyData *labelMesh = fltDMC->GetOutput();
+
+        // Set scalar values for the label
+        vtkUnsignedShortArray *scalar = vtkUnsignedShortArray::New();
+        scalar->SetNumberOfComponents(1);
+        for (vtkIdType i = 0; i < labelMesh->GetNumberOfPoints(); ++i)
+          {
+          scalar->InsertNextTuple1(lbl);
+          }
+        labelMesh->GetPointData()->SetScalars(scalar);
+        fltAppend->AddInputData(labelMesh);
+        }
+
+    fltAppend->Update();
+    pipe_tail = fltAppend->GetOutput();
+    }
+  else if(!flag_2d)
     {
     vtkMarchingCubes *fltMarching = vtkMarchingCubes::New();
     fltMarching->SetInputConnection(fltImport->GetOutputPort());
