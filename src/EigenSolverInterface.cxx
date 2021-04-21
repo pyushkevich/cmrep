@@ -5,6 +5,10 @@
 
 #include <Eigen/Sparse>
 
+#ifdef HAVE_MKL
+#include <Eigen/PardisoSupport>
+#endif
+
 using namespace std;
 
 template <class TIndex>
@@ -57,49 +61,71 @@ private:
   typedef Eigen::Map<SparseType> SparseMap;
   SparseMap *m_SparseMatrix = nullptr;
 
+// TODO: handle symmetric matrices!
+#ifdef HAVE_MKL
+  Eigen::PardisoLU<SparseType> m_Solver;
+#else
   Eigen::BiCGSTAB<SparseType, Eigen::IdentityPreconditioner> m_Solver;
+#endif
 };
 
+EigenSolverInterface
+::EigenSolverInterface(ProblemType ptype)
+: m_Type(ptype)
+{
+  m_InternalSolver = new EigenSolverInterfaceInternal<int>;
+}
+
+void
+EigenSolverInterface
+::ResetIndices()
+{
+  if(m_RowIndex) 
+    {
+    delete [] m_RowIndex;
+    m_RowIndex = nullptr;
+    }
+  if(m_ColIndex)
+    {
+    delete [] m_RowIndex;
+    m_ColIndex = nullptr;
+    }
+}
 
 void 
 EigenSolverInterface
 ::SymbolicFactorization(size_t n, int *idxRows, int *idxCols, double *xMatrix)
 {
-  if(m_InternalSolver_Int)
-    delete m_InternalSolver_Int;
-
-  m_InternalSolver_Int = new EigenSolverInterfaceInternal<int>;
-  m_InternalSolver_Int->SetMatrix(n, idxRows, idxCols, xMatrix);
+  ResetIndices();
+  m_InternalSolver->SetMatrix(n, idxRows, idxCols, xMatrix);
 }
 
 void 
 EigenSolverInterface
 ::SymbolicFactorization(const ImmutableSparseMatrix<double> &mat)
 {
-  if(m_InternalSolver_SizeT)
-    delete m_InternalSolver_SizeT;
+  ResetIndices();
+  int nr = mat.GetNumberOfRows() + 1;
+  int nc = mat.GetNumberOfSparseValues();
+  m_RowIndex = new int[nr];
+  m_ColIndex = new int[nc];
 
-  m_InternalSolver_SizeT = new EigenSolverInterfaceInternal<long>;
-  m_InternalSolver_SizeT->SetMatrix(mat.GetNumberOfRows(),
-                                    reinterpret_cast<long *>(const_cast<size_t *>(mat.GetRowIndex())),
-                                    reinterpret_cast<long *>(const_cast<size_t *>(mat.GetColIndex())),
-                                    const_cast<double *>(mat.GetSparseData()));
+  for(unsigned int r = 0; r < nr; r++)
+    m_RowIndex[r] = (int) mat.GetRowIndex()[r];
+  for(unsigned int c = 0; c < nc; c++)
+    m_ColIndex[c] = (int) mat.GetColIndex()[c];
+
+  m_InternalSolver->SetMatrix(mat.GetNumberOfRows(),
+      m_RowIndex, m_ColIndex,
+      const_cast<double *>(mat.GetSparseData()));
 }
 
 void 
 EigenSolverInterface
 ::NumericFactorization(const double *xMatrix)
 {
-  if(m_InternalSolver_Int)
-    {
-    m_InternalSolver_Int->UpdateMatrix(const_cast<double *>(xMatrix));
-    m_InternalSolver_Int->Compute();
-    }
-  else if(m_InternalSolver_SizeT)
-    {
-    m_InternalSolver_SizeT->UpdateMatrix(const_cast<double *>(xMatrix));
-    m_InternalSolver_SizeT->Compute();
-    }
+  m_InternalSolver->UpdateMatrix(const_cast<double *>(xMatrix));
+  m_InternalSolver->Compute();
 }
 
 void 
@@ -113,20 +139,11 @@ void
 EigenSolverInterface
 ::Solve(size_t nRHS, double *xRhs, double *xSoln)
 {
-  if(m_InternalSolver_Int)
-    {
-    m_InternalSolver_Int->Solve(nRHS, xRhs, xSoln);
-    }
-  else if(m_InternalSolver_SizeT)
-    {
-    m_InternalSolver_SizeT->Solve(nRHS, xRhs, xSoln);
-    }
+  m_InternalSolver->Solve(nRHS, xRhs, xSoln);
 }
 
 EigenSolverInterface::~EigenSolverInterface()
 {
-  if(m_InternalSolver_Int)
-    delete m_InternalSolver_Int;
-  if(m_InternalSolver_SizeT)
-    delete m_InternalSolver_SizeT;
+  ResetIndices();
+  delete m_InternalSolver;
 }

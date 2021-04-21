@@ -1,5 +1,5 @@
 # Requisite CMake commands
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.0)
 if(COMMAND cmake_policy)
   cmake_policy(SET CMP0003 NEW)
 endif(COMMAND cmake_policy)
@@ -93,13 +93,24 @@ OPTION(USE_MKL "Use the Intel MKL library" OFF)
 IF(USE_MKL)
   FIND_PACKAGE(MKL REQUIRED)
   IF(MKL_LIBRARIES)
+    IF(USE_EIGEN)
+      ADD_DEFINITIONS(-DHAVE_MKL)
+      ADD_DEFINITIONS(-DEIGEN_USE_MKL_ALL)
+      INCLUDE_DIRECTORIES(${MKL_INCLUDE_DIR})
 
-    ADD_DEFINITIONS(-DHAVE_MKL)
-    INCLUDE_DIRECTORIES(${MKL_INCLUDES})
+      SET(MKL_LIBRARY_DIR "")
+      FOREACH(LIB ${MKL_LIBRARIES})
+        GET_FILENAME_COMPONENT(LIBDIR ${LIB} DIRECTORY)
+        SET(MKL_LIBRARY_DIR ${MKL_LIBRARY_DIR} ${LIBDIR})
+      ENDFOREACH(LIB)
 
-    SET(SOLVER_SRC src/MKLSolverInterface.cxx)
-    SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${MKL_LIBRARIES})
-
+      SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+      SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${MKL_LIBRARIES})
+      SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${MKL_LIBRARIES})
+      SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${MKL_LIBRARIES})
+    ELSE(USE_EIGEN)
+      MESSAGE(ERROR "MKL cannot be used without Eigen, set USE_EIGEN to ON")
+    ENDIF(USE_EIGEN)
   ENDIF(MKL_LIBRARIES)
 ENDIF(USE_MKL)
 
@@ -150,7 +161,7 @@ ENDIF(USE_TETGEN)
 INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
 # Not sure why we need OpenGL
-FIND_PACKAGE(OpenGL)
+# FIND_PACKAGE(OpenGL)
 
 # Find NLOPT - a small non-linear optimization package
 OPTION(USE_NLOPT "Use the NLOPT optimization library" OFF)
@@ -363,7 +374,7 @@ IF(BUILD_UTILS)
     src/Procrustes.cxx)
 
   ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx)
-  TARGET_LINK_LIBRARIES(vtklevelset cmrep toms611)
+  TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS})
 
   ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
 
@@ -473,7 +484,8 @@ ENDIF(APPLE)
 IF(UNIX AND NOT APPLE)
 
   SET(APPS "\${CMAKE_INSTALL_PREFIX}/bin/cmrep_fit")
-  SET(FIXUP_DIRS "${IPOPT_LIB_DIR}" "${VTK_DIR}/lib" "${NLOPT_LIBRARY_DIR}")
+  SET(FIXUP_DIRS "${IPOPT_LIB_DIR}" "${VTK_DIR}/lib" "${NLOPT_LIBRARY_DIR}" "${MKL_LIBRARY_DIR}")
+  MESSAGE(STATUS "Fixup dirs: ${FIXUP_DIRS}")
 
   INSTALL(CODE "
      include(BundleUtilities)
