@@ -23,9 +23,9 @@ ADD_TEST(ShootingA             ${CMREP_BINARY_DIR}/lmshoot
                                  -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
                                     ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
                                  -o ${CMREP_BINARY_DIR}/res.vtk 
-                                 -s 0.2 -l 20 -d 2 -a A -i 20)
+                                 -s 0.2 -l 20 -d 2 -i 0 20)
 ADD_TEST(ShootingG             ${CMREP_BINARY_DIR}/lmshoot 
                                  -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
                                     ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
                                  -o ${CMREP_BINARY_DIR}/res.vtk 
-                                 -s 0.2 -l 20 -d 2 -a G -i 20)
+                                 -s 0.2 -l 20 -d 2 -i 20 0)
