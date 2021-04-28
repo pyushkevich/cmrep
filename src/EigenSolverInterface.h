@@ -40,22 +40,22 @@ public:
     { flagVerbose = flag; }
 
   // Constructor, takes the problem type
-  EigenSolverInterface(ProblemType ptype) : m_Type(ptype) {}
+  EigenSolverInterface(ProblemType ptype);
 
   // Destructor, get rid of matrix
   virtual ~EigenSolverInterface();
 
 protected:
 
-  EigenSolverInterfaceInternal<int> *m_InternalSolver_Int = nullptr;
-  EigenSolverInterfaceInternal<long> *m_InternalSolver_SizeT = nullptr;
+  EigenSolverInterfaceInternal<int> *m_InternalSolver;
 
   ProblemType m_Type;
 
   // Reset the index arrays()
-  void ResetIndices() {};
+  void ResetIndices();
 
   // Copy of the passed in arrays
+  int *m_RowIndex = nullptr, *m_ColIndex = nullptr;
 };
 
 #endif //__EigenSparseSolver_h_

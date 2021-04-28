@@ -26,19 +26,6 @@ SparseSolver
   return new TaucsSolverInterface(symmetric);
 }
 
-#elif HAVE_MKL
-
-#include "MKLSolverInterface.h"
-
-SparseSolver* 
-SparseSolver
-::MakeSolver(bool symmetric)
-{
-  return new MKLSolverInterface(symmetric ? 
-    MKLSolverInterface::SPD : 
-    MKLSolverInterface::UNSYMMETRIC);
-}
-
 #elif HAVE_EIGEN
 
 #include "EigenSolverInterface.h"
