@@ -29,6 +29,9 @@ INCLUDE(${VTK_USE_FILE})
 # Where to get additional modules
 SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
 
+# Set the include directories
+INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
+
 # Keep track of all binaries that will be compiled
 SET(CMREP_BINARY_TOOLS "")
 
@@ -144,9 +147,6 @@ OPTION(USE_TETGEN "Use the TetGen library" OFF)
 IF(USE_TETGEN)
   FIND_PACKAGE(TetGen REQUIRED)
 ENDIF(USE_TETGEN)
-
-# Set the include directories
-INCLUDE_DIRECTORIES(${CMREP_SOURCE_DIR}/src ${CMREP_SOURCE_DIR}/src/dijkstra)
 
 # Not sure why we need OpenGL
 FIND_PACKAGE(OpenGL)
@@ -327,7 +327,7 @@ TARGET_LINK_LIBRARIES(cmrep_warpimage cmrep ${CMREP_FIT_LIBS})
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
 TARGET_LINK_LIBRARIES(cmrep_afftran cmrep ${CMREP_FIT_LIBS})
 
-ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx)
+ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx src/util/ReadWriteVTK.cxx)
 TARGET_LINK_LIBRARIES(cmrep_vskel cmrep cmrep_dijkstra ${CMREP_FIT_LIBS})
 
 # Update the list of binaries
