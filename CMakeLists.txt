@@ -434,12 +434,14 @@ IF(BUILD_UTILS)
 
   ADD_EXECUTABLE(apply_remeshing_to_another src/util/ApplyRemeshingToAnotherMesh.cxx src/util/ReadWriteVTK.cxx)
 
+  ADD_EXECUTABLE(mesh_convert_format src/util/MeshConvertFormat.cxx src/util/ReadWriteVTK.cxx)
+
   # List of cmrep utilities
   SET(CMREP_UTIL_TOOLS
     sphere_splat vtkprocrustes vtklevelset vtkcontour
     mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
     meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere
-    contour2surf apply_remeshing_to_another)
+    contour2surf apply_remeshing_to_another mesh_convert_format)
 
   # VCG-based utilities
   IF(USE_VCG)
