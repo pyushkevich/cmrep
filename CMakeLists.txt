@@ -402,7 +402,7 @@ IF(BUILD_UTILS)
 
   ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(mesh2img src/util/FillSTLMesh.cxx src/util/DrawTriangles.cpp)
+  ADD_EXECUTABLE(mesh2img src/util/FillSTLMesh.cxx src/util/DrawTriangles.cpp src/util/ReadWriteVTK.cxx)
 
   ADD_EXECUTABLE(mesh_image_sample src/util/MeshImageSample.cxx)
 
