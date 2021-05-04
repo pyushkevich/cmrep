@@ -190,6 +190,7 @@ int main(int argc, char *argv[])
           {
           scalar->InsertNextTuple1(lbl);
           }
+        scalar->SetName("Label");
         labelMesh->GetPointData()->SetScalars(scalar);
         fltAppend->AddInputData(labelMesh);
         }
