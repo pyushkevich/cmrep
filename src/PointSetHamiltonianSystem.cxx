@@ -2,7 +2,6 @@
 #include <vnl/vnl_fastops.h>
 #include <iostream>
 #include "ctpl_stl.h"
-#include "exp_approx.h"
 
 template <class TFloat, unsigned int VDim>
 PointSetHamiltonianSystem<TFloat, VDim>
@@ -91,8 +90,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       // Compute the Gaussian and its derivatives
       TFloat g, g1, g2;
-      g = exp_approx(dq.squared_magnitude(), f, g1, g2);
-      // TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       // Accumulate the Hamiltonian
       tdi->H += pi_pj * g;
@@ -127,7 +125,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Assign lines in pairs, one at the top of the symmetric matrix K and
   // one at the bottom of K. The loop below will not assign the middle
   // line when there is an odd number of points (e.g., line 7 when there are 15)
-  for(int i = 0; i < k/2; i++)
+  for(int i = 0; i < (int) k/2; i++)
     {
     int i_thread = i % n_threads;
     td[i_thread].rows.push_back(i);
@@ -139,9 +137,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
     td[(k / 2) % n_threads].rows.push_back(k/2);
 
   // Allocate the per-thread arrays
-  for(int i = 0; i < n_threads; i++)
+  for(unsigned int i = 0; i < n_threads; i++)
     {
-    for(int a = 0; a < VDim; a++)
+    for(unsigned int a = 0; a < VDim; a++)
       {
       td[i].Hp[a] = Vector(k, 0.0);
       td[i].Hq[a] = Vector(k, 0.0);
@@ -171,14 +169,14 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
   // Compile the results
   TFloat H = 0.0;
-  for(int a = 0; a < VDim; a++)
+  for(unsigned int a = 0; a < VDim; a++)
     {
     Hq[a].fill(0.0); Hp[a].fill(0.0);
     }
 
-  for(int i = 0; i < td.size(); i++)
+  for(unsigned int i = 0; i < td.size(); i++)
     {
-    for(int a = 0; a < VDim; a++)
+    for(unsigned int a = 0; a < VDim; a++)
       {
       Hq[a] += td[i].Hq[a]; 
       Hp[a] += td[i].Hp[a]; 
@@ -252,8 +250,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       // Compute the Gaussian and its derivatives
       TFloat g, g1, g2;
-      g = exp_approx(dq.squared_magnitude(), f, g1, g2);
-      // TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       // Accumulate the Hamiltonian
       H += pi_pj * g;
@@ -330,8 +327,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       // Compute the Gaussian and its derivative terms
       TFloat g, g1, g2;
-      g = exp_approx(d_zq.squared_magnitude(), f, g1, g2);
-      // TFloat g = exp(f * d_zq.squared_magnitude()), g1 = f * g;
+      g = exp(f * d_zq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       // Accumulate derivatives
       for(unsigned int a = 0; a < VDim; a++)
@@ -394,8 +390,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       // Compute the Gaussian and its derivatives
       TFloat g, g1, g2;
-      g = exp_approx(dq.squared_magnitude(), f, g1, g2);
-      // TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       /*
        * d_beta[a] = alpha[b] * Hpp[b][a] =
@@ -534,8 +529,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       // Compute the Gaussian and its derivatives
       TFloat g, g1, g2;
-      g = exp_approx(dq.squared_magnitude(), f, g1, g2);
-      // TFloat g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
 
       /*
        * d_beta[a] = alpha[b] * Hpp[b][a] =
@@ -627,7 +621,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
         if(d2 < d2_cutoff)
           {
           // Take the exponent
-          double g = exp_approx(d2, f);
+          TFloat g = exp(f * d2);
 
           // Scale momentum by exponent
           for(int a = 0; a < VDim; a++) 
@@ -952,7 +946,8 @@ PointSetHamiltonianSystem<TFloat, VDim>
       TFloat da = Qt[t](i,a) - x[a];
       dsq += da * da;
       }
-    TFloat Kq = exp_approx(dsq, f);
+    TFloat Kq = exp(f * dsq);
+
     for(unsigned int a = 0; a < VDim; a++)
       v[a] += Kq * Pt[t](i,a);
     }
