@@ -26,12 +26,16 @@ public:
    * 
    * q0      : N x D vector of template landmark positions
    * sigma   : standard deviation of the Gaussian kernel 
-   * N       : number of timesteps for the ODE
+   * Nt      : number of timesteps for the ODE
+   * Nr      : number of 'rider' points, i.e., points that are carried by
+   *           the flow but are not themselves control points. Default is 0.
+   *           Rider points are at the end of the vector q0.
    */
   PointSetHamiltonianSystem(
     const Matrix &q0, 
     TFloat sigma,
-    unsigned int N);
+    unsigned int Nt,
+    unsigned int Nr = 0);
 
   ~PointSetHamiltonianSystem();
 
@@ -161,8 +165,8 @@ protected:
   // Standard deviation of Gaussian kernel; time step
   TFloat sigma, dt;
 
-  // Number of timesteps for integration; number of points
-  unsigned int N, k;
+  // Number of timesteps for integration; number of control and total points
+  unsigned int N, k, m;
 
   // Gradient of the Hamiltonian components: Hq and Hp
   Vector Hp[VDim], Hq[VDim];

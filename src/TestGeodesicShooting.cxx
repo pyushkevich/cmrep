@@ -5,6 +5,7 @@
 #include <vnl/vnl_matlab_read.h>
 #include <vnl/vnl_random.h>
 #include <cstdarg>
+#include <chrono>
 
 void test(double val1, double val2, double tol, const char *format, ...)
 {
@@ -100,7 +101,6 @@ int main(int argc, char *argv[])
   // Compute the Hamiltonian
   double H  = hsys.ComputeHamiltonianJet(q0, p0, true);
 
-
   // Symmetric terms
   r_Hqq[1][0] = r_Hqq[0][1];
   r_Hpp[1][0] = r_Hpp[0][1];
@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
     }
 
   // Passed this stage of the test
-  std::cout << "Passed regression test on the Hamiltonian derivatives" << std::endl;
+  std::cout << "Passed regression test on ComputeHamiltonianJet" << std::endl;
 
   double t_start, t_finish;
 
@@ -137,6 +137,19 @@ int main(int argc, char *argv[])
   t_finish = clock();
   std::cout << "Flow without gradient computed in " 
     << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
+
+  // Regression testing on FlowHamiltonian
+  for(int i = 0; i < k; i++)
+    {
+    for(int a = 0; a < 2; a++)
+      {
+      test(q1(i,a), r_q1[a](i), 1e-8, "q1[%d][%d]", a, i);
+      test(p1(i,a), r_p1[a](i), 1e-8, "p1[%d][%d]", a, i);
+      }
+    }
+
+  // Passed this stage of the test
+  std::cout << "Passed regression test on FlowHamiltonian" << std::endl;
 
   // Flow the system without gradient
   t_start = clock();
@@ -327,7 +340,7 @@ int main(int argc, char *argv[])
   std::cout << "Passed derivative check on multi-time objective backward flow" << std::endl;
 
   // Create a larger problem with 800 time points, to test overhead
-  int big_k = 800;
+  int big_k = 2000;
   Ham::Matrix big_q0(big_k, 2), big_p0(big_k, 2), big_q1(big_k, 2), big_p1(big_k, 2);
   for(int i = 0; i < big_k; i++)
     {
@@ -343,12 +356,33 @@ int main(int argc, char *argv[])
     }
 
   Ham big_hsys(big_q0, 0.08, 100);
-  t_start = clock();
+  auto ch_start = std::chrono::high_resolution_clock::now();
   big_hsys.FlowHamiltonian(big_p0, big_q1, big_p1);
-  t_finish = clock();
-  std::cout << "Big problem: Flow without gradient computed in " 
-    << (t_finish - t_start) / CLOCKS_PER_SEC << " sec" << std::endl;
-  
+  auto ch_end = std::chrono::high_resolution_clock::now();
+  std::cout << "Big problem: Flow without gradient computed in "
+    << std::chrono::duration_cast<std::chrono::milliseconds>(ch_end - ch_start).count() << " ms." << std::endl;
+
+  // Now generate a problem with 'rider' points and check derivatives. We will generate rider points
+  // by taking averages of random pairs of input points
+  unsigned int n_riders = 60, m = k + n_riders;
+  Ham::Matrix q0_riders(n_riders, 2);
+  for(unsigned int i = 0; i < n_riders; i++)
+    {
+    int i1 = rand() % k, i2 = rand() % k;
+    for(int a = 0; a < 2; a++)
+      q0_riders(i, a) = 0.5 * (q0(i1, a) + q0(i2, a));
+    }
+
+  Ham::Matrix q0r(m, 2), q1r(m, 2);
+  q0r.update(q0, 0, 0);
+  q0r.update(q0_riders, k, 0);
+
+  Ham rider_hsys(q0r, 0.08, 100, n_riders);
+  rider_hsys.FlowHamiltonian(p0, q1r, p1);
+
+  std::cout << "Completed forward flow with riders" << std::endl;
+  std::cout << "Q0\n" << q0r << std::endl;
+  std::cout << "Q1\n" << q1r << std::endl;
 
   return 0;
 };

@@ -6,20 +6,21 @@
 template <class TFloat, unsigned int VDim>
 PointSetHamiltonianSystem<TFloat, VDim>
 ::PointSetHamiltonianSystem(
-    const Matrix &q0, TFloat sigma, unsigned int N)
+    const Matrix &q0, TFloat sigma, unsigned int Nt, unsigned int Nr)
 {
   // Copy parameters
   this->q0 = q0;
   this->sigma = sigma;
-  this->N = N;
-  this->k = q0.rows();
+  this->N = Nt;
+  this->m = q0.rows();
+  this->k = this->m - Nr;
   this->dt = 1.0 / (N-1);
 
   // Allocate H derivatives
   for(unsigned int a = 0; a < VDim; a++)
     {
     this->Hq[a].set_size(k);
-    this->Hp[a].set_size(k);
+    this->Hp[a].set_size(m);
 
     for(unsigned int b = 0; b < VDim; b++)
       {
@@ -46,6 +47,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 {
   // Gaussian factor, i.e., K(z) = exp(f * z)
   TFloat f = -0.5 / (sigma * sigma);
+  TFloat f_times_2 = 2.0 * f;
 
   // Initialize hamiltonian for the subset of indices worked on by the thread
   tdi->H = 0.0;
@@ -57,7 +59,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     tdi->Hq[a].fill(0.0);
     }
 
-  // Loop over all points
+  // Loop over all control points
   for(unsigned int i : tdi->rows)
     {
     // Get a pointer to pi for faster access?
@@ -70,7 +72,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
       tdi->Hp[a](i) += pi[a];
       }
 
-    // The off-diagonal terms
+    // The off-diagonal terms - loop over later control points
     for(unsigned int j = i+1; j < k; j++)
       {
       const TFloat *pj = p->data_array()[j], *qj = q->data_array()[j];
@@ -89,25 +91,43 @@ PointSetHamiltonianSystem<TFloat, VDim>
         }
 
       // Compute the Gaussian and its derivatives
-      TFloat g, g1, g2;
-      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      TFloat g = exp(f * dq.squared_magnitude());
+      TFloat g_pi_pj = g * pi_pj;
+      TFloat z = f_times_2 * g_pi_pj;
 
       // Accumulate the Hamiltonian
-      tdi->H += pi_pj * g;
+      tdi->H += g_pi_pj;
 
       // Accumulate the derivatives
       for(unsigned int a = 0; a < VDim; a++)
         {
         // First derivatives
-        tdi->Hq[a](i) += 2 * pi_pj * g1 * dq[a];
+        tdi->Hq[a](i) += z * dq[a];
         tdi->Hp[a](i) += g * pj[a];
 
-        tdi->Hq[a](j) -= 2 * pi_pj * g1 * dq[a];
+        tdi->Hq[a](j) -= z * dq[a];
         tdi->Hp[a](j) += g * pi[a];
         }
       } // loop over j
-    } // loop over i
 
+    // Rider points
+    for(unsigned int j = k; j < m; j++)
+      {
+      const TFloat *qj = q->data_array()[j];
+
+      TFloat delta, d2 = 0;
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        delta = qi[a] - qj[a];
+        d2 += delta * delta;
+        }
+
+      TFloat g = exp(f * d2);
+      for(unsigned int a = 0; a < VDim; a++)
+        tdi->Hp[a](j) += g * pi[a];
+      }
+
+    } // loop over i
 }
 
 template <class TFloat, unsigned int VDim>
@@ -141,7 +161,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     {
     for(unsigned int a = 0; a < VDim; a++)
       {
-      td[i].Hp[a] = Vector(k, 0.0);
+      td[i].Hp[a] = Vector(m, 0.0);
       td[i].Hq[a] = Vector(k, 0.0);
       td[i].d_alpha[a] = Vector(k, 0.0);
       td[i].d_beta[a] = Vector(k, 0.0);
@@ -167,6 +187,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(auto &f : futures)
     f.get();
 
+  // Clear the threads
+  thread_pool->clear_queue();
+
   // Compile the results
   TFloat H = 0.0;
   for(unsigned int a = 0; a < VDim; a++)
@@ -186,6 +209,134 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
   return H;
 }
+
+// #define _SHOOTING_USE_EIGEN_
+
+// This is some working code that uses Eigen matrix computations instead of
+// hand-crafted code for forward flow. It ended up being quite a bit slower
+// though, even with MKL as the backend.
+#ifdef _SHOOTING_USE_EIGEN_
+
+#include <Eigen/Eigen>
+
+template <class TFloat, unsigned int VDim>
+TFloat
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowHamiltonian(const Matrix &p0, Matrix &q_vnl, Matrix &p_vnl)
+{
+  typedef Eigen::Matrix<TFloat, Eigen::Dynamic, Eigen::Dynamic> EMat;
+  typedef Eigen::Matrix<TFloat, Eigen::Dynamic, 1> EVec;
+
+  // A map to encapsulate VNL inputs
+  typedef Eigen::Map<Eigen::Matrix<TFloat, Eigen::Dynamic, VDim, Eigen::RowMajor> > VNLWrap;
+
+  // Initialize p and q
+  q_vnl = q0; p_vnl = p0;
+  VNLWrap q(q_vnl.data_block(), q_vnl.rows(), VDim);
+  VNLWrap p(p_vnl.data_block(), p_vnl.rows(), VDim);
+
+  // Allocate the streamline arrays
+  Qt.resize(N); Qt[0] = q0;
+  Pt.resize(N); Pt[0] = p0;
+
+  // Get the number of points
+  unsigned int n = q.rows();
+
+  // The return value
+  TFloat H;
+
+  // The partials of the Hamiltonian
+  EMat _Hp(n, 3), _Hq(n, 3);
+
+  // Initialize the distance matrix
+  EMat K(n, n), KP(n, n);
+
+  // Flow over time
+  for(unsigned int t = 1; t < N; t++)
+    {
+    // Compute the distance matrix
+    K = q * q.transpose();
+    EVec q_sq = K.diagonal();
+    K *= -2.0;
+    K.colwise() += q_sq;
+    K.rowwise() += q_sq.transpose();
+
+    // Compute the kernel matrix
+    TFloat f = -0.5 / (sigma * sigma);
+    K = (K * f).array().exp();
+
+    // Compute the Hamiltonian derivatives
+    _Hp = K * p;
+
+    // Scale the matrix by outer product of the p's
+    KP = K.cwiseProduct(p * p.transpose());
+
+    // Take the row-sums
+    _Hq = q;
+    _Hq.array().colwise() *= KP.rowwise().sum().array();
+    _Hq = 2. * f * (_Hq - KP * q);
+
+    // Update q and p
+    q += dt * _Hp;
+    p -= dt * _Hq;
+
+    // Store the flow results
+    Qt[t] = q_vnl; Pt[t] = p_vnl;
+
+    // store the first hamiltonian value
+    if(t == 1)
+      {
+      H = 0.5 * KP.sum();
+      }
+    }
+
+  return H;
+}
+
+#else
+
+template <class TFloat, unsigned int VDim>
+TFloat
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p)
+{
+  // Initialize q and p
+  q = q0; p = p0;
+
+  // Allocate the streamline arrays
+  Qt.resize(N); Qt[0] = q0;
+  Pt.resize(N); Pt[0] = p0;
+
+  // The return value
+  TFloat H, H0;
+
+  // Flow over time
+  for(unsigned int t = 1; t < N; t++)
+    {
+    // Compute the hamiltonian
+    H = ComputeHamiltonianAndGradientThreaded(q, p);
+
+    // Euler update for the momentum (only control points)
+    for(unsigned int i = 0; i < k; i++)
+      for(unsigned int a = 0; a < VDim; a++)
+        p(i,a) -= dt * Hq[a](i);
+
+    // Euler update for the points (all points)
+    for(unsigned int i = 0; i < m; i++)
+      for(unsigned int a = 0; a < VDim; a++)
+        q(i,a) += dt * Hp[a](i);
+
+    // Store the flow results
+    Qt[t] = q; Pt[t] = p;
+
+    // store the first hamiltonian value
+    if(t == 1)
+      H0 = H;
+    }
+
+  return H0;
+}
+#endif
 
 template <class TFloat, unsigned int VDim>
 TFloat
@@ -289,7 +440,6 @@ PointSetHamiltonianSystem<TFloat, VDim>
         }
       } // loop over j
     } // loop over i
-
   return H;
 }
 
@@ -639,69 +789,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     }
 }
 
-template <class TFloat, unsigned int VDim>
-TFloat
-PointSetHamiltonianSystem<TFloat, VDim>
-::FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p)
-{
-  // Initialize q and p
-  q = q0; p = p0;
 
-  // Allocate the streamline arrays
-  Qt.resize(N); Qt[0] = q0;
-  Pt.resize(N); Pt[0] = p0;
-
-  // The return value
-  TFloat H, H0;
-
-  // Flow over time
-  for(unsigned int t = 1; t < N; t++)
-    {
-    // Compute the hamiltonian
-    /*
-    double HT = ComputeHamiltonianJet(q, p, false);
-    Vector t_Hp[VDim], t_Hq[VDim];
-    for(unsigned int a = 0; a < VDim; a++)
-      {
-      t_Hp[a] = Hp[a]; t_Hq[a] = Hq[a];
-      }
-      */
-
-    H = ComputeHamiltonianAndGradientThreaded(q, p);
-
-    /*
-    if(fabs(HT - H) > 1e-6)
-      printf("delta_H = %f\n", HT - H);
-    for(unsigned int a = 0; a < VDim; a++)
-      {
-      if((t_Hq[a] - Hq[a]).inf_norm() > 1e-6)
-        printf("delta_Hq[%d] = %f\n", a, (t_Hq[a] - Hq[a]).inf_norm());
-      if((t_Hp[a] - Hp[a]).inf_norm() > 1e-6)
-      printf("delta_Hp[%d] = %f\n", a, (t_Hp[a] - Hp[a]).inf_norm());
-
-      } */
-
-    // Euler update
-    #pragma omp parallel for
-    for(unsigned int i = 0; i < k; i++)
-      {
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        q(i,a) += dt * Hp[a](i);
-        p(i,a) -= dt * Hq[a](i);
-        }
-      }
-
-    // Store the flow results
-    Qt[t] = q; Pt[t] = p;
-
-    // store the first hamiltonian value
-    if(t == 1)
-      H0 = H;
-    }
-
-  return H0;
-}
 
 #ifdef _LMSHOOT_DIRECT_USE_LAPACK_
 
