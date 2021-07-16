@@ -77,12 +77,6 @@ public:
       const Vector alpha[VDim], const Vector beta[VDim],
       Vector d_alpha[VDim], Vector d_beta[VDim]);
 
-  /** This is an equivalent function that also carries passive points z */
-  void ApplyHamiltonianHessianToAlphaBetaGamma(
-      const Matrix &q, const Matrix &p, const Matrix &z,
-      const Vector alpha[], const Vector beta[], const Vector gamma[],
-      Vector d_alpha[], Vector d_beta[], Vector d_gamma[]);
-
   /**
    * Flow the Hamiltonian system with initial momentum p0 without gradient 
    * computation. Returns the kinetic energy (Hamiltonian value that should 

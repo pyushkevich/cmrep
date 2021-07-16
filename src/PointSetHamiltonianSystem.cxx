@@ -49,6 +49,20 @@ PointSetHamiltonianSystem<TFloat, VDim>
   TFloat f = -0.5 / (sigma * sigma);
   TFloat f_times_2 = 2.0 * f;
 
+  // Storage for the displacement vector Qi-Qj
+  TFloat dq[VDim];
+
+  // Get access to pointers to avoid relying on slower VNL access routines
+  auto p_da = p->data_array(), q_da = q->data_array();
+
+  // Similarly, get access to output arrays
+  TFloat *Hq_da[VDim], *Hp_da[VDim];
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    Hq_da[a] = tdi->Hq[a].data_block();
+    Hp_da[a] = tdi->Hp[a].data_block();
+    }
+
   // Initialize hamiltonian for the subset of indices worked on by the thread
   tdi->H = 0.0;
 
@@ -63,35 +77,34 @@ PointSetHamiltonianSystem<TFloat, VDim>
   for(unsigned int i : tdi->rows)
     {
     // Get a pointer to pi for faster access?
-    const TFloat *pi = p->data_array()[i], *qi = q->data_array()[i];
+    const TFloat *pi = p_da[i], *qi = q_da[i];
 
     // The diagonal terms
     for(unsigned int a = 0; a < VDim; a++)
       {
       tdi->H += 0.5 * pi[a] * pi[a];
-      tdi->Hp[a](i) += pi[a];
+      Hp_da[a][i] += pi[a];
       }
 
     // The off-diagonal terms - loop over later control points
     for(unsigned int j = i+1; j < k; j++)
       {
-      const TFloat *pj = p->data_array()[j], *qj = q->data_array()[j];
-
-      // Vector Qi-Qj
-      VecD dq;
+      const TFloat *pj = p_da[j], *qj = q_da[j];
 
       // Dot product of Pi and Pj
       TFloat pi_pj = 0.0;
+      TFloat dq_norm_sq = 0.0;
 
       // Compute above quantities
       for(unsigned int a = 0; a < VDim; a++)
         {
         dq[a] = qi[a] - qj[a];
         pi_pj += pi[a] * pj[a];
+        dq_norm_sq += dq[a] * dq[a];
         }
 
       // Compute the Gaussian and its derivatives
-      TFloat g = exp(f * dq.squared_magnitude());
+      TFloat g = exp(f * dq_norm_sq);
       TFloat g_pi_pj = g * pi_pj;
       TFloat z = f_times_2 * g_pi_pj;
 
@@ -102,11 +115,11 @@ PointSetHamiltonianSystem<TFloat, VDim>
       for(unsigned int a = 0; a < VDim; a++)
         {
         // First derivatives
-        tdi->Hq[a](i) += z * dq[a];
-        tdi->Hp[a](i) += g * pj[a];
+        Hq_da[a][i] += z * dq[a];
+        Hp_da[a][i] += g * pj[a];
 
-        tdi->Hq[a](j) -= z * dq[a];
-        tdi->Hp[a](j) += g * pi[a];
+        Hq_da[a][j] -= z * dq[a];
+        Hp_da[a][j] += g * pi[a];
         }
       } // loop over j
 
@@ -124,7 +137,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
       TFloat g = exp(f * d2);
       for(unsigned int a = 0; a < VDim; a++)
-        tdi->Hp[a](j) += g * pi[a];
+        Hp_da[a][j] += g * pi[a];
       }
 
     } // loop over i
@@ -138,6 +151,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // Split the indices among threads
   unsigned int n_threads = std::thread::hardware_concurrency();
   td.resize(n_threads);
+  std::cout << "Hamiltonian system running with " << n_threads << " threads" << std::endl;
 
   // Create the thread pool
   thread_pool = new ctpl::thread_pool(n_threads);
@@ -163,7 +177,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
       {
       td[i].Hp[a] = Vector(m, 0.0);
       td[i].Hq[a] = Vector(k, 0.0);
-      td[i].d_alpha[a] = Vector(k, 0.0);
+      td[i].d_alpha[a] = Vector(m, 0.0);
       td[i].d_beta[a] = Vector(k, 0.0);
       }
     }
@@ -443,59 +457,6 @@ PointSetHamiltonianSystem<TFloat, VDim>
   return H;
 }
 
-/**
- * This is the computation of the recursive backpropagation with free-riding points z
- */
-template <class TFloat, unsigned int VDim>
-void
-PointSetHamiltonianSystem<TFloat, VDim>
-::ApplyHamiltonianHessianToAlphaBetaGamma(
-    const Matrix &q, const Matrix &p, const Matrix &z,
-    const Vector alpha[], const Vector beta[], const Vector gamma[],
-    Vector d_alpha[], Vector d_beta[], Vector d_gamma[])
-{
-  // Exponent constant
-  TFloat f = -0.5 / (sigma * sigma);
-
-  // First, compute the backpropagation for alpha, beta, q and p
-  ApplyHamiltonianHessianToAlphaBeta(q, p, alpha, beta, d_alpha, d_beta);
-
-  // Loop over the elements of z
-  for(int j = 0; j < z.rows(); j++)
-    {
-    const TFloat *zj = z.data_array()[j];
-
-    // Loop over the elements of q/p
-    for(int i = 0; i < k; i++)
-      {
-      const TFloat *pi = p.data_array()[i], *qi = q.data_array()[i];
-
-      // Compute the exponent term
-      VecD d_zq;
-      for(int a = 0; a < VDim; a++)
-        d_zq[a] = qi[a] - zj[a];
-
-      // Compute the Gaussian and its derivative terms
-      TFloat g, g1, g2;
-      g = exp(f * d_zq.squared_magnitude()), g1 = f * g, g2 = f * g1;
-
-      // Accumulate derivatives
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        TFloat term_2_g1_dzqa = 2.0 * g1 * d_zq[a];
-        for(unsigned int b = 0; b < VDim; b++)
-          {
-          d_alpha[b][i] -= gamma[a][j] * term_2_g1_dzqa * pi[b];
-          d_gamma[b][j] += gamma[b][j];
-          }
-        d_beta[a][i] += g;
-        }
-      }
-
-    }
-}
-
-
 
 template <class TFloat, unsigned int VDim>
 void
@@ -505,7 +466,25 @@ PointSetHamiltonianSystem<TFloat, VDim>
   const Vector alpha[], const Vector beta[],
   ThreadData *tdi)
 {
+  // Gaussian factor, i.e., K(z) = exp(f * z)
   TFloat f = -0.5 / (sigma * sigma);
+
+  // Storage for the displacement vector Qi-Qj
+  TFloat dq[VDim];
+
+  // Get access to pointers to avoid relying on slower VNL access routines
+  auto p_da = p->data_array(), q_da = q->data_array();
+
+  // Similarly, get access to output arrays
+  const TFloat *alpha_da[VDim], *beta_da[VDim];
+  TFloat *d_alpha_da[VDim], *d_beta_da[VDim];
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    alpha_da[a] = alpha[a].data_block();
+    beta_da[a] = beta[a].data_block();
+    d_alpha_da[a] = tdi->d_alpha[a].data_block();
+    d_beta_da[a] = tdi->d_beta[a].data_block();
+    }
 
   // Initialize the output arrays (TODO: move this into initialization)
   for(unsigned int a = 0; a < VDim; a++)
@@ -514,33 +493,32 @@ PointSetHamiltonianSystem<TFloat, VDim>
     tdi->d_beta[a].fill(0.0);
     }
 
-  // Loop over all points
+  // Loop over all control points in this thread
   for(unsigned int i : tdi->rows)
     {
     // Get a pointer to pi for faster access?
-    const TFloat *pi = p->data_array()[i], *qi = q->data_array()[i];
+    const TFloat *pi = p_da[i], *qi = q_da[i];
 
-    // TODO: you should be able to do this computation on half the matrix, it's symmetric!
+    // Loop over later control points
     for(unsigned int j = i+1; j < k; j++)
       {
-      const TFloat *pj = p->data_array()[j], *qj = q->data_array()[j];
-
-      // Vector Qi-Qj
-      VecD dq;
+      const TFloat *pj = p_da[j], *qj = q_da[j];
 
       // Dot product of Pi and Pj
       TFloat pi_pj = 0.0;
+      TFloat dq_norm_sq = 0.0;
 
       // Compute above quantities
       for(unsigned int a = 0; a < VDim; a++)
         {
         dq[a] = qi[a] - qj[a];
         pi_pj += pi[a] * pj[a];
+        dq_norm_sq += dq[a] * dq[a];
         }
 
       // Compute the Gaussian and its derivatives
-      TFloat g, g1, g2;
-      g = exp(f * dq.squared_magnitude()), g1 = f * g, g2 = f * g1;
+      TFloat g, g1;
+      g = exp(f * dq_norm_sq), g1 = f * g;
 
       /*
        * d_beta[a] = alpha[b] * Hpp[b][a] =
@@ -558,37 +536,70 @@ PointSetHamiltonianSystem<TFloat, VDim>
       // Accumulate the derivatives
       for(unsigned int a = 0; a < VDim; a++)
         {
-
         TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
         TFloat alpha_j_pi_plus_alpha_i_pj = 0.0;
-        TFloat d_beta_ji_a = (beta[a][j] - beta[a][i]);
+        TFloat d_beta_ji_a = (beta_da[a][j] - beta_da[a][i]);
 
         for(unsigned int b = 0; b < VDim; b++)
           {
-          TFloat val_qq = 2.0 * pi_pj * (2 * g2 * dq[a] * dq[b] + ((a == b) ? g1 : 0.0));
+          TFloat val_qq = 2.0 * pi_pj * (f * term_2_g1_dqa * dq[b] + ((a == b) ? g1 : 0.0));
           TFloat upd = d_beta_ji_a * val_qq;
 
           // We can take advantage of the symmetry of Hqq.
-          tdi->d_alpha[b][j] -= upd;
-          tdi->d_alpha[b][i] += upd;
+          d_alpha_da[b][j] -= upd;
+          d_alpha_da[b][i] += upd;
 
-          tdi->d_beta[b][j] += d_beta_ji_a * term_2_g1_dqa * pi[b];
-          tdi->d_beta[b][i] += d_beta_ji_a * term_2_g1_dqa * pj[b];
+          d_beta_da[b][j] += d_beta_ji_a * term_2_g1_dqa * pi[b];
+          d_beta_da[b][i] += d_beta_ji_a * term_2_g1_dqa * pj[b];
 
-          alpha_j_pi_plus_alpha_i_pj += alpha[b][j] * pi[b] + alpha[b][i] * pj[b];
+          alpha_j_pi_plus_alpha_i_pj += alpha_da[b][j] * pi[b] + alpha_da[b][i] * pj[b];
           }
 
-        tdi->d_alpha[a][i] += term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
-        tdi->d_alpha[a][j] -= term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+        d_alpha_da[a][i] += term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
+        d_alpha_da[a][j] -= term_2_g1_dqa * alpha_j_pi_plus_alpha_i_pj;
 
-        tdi->d_beta[a][i] += g * alpha[a][j];
-        tdi->d_beta[a][j] += g * alpha[a][i];
+        d_beta_da[a][i] += g * alpha_da[a][j];
+        d_beta_da[a][j] += g * alpha_da[a][i];
         }
       } // loop over j
 
     for(unsigned int a = 0; a < VDim; a++)
       {
-      tdi->d_beta[a][i] += alpha[a][i];
+      d_beta_da[a][i] += alpha_da[a][i];
+      }
+
+    // Loop over rider points.
+    for(unsigned int j = k; j < m; j++)
+      {
+      const TFloat *qj = q_da[j];
+
+      // Compute the exponent term
+      TFloat dq_norm_sq = 0.0;
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        dq[a] = qi[a] - qj[a];
+        dq_norm_sq += dq[a] * dq[a];
+        }
+
+      // Compute the Gaussian and its derivative terms
+      TFloat g, g1;
+      g = exp(f * dq_norm_sq), g1 = f * g;
+
+      // Accumulate derivatives
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        TFloat term_2_g1_dqa = 2.0 * g1 * dq[a];
+        for(unsigned int b = 0; b < VDim; b++)
+          {
+          // Update for the control point
+          d_alpha_da[a][i] += alpha_da[b][j] * term_2_g1_dqa * pi[b];
+
+          // tdi->d_alpha[b][j] += alpha[b][j];
+          d_alpha_da[a][j] -= alpha_da[b][j] * term_2_g1_dqa * pi[b];
+          }
+
+        d_beta_da[a][i] += alpha_da[a][j] * g;
+        }
       }
 
     } // loop over i
@@ -604,7 +615,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     Vector d_alpha[], Vector d_beta[])
 {
   // Initialize the arrays to be accumulated
-  for(int a = 0; a < VDim; a++)
+  for(unsigned int a = 0; a < VDim; a++)
     {
     d_alpha[a].fill(0.0);
     d_beta[a].fill(0.0);
@@ -624,9 +635,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
     f.get();
 
   // Accumulate the d_alpha and d_beta from threads
-  for(int i = 0; i < td.size(); i++)
+  for(unsigned int i = 0; i < td.size(); i++)
     {
-    for(int a = 0; a < VDim; a++)
+    for(unsigned int a = 0; a < VDim; a++)
       {
       d_alpha[a] += td[i].d_alpha[a];
       d_beta[a] += td[i].d_beta[a];
@@ -634,6 +645,68 @@ PointSetHamiltonianSystem<TFloat, VDim>
     }
 }
 
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowGradientBackward(
+  const Vector alpha1[VDim],
+  const Vector beta1[VDim],
+  Vector result[VDim])
+{
+  // Allocate update vectors for alpha and beta
+  Vector alpha[VDim], beta[VDim];
+  Vector d_alpha[VDim], d_beta[VDim];
+
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    alpha[a] = alpha1[a];
+    beta[a] = beta1[a];
+    d_alpha[a].set_size(m);
+    d_beta[a].set_size(k);
+    }
+
+  // Work our way backwards
+  for(int t = N-1; t > 0; t--)
+    {
+    // Apply Hamiltonian Hessian to get an update in alpha/beta
+    ApplyHamiltonianHessianToAlphaBetaThreaded(
+          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+    // Update the vectors
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      alpha[a] += dt * d_alpha[a];
+      beta[a] += dt * d_beta[a];
+      }
+    }
+
+  // Finally, what we are really after are the betas
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    result[a] = beta[a];
+    }
+}
+
+template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::FlowGradientBackward(
+  const Matrix &alpha, const Matrix &beta, Matrix &result)
+{
+  Vector alpha_v[VDim], beta_v[VDim], result_v[VDim];
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    alpha_v[a] = alpha.get_column(a);
+    beta_v[a] = beta.get_column(a);
+    result_v[a].set_size(alpha_v[a].size());
+    }
+
+  this->FlowGradientBackward(alpha_v, beta_v, result_v);
+
+  for(unsigned int a = 0; a < VDim; a++)
+    result.set_column(a, result_v[a]);
+}
 
 template <class TFloat, unsigned int VDim>
 void
@@ -905,69 +978,6 @@ BlasInterface<float>
   sgemm_(opA, opB, M,N,K,alpha,A,LDA,B,LDB,beta,C,LDC);
 }
 #endif
-
-template <class TFloat, unsigned int VDim>
-void
-PointSetHamiltonianSystem<TFloat, VDim>
-::FlowGradientBackward(
-  const Vector alpha1[VDim], 
-  const Vector beta1[VDim],
-  Vector result[VDim])
-{
-  // Allocate update vectors for alpha and beta
-  Vector alpha[VDim], beta[VDim];
-  Vector d_alpha[VDim], d_beta[VDim];
-
-  for(int a = 0; a < VDim; a++)
-    {
-    alpha[a] = alpha1[a];
-    beta[a] = beta1[a];
-    d_alpha[a].set_size(k);
-    d_beta[a].set_size(k);
-    }
-
-  // Work our way backwards
-  for(int t = N-1; t > 0; t--)
-    {
-    // Apply Hamiltonian Hessian to get an update in alpha/beta
-    ApplyHamiltonianHessianToAlphaBetaThreaded(
-          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
-
-    // Update the vectors
-    for(int a = 0; a < VDim; a++)
-      {
-      alpha[a] += dt * d_alpha[a];
-      beta[a] += dt * d_beta[a];
-      }
-    } 
-
-  // Finally, what we are really after are the betas
-  for(int a = 0; a < VDim; a++)
-    {
-    result[a] = beta[a];
-    }
-}
-
-template <class TFloat, unsigned int VDim>
-void
-PointSetHamiltonianSystem<TFloat, VDim>
-::FlowGradientBackward(
-  const Matrix &alpha, const Matrix &beta, Matrix &result)
-{
-  Vector alpha_v[VDim], beta_v[VDim], result_v[VDim];
-  for(int a = 0; a < VDim; a++)
-    {
-    alpha_v[a] = alpha.get_column(a);
-    beta_v[a] = beta.get_column(a);
-    result_v[a].set_size(alpha_v[a].size());
-    }
-
-  this->FlowGradientBackward(alpha_v, beta_v, result_v);
-
-  for(int a = 0; a < VDim; a++)
-    result.set_column(a, result_v[a]);
-}
-
 
 
 template <class TFloat, unsigned int VDim>

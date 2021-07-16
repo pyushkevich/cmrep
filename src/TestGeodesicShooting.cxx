@@ -340,7 +340,7 @@ int main(int argc, char *argv[])
   std::cout << "Passed derivative check on multi-time objective backward flow" << std::endl;
 
   // Create a larger problem with 800 time points, to test overhead
-  int big_k = 2000;
+  int big_k = 5000;
   Ham::Matrix big_q0(big_k, 2), big_p0(big_k, 2), big_q1(big_k, 2), big_p1(big_k, 2);
   for(int i = 0; i < big_k; i++)
     {
@@ -359,7 +359,21 @@ int main(int argc, char *argv[])
   auto ch_start = std::chrono::high_resolution_clock::now();
   big_hsys.FlowHamiltonian(big_p0, big_q1, big_p1);
   auto ch_end = std::chrono::high_resolution_clock::now();
-  std::cout << "Big problem: Flow without gradient computed in "
+  std::cout << "Big problem (" << big_k << "x2): Flow without gradient computed in "
+    << std::chrono::duration_cast<std::chrono::milliseconds>(ch_end - ch_start).count() << " ms." << std::endl;
+
+  // Now perform backprop on the big problem
+  Ham::Vector big_alpha[2], big_beta[2], big_result[2];
+  for(int a = 0; a < 2; a++)
+    {
+    big_alpha[a].set_size(big_k); big_alpha[a].fill(0.0001);
+    big_beta[a].set_size(big_k); big_beta[a].fill(0.);
+    }
+
+  ch_start = std::chrono::high_resolution_clock::now();
+  big_hsys.FlowGradientBackward(big_alpha, big_beta, big_result);
+  ch_end = std::chrono::high_resolution_clock::now();
+  std::cout << "Big problem (" << big_k << "x2): Backprop computed in "
     << std::chrono::duration_cast<std::chrono::milliseconds>(ch_end - ch_start).count() << " ms." << std::endl;
 
   // Now generate a problem with 'rider' points and check derivatives. We will generate rider points
@@ -381,8 +395,56 @@ int main(int argc, char *argv[])
   rider_hsys.FlowHamiltonian(p0, q1r, p1);
 
   std::cout << "Completed forward flow with riders" << std::endl;
-  std::cout << "Q0\n" << q0r << std::endl;
-  std::cout << "Q1\n" << q1r << std::endl;
+
+  // Define a simple objective function: 1/2 sum of squares of q1's, which makes the
+  // alphas be the q1s
+
+  // Test forward-backward gradient computation approach with riders
+  Ham::Vector alpha_r[2], beta_r[2], dd_r[2], dd_test_r[2];
+  for(int a = 0; a < 2; a++)
+    {
+    alpha_r[a].set_size(m);
+    beta_r[a].set_size(k);
+
+    for(unsigned int i = 0; i < m; i++)
+      alpha_r[a](i) = q1r(i,a);
+
+    for(unsigned int i = 0; i < k; i++)
+      beta_r[a](i) = 0.0;
+    }
+
+  // Do the back-prop with riders
+  ch_start = std::chrono::high_resolution_clock::now();
+  rider_hsys.FlowGradientBackward(alpha_r, beta_r, dd_r);
+  ch_end = std::chrono::high_resolution_clock::now();
+  std::cout << "Backprop with riders computed in "
+    << std::chrono::duration_cast<std::chrono::milliseconds>(ch_end - ch_start).count() << " ms." << std::endl;
+
+  // Now compute central difference derivatives with respect to specific p0's
+  for(unsigned int i = 0; i < k; i++)
+    for(unsigned int a = 0; a < 2; a++)
+      {
+      Ham::Matrix p0_off1 = p0; p0_off1(i,a) -= eps;
+      rider_hsys.FlowHamiltonian(p0_off1, q1r, p1);
+      double E1 = 0;
+      for(unsigned int j = 0; j < m; j++)
+        for(unsigned int b = 0; b < 2; b++)
+          E1 += 0.5 * q1r(j,b) * q1r(j,b);
+
+      Ham::Matrix p0_off2 = p0; p0_off2(i,a) += eps;
+      rider_hsys.FlowHamiltonian(p0_off2, q1r, p1);
+      double E2 = 0;
+      for(unsigned int j = 0; j < m; j++)
+        for(unsigned int b = 0; b < 2; b++)
+          E2 += 0.5 * q1r(j,b) * q1r(j,b);
+
+      double d_num = (E2 - E1) / (2.0 * eps);
+      double d_ana = dd_r[a](i);
+
+      test(d_num, d_ana, 1e-5, "D_riders[%d][%d]", i, a);
+      }
+
+  std::cout << "Passed check on backward gradient flow" << std::endl;
 
   return 0;
 };
