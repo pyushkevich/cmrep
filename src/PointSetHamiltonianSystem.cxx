@@ -6,7 +6,9 @@
 template <class TFloat, unsigned int VDim>
 PointSetHamiltonianSystem<TFloat, VDim>
 ::PointSetHamiltonianSystem(
-    const Matrix &q0, TFloat sigma, unsigned int Nt, unsigned int Nr)
+    const Matrix &q0, TFloat sigma,
+    unsigned int Nt, unsigned int Nr,
+    unsigned int n_threads)
 {
   // Copy parameters
   this->q0 = q0;
@@ -15,6 +17,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
   this->m = q0.rows();
   this->k = this->m - Nr;
   this->dt = 1.0 / (N-1);
+
+  // Set the number of threads
+  this->n_threads = n_threads > 0 ? n_threads : std::thread::hardware_concurrency();
 
   // Allocate H derivatives
   for(unsigned int a = 0; a < VDim; a++)
@@ -149,9 +154,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 ::SetupMultiThreaded()
 {
   // Split the indices among threads
-  unsigned int n_threads = std::thread::hardware_concurrency();
   td.resize(n_threads);
-  std::cout << "Hamiltonian system running with " << n_threads << " threads" << std::endl;
 
   // Create the thread pool
   thread_pool = new ctpl::thread_pool(n_threads);

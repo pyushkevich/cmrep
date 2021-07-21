@@ -6,10 +6,15 @@
 #include <iostream>
 #include <algorithm>
 #include "util/ReadWriteVTK.h"
+#include "vtkPolyData.h"
 #include "vtkPointData.h"
 #include "vtkDoubleArray.h"
 #include "vtkQuadricClustering.h"
 #include "vtkSmartPointer.h"
+#include "vtkCell.h"
+#include "vtkPoints.h"
+#include "vtkCellArray.h"
+#include "vtkCellData.h"
 
 #include "CommandLineHelper.h"
 #include "GreedyAPI.h"
@@ -29,14 +34,17 @@ int usage()
   cout << "Additional Options" << endl;
   cout << "  -d dim                     : problem dimension (3)" << endl;
   cout << "  -n N                       : number of time steps (100)" << endl;
+  cout << "  -a <L|C|V>                 : data attachment term, L for landmark euclidean distance (default), " << endl;
+  cout << "                               C for current metric, V for varifold metric." << endl;
+  cout << "  -S sigma                   : kernel standard deviation for current/varifold metric" << endl;
+  cout << "  -c mesh.vtk                : optional control point mesh (if different from template.vtk)" << endl;
+  cout << "  -p array_name              : read initial momentum from named array in control/template mesh" << endl;
   cout << "  -i iter_grad iter_newt     : max iterations for optimization for gradient descent and newton's" << endl;
-  cout << "  -r fraction                : randomly downsample mesh by factor (e.g. 0.01)" << endl;
-  cout << "  -q vector                  : apply quadric clustering to mesh with specified" <<  endl;
-  cout << "                               number of bins per dimension (e.g. 40x40x30)" << endl;
-//  cout << "  -a <A|G>                   : algorithm to use: A: Allassonniere; G: GradDescent (deflt)" << endl;
   cout << "  -O filepattern             : pattern for saving traced landmark paths (e.g., path%04d.vtk)" << endl;
   cout << "  -f                         : use single-precision float (off by deflt)" << endl;
   cout << "  -C mu0 mu_mult             : test constrained optimization (not for general use)" << endl;
+  cout << "  -t n_threads               : limit number of concurrent threads to n_threads" << endl;
+  cout << "  -D n                       : perform derivative check (for first n momenta)" << endl;
   return -1;
 }
 
@@ -58,28 +66,680 @@ void check(bool condition, const char *format,...)
 struct ShootingParameters
 {
   enum Algorithm { Allassonniere, GradDescent, QuasiAllassonniere };
-  string fnTemplate, fnTarget;
+  enum DataAttachment { Euclidean, Current, Varifold };
+  string fnTemplate, fnTarget, fnControlMesh;
   string fnOutput;
   string fnOutputPaths;
-  double sigma;
-  double lambda;
-  double downsample;
-  unsigned int dim;
-  unsigned int N;
-  unsigned int iter_grad, iter_newton;
-  Algorithm alg;
-  bool use_float;
+  string arrInitialMomentum;
+  double sigma = 0.0;
+  double currents_sigma = 0.0;
+  double lambda = 0.0;
+  unsigned int dim = 3;
+  unsigned int N = 100;
+  unsigned int iter_grad = 20, iter_newton = 20;
+  Algorithm alg = GradDescent;
+  DataAttachment attach = Euclidean;
+  bool use_float = false;
+  unsigned int n_threads = 0;
+  unsigned int n_deriv_check = 0;
 
   // For constrained optimization - just exprimental
-  double constrained_mu_init, constrained_mu_mult;
-
-  std::vector<int> qcdiv;
-
-  ShootingParameters() :
-    N(100), dim(3), sigma(0.0), lambda(0.0), iter_grad(20), iter_newton(20), downsample(1),
-    use_float(false), alg(GradDescent), constrained_mu_init(0.0), constrained_mu_mult(0.0) 
-  {}
+  double constrained_mu_init = 0.0, constrained_mu_mult = 0.0;
 };
+
+
+template <class TFloat, unsigned int VDim>
+class TriangleCentersAndNormals
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
+
+  TriangleCentersAndNormals( const Triangulation &tri);
+  void Forward(const Matrix &q);
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq);
+};
+
+template <class TFloat>
+class TriangleCentersAndNormals<TFloat, 3>
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, 3> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
+
+  TriangleCentersAndNormals( const Triangulation &tri)
+  {
+    this->tri = tri;
+    this->C.set_size(tri.rows(), 3);
+    this->N.set_size(tri.rows(), 3);
+    this->U.set_size(tri.rows(), 3);
+    this->V.set_size(tri.rows(), 3);
+    this->W.set_size(tri.rows(), 3);
+    this->W_norm.set_size(tri.rows());
+  }
+
+  void Forward(const Matrix &q)
+  {
+    for(unsigned int i = 0; i < tri.rows(); i++)
+      {
+      // Get pointer access to the outputs
+      TFloat *Ui = U.data_array()[i];
+      TFloat *Vi = V.data_array()[i];
+      TFloat *Wi = W.data_array()[i];
+      TFloat *Ci = C.data_array()[i];
+      TFloat *Ni = N.data_array()[i];
+
+      int v0 = tri(i, 0), v1 = tri(i, 1), v2 = tri(i, 2);
+      for(unsigned int a = 0; a < 3; a++)
+        {
+        Ci[a] = (q(v0, a) + q(v1, a) + q(v2, a)) / 3.0;
+        Ui[a] = q(v1, a) - q(v0, a);
+        Vi[a] = q(v2, a) - q(v0, a);
+        }
+
+      // Compute the cross-product and store in the normal (this is what currents use)
+      Ni[0] = 0.5 * (Ui[1] * Vi[2] - Ui[2] * Vi[1]);
+      Ni[1] = 0.5 * (Ui[2] * Vi[0] - Ui[0] * Vi[2]);
+      Ni[2] = 0.5 * (Ui[0] * Vi[1] - Ui[1] * Vi[0]);
+
+      /*
+      Wi[0] = Ui[1] * Vi[2] - Ui[2] * Vi[1];
+      Wi[1] = Ui[2] * Vi[0] - Ui[0] * Vi[2];
+      Wi[2] = Ui[0] * Vi[1] - Ui[1] * Vi[0];
+
+      // Compute the norm of the cross-product
+      W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1] + Wi[2] * Wi[2]);
+      if(W_norm[i] > 0.0)
+        {
+        Ni[0] = Wi[0] / W_norm[i];
+        Ni[1] = Wi[1] / W_norm[i];
+        Ni[2] = Wi[2] / W_norm[i];
+        }
+      else
+        {
+        Ni[0] = 0.0;
+        Ni[1] = 0.0;
+        Ni[2] = 0.0;
+        }
+      */
+      }
+  }
+
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq)
+  {
+    dE_dq.fill(0.0);
+    TFloat dU[3], dV[3], dW[3];
+
+    for(unsigned int i = 0; i < tri.rows(); i++)
+      {
+      // Get pointer access to the outputs
+      TFloat *Ui = U.data_array()[i];
+      TFloat *Vi = V.data_array()[i];
+      TFloat *Ni = N.data_array()[i];
+      const TFloat *dCi = dE_dC.data_array()[i];
+      const TFloat *dNi = dE_dN.data_array()[i];
+
+      // Get the vertex indices and the corresponding gradients
+      int v0 = tri(i, 0), v1 = tri(i, 1), v2 = tri(i, 2);
+      TFloat *dq0 = dE_dq.data_array()[v0];
+      TFloat *dq1 = dE_dq.data_array()[v1];
+      TFloat *dq2 = dE_dq.data_array()[v2];
+
+      /*
+
+      // Partial of the norm of W
+      if(W_norm[i] > 0.0)
+        {
+        dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] - Ni[0] * Ni[2] * dNi[2]) / W_norm[i];
+        dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] - Ni[1] * Ni[2] * dNi[2]) / W_norm[i];
+        dW[2] = ((1 - Ni[2]*Ni[2]) * dNi[2] - Ni[2] * Ni[0] * dNi[0] - Ni[2] * Ni[1] * dNi[1]) / W_norm[i];
+        }
+      else
+        {
+        dW[0] = dNi[0];
+        dW[1] = dNi[1];
+        dW[2] = dNi[2];
+        }
+
+      // Backprop the cross-product
+      dU[0] = Vi[1] * dW[2] - Vi[2] * dW[1];
+      dU[1] = Vi[2] * dW[0] - Vi[0] * dW[2];
+      dU[2] = Vi[0] * dW[1] - Vi[1] * dW[0];
+
+      dV[0] = Ui[2] * dW[1] - Ui[1] * dW[2];
+      dV[1] = Ui[0] * dW[2] - Ui[2] * dW[0];
+      dV[2] = Ui[1] * dW[0] - Ui[0] * dW[1];
+
+      */
+
+      // Backprop the cross-product
+      dU[0] = 0.5 * (Vi[1] * dNi[2] - Vi[2] * dNi[1]);
+      dU[1] = 0.5 * (Vi[2] * dNi[0] - Vi[0] * dNi[2]);
+      dU[2] = 0.5 * (Vi[0] * dNi[1] - Vi[1] * dNi[0]);
+
+      dV[0] = 0.5 * (Ui[2] * dNi[1] - Ui[1] * dNi[2]);
+      dV[1] = 0.5 * (Ui[0] * dNi[2] - Ui[2] * dNi[0]);
+      dV[2] = 0.5 * (Ui[1] * dNi[0] - Ui[0] * dNi[1]);
+
+      // Backprop the Ui and Vi
+      for(unsigned int a = 0; a < 3; a++)
+        {
+        // The center contribution
+        TFloat dCi_a  = dCi[a] / 3.0;
+        dq0[a] += dCi_a - dU[a] - dV[a];
+        dq1[a] += dCi_a + dU[a];
+        dq2[a] += dCi_a + dV[a];
+        }
+      }
+  }
+
+  // Intermediate values
+  Triangulation tri;
+  Matrix U, V, W;
+  Vector W_norm;
+
+  // Results
+  Matrix C, N;
+};
+
+
+template <class TFloat>
+class TriangleCentersAndNormals<TFloat, 2>
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, 2> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
+
+  TriangleCentersAndNormals( const Triangulation &tri)
+  {
+    this->tri = tri;
+    this->C.set_size(tri.rows(), 2);
+    this->N.set_size(tri.rows(), 2);
+    this->U.set_size(tri.rows(), 2);
+    this->W.set_size(tri.rows(), 2);
+    this->W_norm.set_size(tri.rows());
+  }
+
+  void Forward(const Matrix &q)
+  {
+    for(unsigned int i = 0; i < tri.rows(); i++)
+      {
+      // Get pointer access to the outputs
+      TFloat *Ui = U.data_array()[i];
+      TFloat *Wi = W.data_array()[i];
+      TFloat *Ci = C.data_array()[i];
+      TFloat *Ni = N.data_array()[i];
+
+      int v0 = tri(i, 0), v1 = tri(i, 1);
+      for(unsigned int a = 0; a < 2; a++)
+        {
+        Ci[a] = (q(v0, a) + q(v1, a)) / 2.0;
+        Ui[a] = q(v1, a) - q(v0, a);
+        }
+
+      // Compute the cross-product
+      Ni[0] = Ui[1];
+      Ni[1] = -Ui[0];
+
+      /*
+
+      // Compute the cross-product
+      Wi[0] = Ui[1];
+      Wi[1] = -Ui[0];
+
+      // Compute the norm of the cross-product
+      W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1]);
+      if(W_norm[i] > 0.0)
+        {
+        Ni[0] = Wi[0] / W_norm[i];
+        Ni[1] = Wi[1] / W_norm[i];
+        }
+      else
+        {
+        Ni[0] = 0.0;
+        Ni[1] = 0.0;
+        }
+        */
+      }
+  }
+
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq)
+  {
+    dE_dq.fill(0.0);
+    TFloat dU[2], dW[2];
+
+    for(unsigned int i = 0; i < tri.rows(); i++)
+      {
+      // Get pointer access to the outputs
+      TFloat *Ni = N.data_array()[i];
+      const TFloat *dCi = dE_dC.data_array()[i];
+      const TFloat *dNi = dE_dN.data_array()[i];
+
+      // Get the vertex indices and the corresponding gradients
+      int v0 = tri(i, 0), v1 = tri(i, 1);
+      TFloat *dq0 = dE_dq.data_array()[v0];
+      TFloat *dq1 = dE_dq.data_array()[v1];
+
+      /*
+
+      // Partial of the norm of W
+      if(W_norm[i] > 0.0)
+        {
+        dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1]) / W_norm[i];
+        dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0]) / W_norm[i];
+        }
+      else
+        {
+        dW[0] = dNi[0];
+        dW[1] = dNi[1];
+        }
+
+      // Backprop the cross-product
+      dU[0] = -dW[1];
+      dU[1] = dW[0];
+
+      */
+
+      // Backprop the cross-product
+      dU[0] = -dNi[1];
+      dU[1] = dNi[0];
+
+      // Backprop the Ui and Vi
+      for(unsigned int a = 0; a < 2; a++)
+        {
+        // The center contribution
+        TFloat dCi_a  = dCi[a] / 2.0;
+        dq0[a] += dCi_a - dU[a];
+        dq1[a] += dCi_a + dU[a];
+        }
+      }
+  }
+
+  // Intermediate values
+  Triangulation tri;
+  Matrix U, W;
+  Vector W_norm;
+
+  // Results
+  Matrix C, N;
+};
+
+
+template <class TFloat, unsigned int VDim>
+class CurrentsAttachmentTerm
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+
+  /** Triangulation data type */
+  typedef vnl_matrix<int> Triangulation;
+
+  /* Thread-specific data for the computation of the currents norm */
+  struct ThreadData {
+    Matrix dE_dC, dE_dN;
+    std::vector<unsigned int> rows;
+  };
+
+  /**
+   * Intermediate and output data for calls to Currents norm and scalar product
+   * computations
+   */
+  struct CurrentScalarProductData
+  {
+    // Partials with respect to centers and normals
+    Matrix dE_dC, dE_dN;
+
+    // Per-vertex energy component
+    Vector z;
+
+    // Per-thread data
+    std::vector<ThreadData> td;
+  };
+
+
+  /**
+   * Constructor
+   *   m            : Number of total landmarks (control and template)
+   *   qT           : Target vertices
+   *   tri_template : Triangles (3D) or edges (2D) of the template
+   *   tri_target   : Triangles (3D) or edges (2D) of the target
+   */
+  CurrentsAttachmentTerm(unsigned int m, const Matrix &qT,
+                         const Triangulation &tri_template,
+                         const Triangulation &tri_target,
+                         TFloat sigma, unsigned int n_threads)
+    : tcan_template(tri_template), tcan_target(tri_target)
+  {
+    this->m = m;
+    this->tri_target = tri_target;
+    this->tri_template = tri_template;
+    this->sigma = sigma;
+    this->n_threads = n_threads;
+
+    // Compute the triangle centers once and for all
+    tcan_target.Forward(qT);
+
+    // Setup the data structures for current gradient storage
+    SetupCurrentScalarProductData(&this->tri_target, &this->cspd_target);
+    SetupCurrentScalarProductData(&this->tri_template, &this->cspd_template);
+
+    // Compute the current norm for the target (fixed quantity)
+    cspd_target.z.fill(0.0);
+    ComputeCurrentHalfNormSquared(&tcan_target, &cspd_target, false);
+
+    // Allocate this norm among template trianges equally (so that the z array
+    // after the complete current computation makes sense on a per-triangle
+    // basis and can be exported on a mesh surface)
+    z0_template.set_size(tri_template.rows());
+    z0_template.fill(cspd_target.z.sum() / tri_template.rows());
+  }
+
+  /**
+   * Compute the 1/2 currents scalar product of a mesh with itself with optional
+   * partial derivatives with respect to simplex centers and normals
+   */
+  double ComputeCurrentHalfNormSquared(
+      TriangleCentersAndNormals<TFloat, VDim> *tcan,
+      CurrentScalarProductData *cspd,
+      bool grad)
+  {
+    // Perform the pairwise computation multi-threaded
+    std::vector<std::thread> workers;
+    for (unsigned int thr = 0; thr < n_threads; thr++)
+      {
+      workers.push_back(std::thread([this,thr,tcan,cspd,grad]()
+        {
+        // Get our thread data
+        ThreadData &my_td = cspd->td[thr];
+
+        // Clear the gradients
+        if(grad)
+          {
+          my_td.dE_dC.fill(0.0);
+          my_td.dE_dN.fill(0.0);
+          }
+
+        // Get data arrays for fast memory access
+        auto c_da = tcan->C.data_array();
+        auto n_da = tcan->N.data_array();
+        auto dc_da = my_td.dE_dC.data_array(), dn_da = my_td.dE_dN.data_array();
+        auto z_da = cspd->z.data_block();
+
+        TFloat f = -0.5 / (sigma * sigma);
+        TFloat f_times_2 = 2.0 * f;
+
+        // Handle triangles for this thread
+        for(unsigned int i : my_td.rows)
+          {
+          TFloat zi = 0.0;
+          TFloat *ci = c_da[i], *ni = n_da[i];
+          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i];
+          TFloat dq[VDim];
+
+          // Handle the diagonal term
+          for(unsigned int a = 0; a < VDim; a++)
+            zi += 0.5 * ni[a] * ni[a];
+
+          // Handle the diagonal term in the gradient
+          if(grad)
+            for(unsigned int a = 0; a < VDim; a++)
+              d_ni[a] += ni[a];
+
+          // Handle the off-diagonal terms
+          for(unsigned int j = i+1; j < tcan->C.rows(); j++)
+            {
+            // Compute the kernel
+            TFloat *cj = c_da[j], *nj = n_da[j];
+            TFloat *d_cj = dc_da[j], *d_nj = dn_da[j];
+            TFloat dist_sq = 0.0;
+            TFloat dot_ni_nj = 0.0;
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              dq[a] = ci[a] - cj[a];
+              dist_sq += dq[a] * dq[a];
+              dot_ni_nj += ni[a] * nj[a];
+              }
+
+            TFloat K = exp(f * dist_sq);
+            TFloat zij = K * dot_ni_nj;
+            zi += zij;
+
+            if(grad)
+              {
+              TFloat w = f_times_2 * zij;
+              for(unsigned int a = 0; a < VDim; a++)
+                {
+                d_ci[a] += w * dq[a];
+                d_cj[a] -= w * dq[a];
+                d_ni[a] += K * nj[a];
+                d_nj[a] += K * ni[a];
+                }
+              }
+            }
+
+          // Store the cost for this template vertex
+          z_da[i] = zi;
+          }
+        }));
+      }
+
+    // Run threads and halt until completed
+    std::for_each(workers.begin(), workers.end(), [](std::thread &t) { t.join(); });
+
+    // Accumulate the thread data
+    for(unsigned int i = 0; i < n_threads; i++)
+      {
+      cspd->dE_dC += cspd->td[i].dE_dC;
+      cspd->dE_dN += cspd->td[i].dE_dN;
+      }
+  }
+
+  /**
+   * Compute the currents scalar product of two meshes with with optional
+   * partial derivatives with respect to simplex centers and normals of the
+   * first input
+   */
+  double ComputeCurrentScalarProduct(
+      TriangleCentersAndNormals<TFloat, VDim> *tcan_1,
+      TriangleCentersAndNormals<TFloat, VDim> *tcan_2,
+      CurrentScalarProductData *cspd_1,
+      bool grad)
+  {
+    // Perform the pairwise computation multi-threaded
+    std::vector<std::thread> workers;
+    for (unsigned int thr = 0; thr < n_threads; thr++)
+      {
+      workers.push_back(std::thread([this,thr,tcan_1,tcan_2,cspd_1,grad]()
+        {
+        // Get data arrays for fast memory access
+        auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
+        auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
+        auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
+        auto z1_da = cspd_1->z.data_block();
+
+        TFloat f = -0.5 / (sigma * sigma);
+        TFloat f_times_2 = 2.0 * f;
+
+        // Handle triangles for this thread
+        for(unsigned int i = thr; i < tcan_1->C.rows(); i+=n_threads)
+          {
+          TFloat zi = 0.0;
+          TFloat *ci = c1_da[i], *ni = n1_da[i];
+          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i];
+          TFloat dq[VDim];
+
+          for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
+            {
+            // Compute the kernel
+            TFloat *cj = c2_da[j], *nj = n2_da[j];
+            TFloat dist_sq = 0.0;
+            TFloat dot_ni_nj = 0.0;
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              dq[a] = ci[a] - cj[a];
+              dist_sq += dq[a] * dq[a];
+              dot_ni_nj += ni[a] * nj[a];
+              }
+
+            TFloat K = -2.0 * exp(f * dist_sq);
+            TFloat zij = K * dot_ni_nj;
+            zi += zij;
+
+            if(grad)
+              {
+              TFloat w = f_times_2 * zij;
+              for(unsigned int a = 0; a < VDim; a++)
+                {
+                d_ci[a] += w * dq[a];
+                d_ni[a] += K * nj[a];
+                }
+              }
+            }
+
+          // Store the cost for this template vertex
+          z1_da[i] += zi;
+          }
+        }));
+      }
+
+    // Run threads and halt until completed
+    std::for_each(workers.begin(), workers.end(), [](std::thread &t) { t.join(); });
+  }
+
+  /** Compute the energy and optional gradient of the energy */
+  double Compute(const Matrix &q1, Matrix *grad = nullptr)
+  {
+    // Compute the triangle centers and normals
+    tcan_template.Forward(q1);
+
+    // Clear gradient terms if needed
+    if(grad)
+      {
+      cspd_template.dE_dC.fill(0.0);
+      cspd_template.dE_dN.fill(0.0);
+      }
+
+    // Initialize the z-term
+    cspd_template.z = z0_template;
+
+    // Add the squared norm term
+    this->ComputeCurrentHalfNormSquared(&tcan_template, &cspd_template, grad != nullptr);
+
+    // Subtract twice the scalar product term
+    this->ComputeCurrentScalarProduct(&tcan_template, &tcan_target, &cspd_template, grad != nullptr);
+
+    // Backpropagate the gradient to get gradient with respect to q1
+    if(grad)
+      tcan_template.Backward(cspd_template.dE_dC, cspd_template.dE_dN, *grad);
+
+    // Return the total energy
+    return cspd_template.z.sum();
+  }
+
+  /** Save the mesh representing current energy term */
+  void SaveMesh(const Matrix &q1, const char *fname)
+  {
+    vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+
+    this->Compute(q1);
+
+    // Assign points
+    vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+    for(unsigned int i = 0; i < m; i++)
+      pts->InsertNextPoint(q1.data_array()[i]);
+    pd->SetPoints(pts);
+
+    // Assign polys
+    vtkSmartPointer<vtkCellArray> polys = vtkSmartPointer<vtkCellArray>::New();
+    for(unsigned int j = 0; j < tcan_template.tri.rows(); j++)
+      {
+      vtkIdType ids[VDim];
+      for(unsigned int a = 0; a < VDim; a++)
+        ids[a] = tcan_template.tri(j, a);
+      polys->InsertNextCell(VDim, ids);
+      }
+    if(VDim == 3)
+      pd->SetPolys(polys);
+    else
+      pd->SetLines(polys);
+
+    // Create the energy array
+    vtkSmartPointer<vtkDoubleArray> arr = vtkSmartPointer<vtkDoubleArray>::New();
+    arr->SetName("CurrentEnergy");
+    arr->SetNumberOfComponents(1);
+    arr->SetNumberOfTuples(tcan_template.tri.rows());
+    for(unsigned int j = 0; j < tcan_template.tri.rows(); j++)
+      arr->SetComponent(j, 0, cspd_template.z[j]);
+    pd->GetCellData()->AddArray(arr);
+
+    WriteVTKData(pd, fname);
+  }
+
+  /**
+   * Initialize the data for scalar product computation (target or template)
+   */
+  void SetupCurrentScalarProductData(const Triangulation *tri,
+                                     CurrentScalarProductData *cspd)
+  {
+    // Global objects
+    cspd->dE_dC.set_size(tri->rows(), VDim);
+    cspd->dE_dN.set_size(tri->rows(), VDim);
+    cspd->z.set_size(tri->rows());
+    cspd->td.resize(n_threads);
+
+    // Per-thread objects
+    for(unsigned int t = 0; t < n_threads; t++)
+      {
+      cspd->td[t].dE_dC.set_size(tri->rows(), VDim);
+      cspd->td[t].dE_dN.set_size(tri->rows(), VDim);
+      }
+
+    // Assign lines in pairs, one at the top of the symmetric matrix K and
+    // one at the bottom of K. The loop below will not assign the middle
+    // line when there is an odd number of points (e.g., line 7 when there are 15)
+    for(int i = 0; i < (int) tri->rows()/2; i++)
+      {
+      int i_thread = i % n_threads;
+      cspd->td[i_thread].rows.push_back(i);
+      cspd->td[i_thread].rows.push_back((tri->rows()-1) - i);
+      }
+
+    // Handle the middle line for odd number of vertices
+    if(tri->rows() % 2 == 1)
+      cspd->td[(tri->rows() / 2) % n_threads].rows.push_back(tri->rows()/2);
+  }
+
+protected:
+  unsigned int m;
+  Triangulation tri_template, tri_target;
+
+  // Triangle quantity computer
+  TriangleCentersAndNormals<TFloat, VDim> tcan_template, tcan_target;
+
+  // Template and target current norm/scalar product data
+  CurrentScalarProductData cspd_template, cspd_target;
+
+  // Current squared norm of the target allocated equally between all
+  // the trianges in the template
+  Vector z0_template;
+
+  // Kernel sigma
+  TFloat sigma;
+
+  // Threading
+  unsigned int n_threads;
+
+};
+
+
 
 template <class TFloat, unsigned int VDim>
 class PointSetShootingCostFunction : public vnl_cost_function
@@ -88,33 +748,53 @@ public:
   typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
   typedef typename HSystem::Vector Vector;
   typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
 
   // Separate type because vnl optimizer is double-only
   typedef vnl_vector<double> DVector;
 
   PointSetShootingCostFunction(
-    const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
-    : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
+    const ShootingParameters &param,
+      const Matrix &q0, const Matrix &p0, const Matrix &qT,
+      Triangulation tri_template = Triangulation(),
+      Triangulation tri_target = Triangulation())
+    : vnl_cost_function(p0.rows() * VDim),
+      hsys(q0, param.sigma, param.N, q0.rows() - p0.rows())
     {
-    this->p0 = (qT - q0) / param.N;
+    this->p0 = p0;
     this->q0 = q0;
     this->qT = qT;
     this->param = param;
-    this->k = q0.rows();
+    this->k = p0.rows();
+    this->m = q0.rows();
     this->p1.set_size(k,VDim);
-    this->q1.set_size(k,VDim);
+    this->q1.set_size(m,VDim);
 
     for(unsigned int a = 0; a < VDim; a++)
       {
-      alpha[a].set_size(k);
+      alpha[a].set_size(m);
       beta[a].set_size(k); beta[a].fill(0.0);
-      grad_f[a].set_size(k);
+      grad_f[a].set_size(m);
+      }
+
+    // Set up the currents attachment
+    if(param.attach == ShootingParameters::Current)
+      {
+      currents_attachment = new CurrentsAttachmentTerm<TFloat, VDim>(
+            m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
+      grad_currents.set_size(m, VDim);
       }
     }
 
+  ~PointSetShootingCostFunction()
+  {
+    if(currents_attachment)
+      delete currents_attachment;
+  }
+
   DVector wide_to_tall(const Vector p[VDim])
     {
-    DVector v(k * VDim);
+    DVector v(p[0].size() * VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
@@ -124,7 +804,7 @@ public:
 
   DVector wide_to_tall(const Matrix &p)
     {
-    DVector v(k * VDim);
+    DVector v(p.rows() * VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
@@ -134,7 +814,7 @@ public:
 
   Matrix tall_to_wide(const DVector &v)
     {
-    Matrix p(k,VDim);
+    Matrix p(v.size() / VDim, VDim);
     int pos = 0;
     for(unsigned int a = 0; a < VDim; a++)
       for(unsigned int i = 0; i < k; i++)
@@ -142,7 +822,25 @@ public:
     return p;
     }
 
-  virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
+  virtual double ComputeEuclideanAttachment()
+  {
+    // Compute the landmark errors
+    double E_data = 0.0;
+    unsigned int i_temp = (k == m) ? 0 : k;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      alpha[a].fill(0.0);
+      for(unsigned int i = i_temp; i < m; i++)
+        {
+        alpha[a](i) = q1(i,a) - qT(i - i_temp, a);
+        E_data += 0.5 * alpha[a](i) * alpha[a](i);
+        }
+      }
+
+    return E_data;
+  }
+
+ virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
     {
     // Initialize the p0-vector
     p0 = tall_to_wide(x);
@@ -150,36 +848,47 @@ public:
     // Perform flow
     double H = hsys.FlowHamiltonian(p0, q1, p1);
 
-    // Compute the landmark errors
-    double fnorm_sq = 0.0;
-    for(unsigned int a = 0; a < VDim; a++)
+    // Compute the data attachment term
+    double E_data = 0.0;
+    if(param.attach == ShootingParameters::Euclidean)
+      E_data = ComputeEuclideanAttachment();
+    else if(param.attach == ShootingParameters::Current)
       {
-      for(unsigned int i = 0; i < k; i++)
+      static int my_iter = 0;
+      if(g)
         {
-        alpha[a](i) = q1(i,a) - qT(i,a);
-        fnorm_sq += alpha[a](i) * alpha[a](i);
+        E_data = currents_attachment->Compute(q1, &grad_currents);
+        for(unsigned int i = 0; i < m; i++)
+          for(unsigned int a = 0; a < VDim; a++)
+            alpha[a][i] = grad_currents(i,a);
+        }
+      else
+        E_data = currents_attachment->Compute(q1);
+
+      if(my_iter++ % 10)
+        {
+        char buffer[256];
+        sprintf(buffer, "currents_term_%04d.vtk", my_iter);
+        currents_attachment->SaveMesh(q1, buffer);
         }
       }
 
-    // Compute the landmark part of the objective
-    double Edist = 0.5 * fnorm_sq;
-
     if(f)
-      *f = H + param.lambda * Edist;
+      *f = H + param.lambda * E_data;
 
     if(g)
       {
       // Multiply gradient of f. wrt q1 (alpha) by Jacobian of q1 wrt p0
       hsys.FlowGradientBackward(alpha, beta, grad_f);
 
-      // Recompute Hq/Hp at initial timepoint
+      // Recompute Hq/Hp at initial timepoint (TODO: why are we doing this?)
       hsys.ComputeHamiltonianJet(q0, p0, false);
 
       // Complete gradient computation
       for(unsigned int a = 0; a < VDim; a++)
         {
         // Combine the gradient terms
-        grad_f[a] = grad_f[a] * param.lambda + hsys.GetHp(a);
+        grad_f[a] = grad_f[a] * param.lambda + hsys.GetHp(a).extract(k);
         }
 
       // Pack the gradient into the output vector
@@ -187,15 +896,20 @@ public:
       }
     }
 
-
-
 protected:
   HSystem hsys;
   ShootingParameters param;
   Matrix qT, p0, q0, p1, q1;
   Vector alpha[VDim], beta[VDim], grad_f[VDim];
-  unsigned int k;
 
+  // Attachment terms
+  CurrentsAttachmentTerm<TFloat, VDim> *currents_attachment;
+
+  // For currents, the gradient is supplied as a matrix
+  Matrix grad_currents;
+
+  // Number of control points (k) and total points (m)
+  unsigned int k, m;
 };
 
 /**
@@ -215,8 +929,8 @@ public:
   typedef vnl_vector<double> DVector;
 
   ExampleConstrainedPointSetShootingCostFunction(
-    const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
-    : Superclass(param, q0, qT)
+    const ShootingParameters &param, const Matrix &q0, const Matrix &p0, const Matrix &qT)
+    : Superclass(param, q0, p0, qT)
     {
     // Compute the vectors with which the flows have to be orthogonal
     norm.set_size(q0.rows(), q0.columns());
@@ -542,6 +1256,7 @@ public:
   typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
   typedef typename HSystem::Vector Vector;
   typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
 
   // Minimize using the transversality principle
   static void minimize_Allassonniere(const ShootingParameters &param, 
@@ -551,8 +1266,10 @@ public:
     const Matrix &q0, const Matrix &qT, Matrix &p0);
 
   // Minimize using gradient descent
-  static void minimize_gradient(const ShootingParameters &param, 
-    const Matrix &q0, const Matrix &qT, Matrix &p0);
+  static void minimize_gradient(
+      const ShootingParameters &param,
+      const Matrix &q0, const Matrix &qT, Matrix &p0,
+      const Triangulation &tri_template, const Triangulation &tri_target);
 
   // Minimize constrained problem using Augmented Lagrangian method
   static void minimize_constrained(const ShootingParameters &param, 
@@ -574,7 +1291,7 @@ PointSetShootingProblem<TFloat, VDim>
   unsigned int k = q0.rows();
 
   // Create the hamiltonian system
-  HSystem hsys(q0, param.sigma, param.N);
+  HSystem hsys(q0, param.sigma, param.N, 0, param.n_threads);
 
   // Where to store the results of the flow
   Matrix q1(k,VDim), p1(k,VDim), del_p0(k, VDim), grad_q[VDim][VDim], grad_p[VDim][VDim];
@@ -796,38 +1513,40 @@ PointSetShootingProblem<TFloat, VDim>
 template <class TFloat, unsigned int VDim>
 void
 PointSetShootingProblem<TFloat, VDim>
-::minimize_gradient(const ShootingParameters &param, 
-  const Matrix &q0, const Matrix &qT, Matrix &p0)
+::minimize_gradient(
+    const ShootingParameters &param,
+    const Matrix &q0, const Matrix &qT, Matrix &p0,
+    const Triangulation &tri_template, const Triangulation &tri_target)
 {
-  unsigned int k = q0.rows();
+  // unsigned int k = q0.rows();
 
   // Create the minimization problem
   typedef PointSetShootingCostFunction<TFloat, VDim> CostFn;
-  CostFn cost_fn(param, q0, qT);
+  CostFn cost_fn(param, q0, p0, qT, tri_template, tri_target);
 
   // Create initial/final solution
-  p0 = (qT - q0) / param.N;
   typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
 
   // Uncomment this code to test derivative computation
-  /*
-  TFloat eps = 1e-6;
-  typename CostFn::DVector test_grad(x.size());
-  double f_test;
-  cost_fn.compute(x, &f_test, &test_grad);
-  for(int i = 0; i < std::min((int) p0.size(), 10); i++)
+  if(param.n_deriv_check > 0)
     {
-    typename CostFn::DVector xtest = x;
-    double f1, f2;
-    xtest[i] = x[i] - eps;
-    cost_fn.compute(xtest, &f1, NULL);
+    TFloat eps = 1e-6;
+    typename CostFn::DVector test_grad(x.size());
+    double f_test;
+    cost_fn.compute(x, &f_test, &test_grad);
+    for(unsigned int i = 0; i < std::min(p0.size(), param.n_deriv_check); i++)
+      {
+      typename CostFn::DVector xtest = x;
+      double f1, f2;
+      xtest[i] = x[i] - eps;
+      cost_fn.compute(xtest, &f1, NULL);
 
-    xtest[i] = x[i] + eps;
-    cost_fn.compute(xtest, &f2, NULL);
+      xtest[i] = x[i] + eps;
+      cost_fn.compute(xtest, &f2, NULL);
 
-    printf("i = %03d,  AG = %8.4f,  NG = %8.4f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+      printf("i = %03d,  AG = %8.4f,  NG = %8.4f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+      }
     }
-  */
 
   // Solve the minimization problem 
 
@@ -856,12 +1575,12 @@ PointSetShootingProblem<TFloat, VDim>
 {
   unsigned int k = q0.rows();
 
-  // Create the minimization problem
-  typedef ExampleConstrainedPointSetShootingCostFunction<TFloat, VDim> CostFn;
-  CostFn cost_fn(param, q0, qT);
-
   // Create initial/final solution
   p0 = (qT - q0) / param.N;
+
+  // Create the minimization problem
+  typedef ExampleConstrainedPointSetShootingCostFunction<TFloat, VDim> CostFn;
+  CostFn cost_fn(param, q0, p0, qT);
 
   // Initialize mu
   double mu = param.constrained_mu_init;
@@ -936,71 +1655,105 @@ PointSetShootingProblem<TFloat, VDim>
   vtkPolyData *pTemplate = ReadVTKData(param.fnTemplate);
   vtkPolyData *pTarget = ReadVTKData(param.fnTarget);
 
+  // Read the optional control point dataset
+  vtkPolyData *pControl = nullptr;
+  if(param.fnControlMesh.length())
+    pControl = ReadVTKData(param.fnControlMesh);
+
   // Get the number of vertices and dimensionality
-  check(pTemplate->GetNumberOfPoints() == pTarget->GetNumberOfPoints(), "Meshes don't match");
+  if(param.attach == ShootingParameters::Euclidean)
+    check(pTemplate->GetNumberOfPoints() == pTarget->GetNumberOfPoints(),
+          "Template and target meshes must match for the Landmark attachment term");
 
-  unsigned int np = pTemplate->GetNumberOfPoints();
-  unsigned int k = np;
+  // Get the number of control points
+  unsigned int k = pControl ? pControl->GetNumberOfPoints() : pTemplate->GetNumberOfPoints();
 
-  // Mapping of matrix index to vertex - start with identity mapping
-  std::vector<unsigned int> index(np);
-  for(int i = 0; i < np; i++)
-    index[i] = i;
+  // Get the number of non-control (rider) points
+  unsigned int n_riders = pControl ? pTemplate->GetNumberOfPoints() : 0;
 
-  // Downsample meshes if needed
-  if(param.downsample < 1.0)
-    {
-    // Downsample by random shuffle - not very efficient, just lazy
-    k = (unsigned int)(param.downsample * np);
-    std::random_shuffle(index.begin(), index.end());
-    }
-  else if(param.qcdiv.size())
-    {
-    // Store the index of each input point in VTK mesh
-    vtkSmartPointer<vtkIntArray> arr_idx = vtkIntArray::New();
-    arr_idx->SetNumberOfComponents(1);
-    arr_idx->SetNumberOfTuples(np);
-    arr_idx->SetName("Index");
-    for(int i = 0; i < np; i++)
-      arr_idx->SetTuple1(i, i);
-    pTemplate->GetPointData()->AddArray(arr_idx);
-
-    // Perform quadric clustering
-    vtkSmartPointer<vtkQuadricClustering> qc = vtkQuadricClustering::New();
-    qc->SetInputData(pTemplate);
-    qc->SetUseInputPoints(1);
-
-    // Set the divisions array - it must be 3
-    int div[3];
-    for(int a = 0; a < 3; a++)
-      div[a] = (a < param.qcdiv.size()) ? param.qcdiv[a] : 1;
-    qc->SetNumberOfDivisions(div);
-
-    // Run the filter
-    qc->Update();
-
-    // Generate the index
-    vtkPolyData *qc_result = qc->GetOutput();
-    vtkDataArray *qc_index = qc_result->GetPointData()->GetArray("Index");
-    k = qc_result->GetNumberOfPoints();
-    for(int i = 0; i < k; i++)
-      index[i] = qc_index->GetTuple1(i);
-    }
+  // Total points
+  unsigned int m = k + n_riders;
 
   // Report number of actual vertices being used
-  cout << "Performing geodesic shooting with " << k << " landmarks" << endl;
+  cout << "Performing geodesic shooting with " << k << " control points and " << m << " total landmarks." << endl;
 
   // Landmarks and initial momentum
-  Matrix q0(k,VDim), qT(k,VDim), p0(k,VDim);
+  Matrix q0(m,VDim), p0(k,VDim);
 
-  // Initialize the meshes
-  for(unsigned int i = 0; i < k; i++)
+  // Initialize the q0 vertex array
+  for(unsigned int a = 0; a < VDim; a++)
     {
-    for(unsigned int a = 0; a < VDim; a++)
+    // Control point portion of q0
+    for(unsigned int i = 0; i < k; i++)
+      q0(i,a) = pControl ? pControl->GetPoint(i)[a] : pTemplate->GetPoint(i)[a];
+
+    // Rider point portion of q0
+    for(unsigned int i = k; i < m; i++)
+      q0(i,a) = pTemplate->GetPoint(i-k)[a];
+    }
+
+  // Initialize the target array
+  Matrix qT(pTarget->GetNumberOfPoints(), VDim);
+  for(unsigned int a = 0; a < VDim; a++)
+    {
+    for(unsigned int i = 0; i < pTarget->GetNumberOfPoints(); i++)
       {
-      q0(i,a) = pTemplate->GetPoint(index[i])[a];
-      qT(i,a) = pTarget->GetPoint(index[i])[a];
-      p0(i,a) = (qT(i,a) - q0(i,a)) / param.N;
+      qT(i,a) = pTarget->GetPoint(i)[a];
+
+      // In the simple case of Euclidean matching with no riders, initialize the momentum based on the
+      // point assignment
+      if(m == k && param.attach == ShootingParameters::Euclidean && param.arrInitialMomentum.length() == 0)
+        p0(i,a) = (qT(i,a) - q0(i,a)) / param.N;
+      }
+    }
+
+  // Read the initial momentum array
+  if(param.arrInitialMomentum.length())
+    {
+    vtkDataArray *da_p0 = nullptr;
+    if(pControl)
+      da_p0 = pControl->GetPointData()->GetArray(param.arrInitialMomentum.c_str());
+    else
+      da_p0 = pTemplate->GetPointData()->GetArray(param.arrInitialMomentum.c_str());
+
+    check(da_p0 && da_p0->GetNumberOfTuples() == k && da_p0->GetNumberOfComponents() == VDim,
+          "Initial momentum array missing or has wrong dimensions");
+
+    for(unsigned int a = 0; a < VDim; a++)
+      for(unsigned int i = 0; i < k; i++)
+        p0(i,a) = da_p0->GetComponent(i, a);
+    }
+
+  // Compute the triangulation of the template for non-landmark metrics
+  vnl_matrix<int> tri_template, tri_target;
+  if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
+    {
+    tri_template.set_size(pTemplate->GetNumberOfCells(), VDim);
+    for(unsigned int i = 0; i < pTemplate->GetNumberOfCells(); i++)
+      {
+      if(pTemplate->GetCell(i)->GetNumberOfPoints() != VDim)
+        {
+        std::cerr << "Wrong number of points in template cell " << i << std::endl;
+        return -1;
+        }
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        unsigned int j = pTemplate->GetCell(i)->GetPointId(a);
+        tri_template(i,a) = pControl ? j + k : j;
+        }
+      }
+
+    // Compute the triangulation of the target
+    tri_target.set_size(pTarget->GetNumberOfCells(), VDim);
+    for(unsigned int i = 0; i < pTarget->GetNumberOfCells(); i++)
+      {
+      if(pTarget->GetCell(i)->GetNumberOfPoints() != VDim)
+        {
+        std::cerr << "Wrong number of points in target cell " << i << std::endl;
+        return -1;
+        }
+      for(unsigned int a = 0; a < VDim; a++)
+        tri_target(i,a) = pTarget->GetCell(i)->GetPointId(a);
       }
     }
 
@@ -1011,7 +1764,7 @@ PointSetShootingProblem<TFloat, VDim>
       minimize_constrained(param, q0, qT, p0);
 
     else
-      minimize_gradient(param, q0, qT, p0);
+      minimize_gradient(param, q0, qT, p0, tri_template, tri_target);
     }
 
   if(param.iter_newton > 0)
@@ -1019,61 +1772,61 @@ PointSetShootingProblem<TFloat, VDim>
     minimize_Allassonniere(param, q0, qT, p0);
     }
 
-  // Select the method to run
-  /*
-  if(param.alg == ShootingParameters::Allassonniere)
-    minimize_Allassonniere(param, q0, qT, p0);
-  else if(param.alg == ShootingParameters::QuasiAllassonniere)
-    minimize_QuasiAllassonniere(param, q0, qT, p0);
-  else
-    minimize_gradient(param, q0, qT, p0);
-    */
-
-  // Genererate the momentum map
+  // Genererate the output momentum map
   vtkDoubleArray *arr_p = vtkDoubleArray::New();
   arr_p->SetNumberOfComponents(VDim);
-  arr_p->SetNumberOfTuples(np);
+  arr_p->SetNumberOfTuples(k);
   arr_p->SetName("InitialMomentum");
+
   for(unsigned int a = 0; a < VDim; a++)
     arr_p->FillComponent(a, 0);
 
   for(unsigned int a = 0; a < VDim; a++)
-    {
     for(unsigned int i = 0; i < k; i++)
-      {
-      arr_p->SetComponent(index[i],a,p0(i,a));
-      }
-    }
+      arr_p->SetComponent(i, a, p0(i,a));
 
-  pTemplate->GetPointData()->AddArray(arr_p);
-  WriteVTKData(pTemplate, param.fnOutput);
+  if(pControl)
+    {
+    pControl->GetPointData()->AddArray(arr_p);
+    WriteVTKData(pControl, param.fnOutput);
+    }
+  else
+    {
+    pTemplate->GetPointData()->AddArray(arr_p);
+    WriteVTKData(pTemplate, param.fnOutput);
+    }
 
   // If saving paths requested
   if(param.fnOutputPaths.size())
     {
     // Create and flow a system
-    HSystem hsys(q0, param.sigma, param.N);
+    HSystem hsys(q0, param.sigma, param.N, m - k, param.n_threads);
     Matrix q1, p1;
     hsys.FlowHamiltonian(p0, q1, p1);
+
+    // Get the number of points in the output mesh
+    unsigned int nv = pTemplate->GetNumberOfPoints();
 
     // Apply the flow to the points in the rest of the mesh
     vtkDoubleArray *arr_v = vtkDoubleArray::New();
     arr_v->SetNumberOfComponents(VDim);
-    arr_v->SetNumberOfTuples(np);
+    arr_v->SetNumberOfTuples(nv);
     arr_v->SetName("Velocity");
     pTemplate->GetPointData()->AddArray(arr_v);
 
+    /*
     vtkDoubleArray *arr_p = vtkDoubleArray::New();
     arr_p->SetNumberOfComponents(VDim);
     arr_p->SetNumberOfTuples(np);
     arr_p->SetName("Momentum");
     pTemplate->GetPointData()->AddArray(arr_p);
+    */
 
     // Apply Euler method to the mesh points
     double dt = hsys.GetDeltaT();
     for(unsigned int t = 1; t < param.N; t++)
       {
-      for(unsigned int i = 0; i < np; i++)
+      for(unsigned int i = 0; i < nv; i++)
         {
         TFloat qi[VDim], vi[VDim];
 
@@ -1093,7 +1846,7 @@ PointSetShootingProblem<TFloat, VDim>
         for(unsigned int a = 0; a < VDim; a++)
           {
           arr_v->SetComponent(i, a, vi[a]);
-          arr_p->SetComponent(i, a, hsys.GetPt(t)(i,a));
+          // arr_p->SetComponent(i, a, hsys.GetPt(t)(i,a));
           }
         }
 
@@ -1126,6 +1879,10 @@ int main(int argc, char *argv[])
       param.fnTemplate = cl.read_existing_filename();
       param.fnTarget = cl.read_existing_filename();
       }
+    else if(arg == "-c")
+      {
+      param.fnControlMesh = cl.read_existing_filename();
+      }
     else if(arg == "-o")
       {
       param.fnOutput = cl.read_output_filename();
@@ -1141,10 +1898,6 @@ int main(int argc, char *argv[])
     else if(arg == "-l")
       {
       param.lambda = cl.read_double();
-      }
-    else if(arg == "-r")
-      {
-      param.downsample = cl.read_double();
       }
     else if(arg == "-n")
       {
@@ -1164,23 +1917,41 @@ int main(int argc, char *argv[])
       param.constrained_mu_init = cl.read_double();
       param.constrained_mu_mult = cl.read_double();
       }
-    else if(arg == "-q")
-      {
-      param.qcdiv = cl.read_int_vector();
-      }
-    else if (arg == "-a")
-      {
-      string alg = cl.read_string();
-      if(alg == "a" || alg == "A" || alg == "Allassonniere")
-        param.alg = ShootingParameters::Allassonniere;
-      else if(alg == "q" || alg == "Q" || alg == "QuasiAllassonniere")
-        param.alg = ShootingParameters::QuasiAllassonniere;
-      else
-        param.alg = ShootingParameters::GradDescent;
-      }
     else if(arg == "-f")
       {
       param.use_float = true;
+      }
+    else if(arg == "-p")
+      {
+      param.arrInitialMomentum = cl.read_string();
+      }
+    else if(arg == "-t")
+      {
+      param.n_threads = cl.read_integer();
+      }
+    else if(arg == "-D")
+      {
+      param.n_deriv_check = cl.read_integer();
+      }
+    else if(arg == "-a")
+      {
+      std::string mode = cl.read_string();
+      cout << mode << endl;
+      if(mode == "L")
+        param.attach = ShootingParameters::Euclidean;
+      else if(mode == "C")
+        param.attach = ShootingParameters::Current;
+      else if(mode == "V")
+        param.attach = ShootingParameters::Varifold;
+      else
+        {
+        std::cout << "Unknown attachment type " << mode << std::endl;
+        return -1;
+        }
+      }
+    else if(arg == "-S")
+      {
+      param.currents_sigma = cl.read_double();
       }
     else if(arg == "-h")
       {
@@ -1195,11 +1966,17 @@ int main(int argc, char *argv[])
 
   // Check parameters
   check(param.sigma > 0, "Missing or negative sigma parameter");
+  check(param.attach == ShootingParameters::Euclidean || param.currents_sigma > 0,
+        "Missing sigma parameter for current/varifold metric");
   check(param.N > 0 && param.N < 10000, "Incorrect N parameter");
   check(param.dim >= 2 && param.dim <= 3, "Incorrect N parameter");
   check(param.fnTemplate.length(), "Missing template filename");
   check(param.fnTarget.length(), "Missing target filename");
   check(param.fnOutput.length(), "Missing output filename");
+
+  // Set the number of threads if not specified
+  if(param.n_threads == 0)
+    param.n_threads = std::thread::hardware_concurrency();
 
   // Specialize by dimension
   if(param.use_float)

@@ -35,7 +35,8 @@ public:
     const Matrix &q0, 
     TFloat sigma,
     unsigned int Nt,
-    unsigned int Nr = 0);
+    unsigned int Nr = 0,
+    unsigned int n_threads = 0);
 
   ~PointSetHamiltonianSystem();
 
@@ -164,6 +165,9 @@ protected:
 
   // Gradient of the Hamiltonian components: Hq and Hp
   Vector Hp[VDim], Hq[VDim];
+
+  // Number of threads used
+  unsigned int n_threads;
 
   // Multi-threaded quantities
   struct ThreadData 
