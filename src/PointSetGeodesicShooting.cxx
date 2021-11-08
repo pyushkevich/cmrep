@@ -778,6 +778,7 @@ public:
       }
 
     // Set up the currents attachment
+    currents_attachment = nullptr;
     if(param.attach == ShootingParameters::Current)
       {
       currents_attachment = new CurrentsAttachmentTerm<TFloat, VDim>(
@@ -864,13 +865,6 @@ public:
         }
       else
         E_data = currents_attachment->Compute(q1);
-
-      if(my_iter++ % 10)
-        {
-        char buffer[256];
-        sprintf(buffer, "currents_term_%04d.vtk", my_iter);
-        currents_attachment->SaveMesh(q1, buffer);
-        }
       }
 
     if(f)
