@@ -887,8 +887,22 @@ public:
 
       // Pack the gradient into the output vector
       *g = wide_to_tall(grad_f);
+
+      // Count this as an iteration
+      ++iter;
+      }
+
+    // Print current results
+    if(verbose && g && f) 
+      {
+      printf("It = %04d  H = %8.2f  DA = %8.2f  f = %8.2f\n", iter, H, E_data * param.lambda, *f);
       }
     }
+
+ void SetVerbose(bool value) 
+   { 
+   this->verbose = value;
+   }
 
 protected:
   HSystem hsys;
@@ -904,6 +918,10 @@ protected:
 
   // Number of control points (k) and total points (m)
   unsigned int k, m;
+
+  // Whether to print values at each iteration
+  bool verbose = false;
+  unsigned int iter = 0;
 };
 
 /**
@@ -1542,13 +1560,14 @@ PointSetShootingProblem<TFloat, VDim>
       }
     }
 
-  // Solve the minimization problem 
+  // Solve the minimization problem
+  cost_fn.SetVerbose(true);
 
   vnl_lbfgsb optimizer(cost_fn);
   optimizer.set_f_tolerance(1e-9);
   optimizer.set_x_tolerance(1e-4);
   optimizer.set_g_tolerance(1e-6);
-  optimizer.set_trace(true);
+  optimizer.set_trace(false);
   optimizer.set_max_function_evals(param.iter_grad);
 
   // vnl_conjugate_gradient optimizer(cost_fn);
