@@ -436,7 +436,7 @@ IF(BUILD_UTILS)
 
   ADD_EXECUTABLE(mesh_convert_format src/util/MeshConvertFormat.cxx src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(ml_affine src/util/MultiLabelAffine.cxx)
+  ADD_EXECUTABLE(ml_affine src/util/MultiLabelAffine.cxx src/GentleNLP.cxx)
 
   # List of cmrep utilities
   SET(CMREP_UTIL_TOOLS

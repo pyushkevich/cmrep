@@ -66,6 +66,10 @@ using namespace itk;
 typedef itk::Image<short,3> LabelImageType;
 typedef itk::ImageFileReader<LabelImageType> LabelImageReader;
 
+enum TransformModel {
+  AFFINE=0, RIGID, SIMILARITY
+};
+
 struct Parameters
 {
   // Filenames
@@ -76,6 +80,7 @@ struct Parameters
   double anneal_rate;
   bool debug = false;
   bool mesh_mode = false;
+  TransformModel model = AFFINE;
 };
 
 int usage()
@@ -108,6 +113,8 @@ int usage()
       "  -m Array     Inputs are meshes (VTK polydata) in which the label of every\n"
       "               vertex is stored in the array 'Array'. When this is enabled\n"
       "               the -c (clustering) option is ignored\n"
+      "  -f <6|7|12>  Degrees of freedom - selects between rigid,similarity, affine\n"
+      "               The default is affine registration\n"
       "notes:\n"
       "  - To reslice the moving image to the target image, use the c3d command\n"
       "       c3d target.nii moving.nii -int 0 -reslice-matrix output.mat -o out.nii\n"
@@ -310,6 +317,198 @@ void normalize_pointset(
       X[i][j] -= center[j];
 }
 
+#include "GentleNLP.h"
+
+// Create an Euler rotation matrix
+void make_euler_matrix(gnlp::Problem *p,
+                       int axis, gnlp::Expression *theta,
+                       gnlp::VarVecArray &M)
+{
+  vnl_matrix<double> I(3,3); I.set_identity();
+  int k = (axis + 1) % 3, m = (axis + 2) % 3;
+  M[k][k] = new gnlp::Cos(p, theta);
+  M[m][m] = M[k][k];
+  M[m][k] = new gnlp::Sin(p, theta);
+  M[k][m] = new gnlp::Negation(p, M[m][k]);
+  for(unsigned int i = 0; i < 3; i++)
+    {
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      if(M[i][j] == nullptr)
+        M[i][j] = new gnlp::Constant(p, I(i,j));
+      }
+    }
+}
+
+void make_matrix_product(gnlp::Problem *p,
+                         gnlp::VarVecArray &A,
+                         gnlp::VarVecArray &B,
+                         gnlp::VarVecArray &AB)
+{
+  for(unsigned int i = 0; i < AB.size(); i++)
+    {
+    for(unsigned int j = 0; j < AB[0].size(); j++)
+      {
+      auto *abij = new gnlp::BigSum(p);
+      for(unsigned int k = 0; k < B.size(); k++)
+        abij->AddSummand(gnlp::MakeProduct(p, A[i][k], B[k][j]));
+      AB[i][j] = abij;
+      }
+    }
+}
+
+// VNL optimization problem based on an NLP
+#include <vnl/vnl_cost_function.h>
+#include <vnl/algo/vnl_lbfgs.h>
+
+class gentle_nlp_vnl_cost_function : public vnl_cost_function
+{
+public:
+  gentle_nlp_vnl_cost_function(gnlp::ConstrainedNonLinearProblem *p)
+    : vnl_cost_function(p->GetNumberOfVariables())
+  {
+    m_Problem = p;
+  }
+
+  virtual void compute(
+      vnl_vector<double> const& x,
+      double *f,
+      vnl_vector<double>* g) override
+  {
+    m_Problem->SetVariableValues(x.data_block());
+    if(f)
+      *f = m_Problem->GetObjective()->Evaluate();
+    if(g)
+      for(unsigned int i = 0; i < g->size(); i++)
+        (*g)[i] = m_Problem->GetObjectivePD(i)->Evaluate();
+  }
+
+protected:
+  gnlp::ConstrainedNonLinearProblem *m_Problem;
+};
+
+// Solve a rigid/similarity optimization problem given source coordinates,
+// target coordinates and weights. To avoid dealing with derivatives, we
+// use our auto-differentiation library :)
+vnl_matrix_fixed<double,4,4> solve_for_similarity(
+    const vnl_matrix<double> &X,
+    const vnl_matrix<double> &V,
+    const vnl_vector<double> &w,
+    bool rigid)
+{
+  unsigned int np = X.rows();
+
+  gnlp::ConstrainedNonLinearProblem p;
+  gnlp::VarVecArray v_X(np, gnlp::VarVec(3, nullptr));
+  gnlp::VarVecArray v_V(np, gnlp::VarVec(3, nullptr));
+  gnlp::VarVec v_W(np);
+
+  // Create the unknown parameters - translation, scale, rotation
+  gnlp::VarVec v_b(3, nullptr);
+  gnlp::Expression *v_s = nullptr;
+  gnlp::VarVec v_theta(3, nullptr);
+
+  // Set the rigid parameters
+  if(rigid)
+    v_s = new gnlp::Constant(&p, 1.0);
+  else
+    v_s = p.AddVariable("s", 1.0);
+
+  // Component Euler matrices
+  gnlp::VarVecArray v_Ex(3, gnlp::VarVec(3, nullptr));
+  gnlp::VarVecArray v_Ey(3, gnlp::VarVec(3, nullptr));
+  gnlp::VarVecArray v_Ez(3, gnlp::VarVec(3, nullptr));
+  gnlp::VarVecArray v_Eyx(3, gnlp::VarVec(3, nullptr));
+  gnlp::VarVecArray v_Ezyx(3, gnlp::VarVec(3, nullptr));
+
+  // Set the rotation and translation parameters
+  for(unsigned int j = 0; j < 3; j++)
+    {
+    v_b[j] = p.AddVariable("b_j", 0.0);
+    v_theta[j] = p.AddVariable("theta_j", 0.0);
+    }
+
+  // Create the Euler matrices
+  make_euler_matrix(&p, 0, v_theta[0], v_Ex);
+  make_euler_matrix(&p, 1, v_theta[1], v_Ey);
+  make_euler_matrix(&p, 2, v_theta[2], v_Ez);
+
+  // Perform the matrix products - this yields the rotation
+  make_matrix_product(&p, v_Ey, v_Ex, v_Eyx);
+  make_matrix_product(&p, v_Ez, v_Eyx, v_Ezyx);
+
+  // Compute the objective function
+  gnlp::WeightedSumGenerator wsg(&p);
+
+  // Iterate over the points
+  for(unsigned int i = 0; i < np; i++)
+    {
+    // Set up the constant terms
+    v_W[i] = new gnlp::Constant(&p, w(i));
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      v_X[i][j] = new gnlp::Constant(&p, X(i, j));
+      v_V[i][j] = new gnlp::Constant(&p, V(i, j));
+      }
+
+    gnlp::VarVec Y(3, nullptr);
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      // Apply rotation, scaling and translation to point X
+      Y[j] = new gnlp::BinarySum(
+               &p, v_b[j],
+               gnlp::MakeProduct(
+                 &p, v_s,
+                 gnlp::DotProduct(&p, v_Ezyx[j], v_X[i])));
+
+      // Add weighted squared distance to point V
+      wsg.AddTerm(
+            new gnlp::Square(
+              &p, new gnlp::BinaryDifference(
+                &p, Y[j], v_V[i][j])),
+            w(i));
+      }
+    }
+
+  // Add as an expression
+  p.SetObjective(wsg.GenerateSum());
+  p.SetupProblem(false, false);
+
+  // Get the initial values of the variables
+  vnl_vector<double> x_opt(p.GetNumberOfVariables());
+  for(unsigned int i = 0; i < x_opt.size(); i++)
+    x_opt[i] = p.GetVariable(i)->Evaluate();
+
+  // Finally, we can solve the minimization problem
+  gentle_nlp_vnl_cost_function vnlobj(&p);
+  vnl_lbfgs optimizer(vnlobj);
+  optimizer.set_f_tolerance(2.22e-9);
+  optimizer.set_g_tolerance(1e-05);
+  optimizer.set_trace(false);
+  optimizer.set_verbose(false);
+  optimizer.set_max_function_evals(100);
+
+  // Supress annoying messages
+  optimizer.minimize(x_opt);
+
+  // Take the optimal solution
+  p.SetVariableValues(x_opt.data_block());
+  p.GetObjective()->Evaluate();
+
+  // Populate the final matrix
+  vnl_matrix_fixed<double,4,4> M;
+  M.set_identity();
+  for(unsigned int i = 0; i < 3; i++)
+    {
+    for(unsigned int j = 0; j < 3; j++)
+      M(i,j) = v_Ezyx[i][j]->Evaluate() * v_s->Evaluate();
+    M(i,3) = v_b[i]->Evaluate();
+    }
+
+  return M;
+}
+
+
 // This is the iterative soft-assign algorithm
 void softassign(
     vnl_matrix<double> X,
@@ -449,26 +648,45 @@ void softassign(
     // The weights
     w = 1.0 - C;
 
-    // Given the correspondence, compute the optimal transform
-    vnl_matrix_fixed<double,4,4> Gxx,Gvx;
-    Gxx.fill(0.0); Gvx.fill(0.0);
-    double Xh[4], Vh[4];
-    for(int i = 0; i < nx; i++)
+
+    if(param.model == AFFINE)
       {
-      Xh[0] = X(i,0); Xh[1] = X(i,1); Xh[2] = X(i,2); Xh[3] = 1.0;
-      Vh[0] = V(i,0); Vh[1] = V(i,1); Vh[2] = V(i,2); Vh[3] = 1.0;
-      for(int k = 0; k < 4; k++)
+      // Given the correspondence, compute the optimal transform
+      vnl_matrix<double> Gxx(4,4), Gvx(4,4);
+      Gxx.fill(0.0); Gvx.fill(0.0);
+      double Xh[4], Vh[4];
+      for(int i = 0; i < nx; i++)
         {
-        for(int l = 0; l < 4; l++)
+        Xh[0] = X(i,0); Xh[1] = X(i,1); Xh[2] = X(i,2); Xh[3] = 1.0;
+        Vh[0] = V(i,0); Vh[1] = V(i,1); Vh[2] = V(i,2); Vh[3] = 1.0;
+        for(int k = 0; k < 4; k++)
           {
-          Gxx(k,l) += Xh[k] * Xh[l] * w(i);
-          Gvx(k,l) += Vh[k] * Xh[l] * w(i);
+          for(int l = 0; l < 4; l++)
+            {
+            Gxx(k,l) += Xh[k] * Xh[l] * w(i);
+            Gvx(k,l) += Vh[k] * Xh[l] * w(i);
+            }
           }
         }
-      }
 
-    // Solve for the matrix
-    G = vnl_svd<double>(Gxx.transpose()).solve(Gvx.transpose()).transpose();
+      // Solve for the matrix
+      G = vnl_svd<double>(Gxx.transpose()).solve(Gvx.transpose()).transpose();
+      }
+    else
+      {
+#if defined(__APPLE__) || defined(__UNIX__)
+      // Supress annoying printfs
+      freopen("/dev/null", "w", stdout);
+      freopen("/dev/null", "w", stderr);
+      G = solve_for_similarity(X, V, w, param.model == RIGID);
+      fflush(stdout);
+      fflush(stderr);
+      freopen("/dev/tty", "w", stdout);
+      freopen("/dev/tty", "w", stderr);
+#else
+      G = solve_for_similarity(X, V, w, param.model == RIGID);
+#endif
+      }
     // std::cout << G << std::endl;
 
     // Update GX and compute the difference between GX and V
@@ -557,6 +775,19 @@ int main(int argc, char *argv[])
     else if(arg == "-c")
       {
       p.n_bins = atoi(argv[++iarg]);
+      }
+    else if(arg == "-f")
+      {
+      int dof = atoi(argv[++iarg]);
+      switch(dof)
+        {
+        case 6: p.model = RIGID; break;
+        case 7: p.model = SIMILARITY; break;
+        case 12: p.model = AFFINE; break;
+        default:
+          cerr << "Bad argument to -f, must be 6,7, or 12" << endl;
+          return -1;
+        }
       }
     else if(arg == "-d")
       {
