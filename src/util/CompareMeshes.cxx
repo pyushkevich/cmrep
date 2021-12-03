@@ -368,10 +368,13 @@ int main(int argc, char **argv)
   for(size_t i = 0; i < 3; i++) 
     {
     bb[0][i] = (b1[2*i] < b2[2*i] ? b1[2*i] : b2[2*i]) - 4;
-    bb[1][i] = (b1[2*i+1] < b2[2*i+1] ? b1[2*i+1] : b2[2*i+1]) + 4;
+    bb[1][i] = (b1[2*i+1] > b2[2*i+1] ? b1[2*i+1] : b2[2*i+1]) + 4;
     cout << "Bounds[" << i << "]: " << bb[0][i] << " to " << bb[1][i] << endl;
     res[i] = (int)(ceil((bb[1][i] - bb[0][i]) / xVox));
     }
+
+  // What is the scan conversion region
+  cout << "Scan conversion region: " << res[0] << "," << res[1] << "," << res[2] << endl;
 
   // Scan convert the mesh to images
   ByteImageType::Pointer i1 = ByteImageType::New();
