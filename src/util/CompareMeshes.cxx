@@ -185,7 +185,7 @@ void ScanConvertPolyData(vtkPolyData *pd, double *b0, double *b1, int *res, doub
 
   vtkCellArray *poly = pd->GetPolys();
   vtkIdType npts;
-  vtkIdType *pts;
+  const vtkIdType *pts;
   for(poly->InitTraversal();poly->GetNextCell(npts,pts);)
     {
     for(unsigned int i=0;i<3;i++)
@@ -259,7 +259,8 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
     
     // Only triangles are admitted

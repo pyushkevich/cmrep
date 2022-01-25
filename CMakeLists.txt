@@ -23,8 +23,28 @@ FIND_PACKAGE(ITK REQUIRED)
 INCLUDE(${ITK_USE_FILE})
 
 # Get VTK
-FIND_PACKAGE(VTK REQUIRED)
-INCLUDE(${VTK_USE_FILE})
+FIND_PACKAGE(VTK 9 REQUIRED COMPONENTS
+  ChartsCore
+  CommonComputationalGeometry
+  CommonCore
+  CommonDataModel
+  CommonExecutionModel
+  CommonMath
+  CommonTransforms
+  FiltersCore
+  FiltersGeneral
+  FiltersGeometry
+  FiltersModeling
+  FiltersSources
+  IOExport
+  IOGeometry
+  IOImage
+  IOLegacy
+  IOPLY
+  ImagingCore
+  ImagingGeneral
+  ViewsContext2D
+)
 
 # Where to get additional modules
 SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
@@ -259,6 +279,8 @@ SET(COMMON_SRCS
 
 # Create the CM-REP library
 ADD_LIBRARY(cmrep ${COMMON_SRCS})
+TARGET_LINK_LIBRARIES(cmrep ${VTK_LIBRARIES})
+vtk_module_autoinit(TARGETS cmrep MODULES ${VTK_LIBRARIES})
 
 # Source code for the Dijkstra library
 SET(DIJKSTRA_SRCS
@@ -267,26 +289,15 @@ SET(DIJKSTRA_SRCS
 
 # Create library of shortest path routines
 ADD_LIBRARY(cmrep_dijkstra ${DIJKSTRA_SRCS})
-
-# Set the core VTK libraries that don't require OpenGL
-SET(VTK_CORE_LIBRARIES
-  vtkCommonCore vtkCommonMath vtkCommonMisc vtkCommonSystem vtkCommonTransforms
-  vtkCommonDataModel vtkCommonColor vtkCommonExecutionModel vtkFiltersCore
-  vtkCommonComputationalGeometry vtkFiltersGeneral vtkFiltersGeometry vtkImagingCore
-  vtkIOCore vtkIOGeometry vtkIOImage vtkIOLegacy vtkIOPLY
-  vtkFiltersModeling)
+TARGET_LINK_LIBRARIES(cmrep_dijkstra ${VTK_LIBRARIES})
+vtk_module_autoinit(TARGETS cmrep_dijkstra MODULES ${VTK_LIBRARIES})
 
 # Set the list of required libraries
-SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${ITK_LIBRARIES} ${VTK_CORE_LIBRARIES})
-SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${ITK_LIBRARIES} ${VTK_CORE_LIBRARIES} toms611)
-SET(CMREP_CONTEST_LIBS ${CMREP_CONTEST_LIBS} ${ITK_LIBRARIES} ${VTK_CORE_LIBRARIES} toms611)
-SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${ITK_LIBRARIES} ${VTK_CORE_LIBRARIES} toms611)
-SET(CMREP_UTIL_LIBS ${CMREP_UTIL_LIBS} ${ITK_LIBRARIES} ${VTK_CORE_LIBRARIES})
-
-#LINK_LIBRARIES(
-#  ${ITK_LIBRARIES}
-#  ${VTK_CORE_LIBRARIES}
-#  ${SYSTEM_LIBS})
+SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES})
+SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
+SET(CMREP_CONTEST_LIBS ${CMREP_CONTEST_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
+SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
+SET(CMREP_UTIL_LIBS ${CMREP_UTIL_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
 # New: Geodesic shooting
 IF(EIGEN3_FOUND)
@@ -463,6 +474,7 @@ IF(BUILD_UTILS)
 
   # Link libraries for the tools
   FOREACH(CMREP_TOOL ${CMREP_UTIL_TOOLS})
+    vtk_module_autoinit(TARGETS ${CMREP_TOOL} MODULES ${VTK_LIBRARIES})
     TARGET_LINK_LIBRARIES(${CMREP_TOOL} ${CMREP_UTIL_LIBS})
   ENDFOREACH(CMREP_TOOL)
 

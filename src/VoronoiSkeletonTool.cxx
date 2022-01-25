@@ -177,7 +177,8 @@ double ComputeAverageEdgeLength(vtkPolyData *poly)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
 
     for(vtkIdType j = 0; j < nPoints; j++)
@@ -205,7 +206,8 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
     
     // Only triangles are admitted
@@ -1089,7 +1091,8 @@ int main(int argc, char *argv[])
     for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
-      vtkIdType nPoints, *xPoints;
+      vtkIdType nPoints;
+      const vtkIdType *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points

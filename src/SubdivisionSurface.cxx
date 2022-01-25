@@ -526,7 +526,8 @@ void SubdivisionSurface::ImportLevelFromVTK(vtkPolyData *mesh, MeshLevel &dest)
   for(size_t i = 0; i < (size_t) mesh->GetNumberOfCells(); i++)
   {
     // Get the points from the current triangle
-    vtkIdType npts, *pts;
+    vtkIdType npts;
+    const vtkIdType *pts;
     mesh->GetCellPoints(i, npts, pts);
 
     // If the number of points is not 3, return with an exception

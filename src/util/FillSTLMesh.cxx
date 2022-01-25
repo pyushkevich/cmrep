@@ -318,7 +318,7 @@ int main(int argc, char **argv)
 
   vtkCellArray *poly = pd->GetPolys();
   vtkIdType npts;
-  vtkIdType *pts;
+  const vtkIdType *pts;
   for(poly->InitTraversal();poly->GetNextCell(npts,pts);)
     {
     for(unsigned int i=0;i<3;i++)
