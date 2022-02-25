@@ -27,6 +27,15 @@
 #include "itk_to_nifti_xform.h"
 #include <vnl/vnl_inverse.h>
 
+#ifdef CMREP_USE_VCG
+// stuff to define the mesh
+#include "VCGTriMesh.h"
+
+// local optimization
+#include <vcg/complex/algorithms/local_optimization.h>
+#include <vcg/complex/algorithms/local_optimization/tri_edge_collapse_quadric.h>
+#endif
+
 using namespace std;
 
 int usage()
@@ -39,6 +48,9 @@ int usage()
   cout << "  -d                 : perform Delaunay edge flipping" << endl;
   cout << "  -2                 : use 2D algorithm" << endl;
   cout << "  -pl                : preserve labels" << endl; // issue #4: added label preserving option
+  cout << "  -r <factor|num>    : reduce the size of the final mesh via quadric edge collapse" << endl;
+  cout << "                       algorithm from MeshLab by a factor (e.g., 0.1) or to given " << endl;
+  cout << "                       number of vertices " << endl;
   return -1;
 }
 
@@ -93,6 +105,7 @@ int main(int argc, char *argv[])
   bool voxelSpace = false;
   bool preserveLabels = false;
   bool flag_clean = false, flag_delaunay = false, flag_2d = false;
+  double reduction_factor = 1.0;
   for(int i = 1; i < argc - 3; i++)
     {
     if(!strcmp(argv[i], "-c"))
@@ -118,6 +131,10 @@ int main(int argc, char *argv[])
     else if(!strcmp(argv[i], "-pl"))
       {
       preserveLabels = true;
+      }
+    else if(!strcmp(argv[i], "-r"))
+      {
+      reduction_factor = atof(argv[++i]);
       }
     else
       { 
@@ -293,7 +310,7 @@ int main(int argc, char *argv[])
   typedef vnl_matrix_fixed<double, 4, 4> Mat44;
   Mat44 vtk2out;
   Mat44 vtk2nii = ConstructVTKtoNiftiTransform(
-    imgInput->GetDirection().GetVnlMatrix(),
+    imgInput->GetDirection().GetVnlMatrix().as_ref(),
     imgInput->GetOrigin().GetVnlVector(),
     imgInput->GetSpacing().GetVnlVector());
 
@@ -301,7 +318,7 @@ int main(int argc, char *argv[])
   if(voxelSpace)
     {
     Mat44 vox2nii = ConstructNiftiSform(
-      imgInput->GetDirection().GetVnlMatrix(),
+      imgInput->GetDirection().GetVnlMatrix().as_ref(),
       imgInput->GetOrigin().GetVnlVector(),
       imgInput->GetSpacing().GetVnlVector());
     
@@ -320,7 +337,7 @@ int main(int argc, char *argv[])
   fltTransform->Update();
 
   // Get final output
-  vtkPolyData *mesh = fltTransform->GetOutput();
+  vtkSmartPointer<vtkPolyData> mesh = fltTransform->GetOutput();
 
   // Flip normals if determinant of SFORM is negative
   if(transform->GetMatrix()->Determinant() < 0)
@@ -331,6 +348,74 @@ int main(int argc, char *argv[])
       for(size_t j = 0; j < (size_t)nrm->GetNumberOfComponents(); j++)
         nrm->SetComponent(i,j,-nrm->GetComponent(i,j));
     nrm->Modified();
+    }
+
+  if(reduction_factor != 1.0)
+    {
+#ifdef CMREP_USE_VCG
+    // Convert to a VCG complex
+    VCGTriMesh tri_mesh;
+    tri_mesh.ImportFromVTK(mesh);
+    tri_mesh.CleanMesh();
+
+    vcg::tri::TriEdgeCollapseQuadricParameter qparams;
+
+    qparams.PreserveBoundary=false;
+    qparams.PreserveTopology=false;
+    qparams.QualityWeight=false;
+    qparams.NormalCheck=false;
+    qparams.OptimalPlacement=true;
+    qparams.QualityQuadric=false;
+
+    // decimator initialization
+    vcg::LocalOptimization<VCGTriMesh::Mesh> DeciSession(tri_mesh.GetMesh(), &qparams);
+
+    // specialization
+    typedef vcg::tri::BasicVertexPair<VCGTriMesh::Vertex> VertexPair;
+    class MyTriEdgeCollapse: public vcg::tri::TriEdgeCollapseQuadric<
+        VCGTriMesh::Mesh, VertexPair,
+        MyTriEdgeCollapse,
+        vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  >
+    {
+    public:
+      typedef vcg::tri::TriEdgeCollapseQuadric<
+          VCGTriMesh::Mesh, VertexPair,
+          MyTriEdgeCollapse,
+          vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  > TECQ;
+      typedef  VCGTriMesh::Mesh::VertexType::EdgeType EdgeType;
+      inline MyTriEdgeCollapse(const VertexPair &p, int i, vcg::BaseParameterClass *pp) :TECQ(p,i,pp){}
+    };
+
+    // Target number of vertices
+    int n_target = reduction_factor < 1.0
+        ? (int) (tri_mesh.GetMesh().FN() * reduction_factor)
+        : (int) reduction_factor;
+
+    int t1=clock();
+    DeciSession.Init<MyTriEdgeCollapse>();
+    int t2=clock();
+    printf("Simplifying to reduce from %7i to %7i faces\n", tri_mesh.GetMesh().FN(), n_target);
+
+    DeciSession.SetTargetSimplices(n_target);
+    DeciSession.SetTimeBudget(2.0f);
+    // DeciSession.SetTargetOperations(100000);
+    // if(TargetError< std::numeric_limits<float>::max() ) DeciSession.SetTargetMetric(TargetError);
+
+    double TargetError = std::numeric_limits<double>::max();
+    while( DeciSession.DoOptimization() && tri_mesh.GetMesh().FN() > n_target && DeciSession.currMetric < TargetError)
+      printf("Current Mesh size %7i heap sz %9i err %9g \n", tri_mesh.GetMesh().FN(), int(DeciSession.h.size()),DeciSession.currMetric);
+
+    int t3=clock();
+    printf("mesh (%d,%d) Error %g \n", tri_mesh.GetMesh().VN(), tri_mesh.GetMesh().FN(), DeciSession.currMetric);
+    printf("\nCompleted in (%5.3f+%5.3f) sec\n", float(t2-t1)/CLOCKS_PER_SEC, float(t3-t2)/CLOCKS_PER_SEC);
+
+    DeciSession.Finalize<MyTriEdgeCollapse>();
+
+    tri_mesh.ExportToVTK(mesh);
+#else
+    cout << "Mesh reduction is not implemented - need to compile with VCG" << endl;
+    return -1;
+#endif
     }
 
   // Write the output

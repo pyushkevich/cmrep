@@ -222,6 +222,7 @@ IF(USE_VCG)
   FIND_PATH(VCGLIB_DIR NAMES vcg/simplex/vertex/base.h)
   IF(VCGLIB_DIR)
     INCLUDE_DIRECTORIES(${VCGLIB_DIR} ${VCGLIB_DIR}/eigenlib)
+    ADD_COMPILE_DEFINITIONS(CMREP_USE_VCG)
   ENDIF(VCGLIB_DIR)
 ENDIF(USE_VCG)
 
@@ -402,13 +403,18 @@ ENDIF(USE_IPOPT AND USE_TETGEN)
 # Include the utilities
 IF(BUILD_UTILS)
 
+  # VCG-based utilities
+  IF(USE_VCG)
+    SET(VCG_UTIL_SRC src/util/VCGTriMesh.h src/util/VCGTriMesh.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
+  ENDIF(USE_VCG)
+
   ADD_EXECUTABLE(sphere_splat src/util/SplatOntoSphere.cxx)
   ADD_EXECUTABLE(vtkprocrustes 
     src/util/MeshProcrustes.cxx 
     src/util/ReadWriteVTK.cxx 
     src/Procrustes.cxx)
 
-  ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx)
+  ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx ${VCG_UTIL_SRC})
   TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS})
 
   ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
@@ -456,13 +462,6 @@ IF(BUILD_UTILS)
     meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere
     contour2surf apply_remeshing_to_another mesh_convert_format ml_affine)
 
-  # VCG-based utilities
-  IF(USE_VCG)
-    ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
-    ADD_EXECUTABLE(mesh_poisson_sample src/util/MeshPoissonSample.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
-    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample)
-  ENDIF(USE_VCG)
-
   # Tetrahedron tools
   ADD_EXECUTABLE(tetdumpattr src/util/TetDumpAttr.cxx)
   ADD_EXECUTABLE(tetfill src/util/TetraFill.cxx)
@@ -471,6 +470,12 @@ IF(BUILD_UTILS)
   ADD_EXECUTABLE(tetsample src/util/TetSampleImage.cxx)
   SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS}
     tetdumpattr tetfill tetjac tetmergearr tetsample)
+
+  IF(USE_VCG)
+    ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCG_UTIL_SRC} )
+    ADD_EXECUTABLE(mesh_poisson_sample src/util/MeshPoissonSample.cxx ${VCG_UTIL_SRC} )
+    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample)
+  ENDIF(USE_VCG)
 
   # Link libraries for the tools
   FOREACH(CMREP_TOOL ${CMREP_UTIL_TOOLS})
