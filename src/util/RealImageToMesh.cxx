@@ -323,7 +323,7 @@ int main(int argc, char *argv[])
   vtkPolyData *mesh = fltTransform->GetOutput();
 
   // Flip normals if determinant of SFORM is negative
-  if(transform->GetMatrix()->Determinant() < 0)
+  if(!preserveLabels && transform->GetMatrix()->Determinant() < 0)
     {
     vtkPointData *pd = mesh->GetPointData();
     vtkDataArray *nrm = pd->GetNormals();
