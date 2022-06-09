@@ -4,16 +4,13 @@
 
 #include <vtkCellArray.h>
 #include <vtkPolyData.h>
-#include <vtkBYUReader.h>
-#include <vtkSTLReader.h>
-#include <vtkPolyDataReader.h>
+#include "ReadWriteVTK.h"
 #include <vtkTriangleFilter.h>
 
 #include <itkImageFileWriter.h>
 #include <itkImage.h>
 #include <itkImageFileReader.h>
 
-#include "itkOrientedRASImage.h"
 #include <itk_to_nifti_xform.h>
 #include "DrawTriangles.h"
 
@@ -24,21 +21,19 @@ typedef Image<float, 3> RefImageType;
 
 int usage()
 {
-  cout << "meshtoimg - fill in a 3D mesh, producing a binary image" << endl;
+  cout << "mesh2img - fill in a 3D mesh, producing a binary image" << endl;
   cout << "description:" << endl;
-  cout << "        Given an 3D mesh, this command fill scan-convert the faces in " << endl;
+  cout << "   Given an 3D mesh, this command fill scan-convert the faces in " << endl;
   cout << "   the mesh to a 3D image, optionally filling the interior (-f option)"  << endl;
   cout << "   The user must specify the corners of the image in the coordinate"  << endl;
   cout << "   space of the mesh using the -o and -s options, as well as the resolution"  << endl;
   cout << "   of the image using the -r option. " << endl;
-  cout << "        To find out the spatial extent of the mesh, call the program without" << endl;
+  cout << "   To find out the spatial extent of the mesh, call the program without" << endl;
   cout << "   the -o and -s parameters. The extent will be printed out." << endl;
   cout << "usage: " << endl;
-  cout << "   stltoimg [options] output.img" << endl;
+  cout << "   mesh2img [options] output.nii.gz" << endl;
   cout << "options: " << endl;
-  cout << "   -vtk file                   Specify input as a VTK mesh" << endl;
-  cout << "   -stl file                   Specify input as an STL mesh" << endl;
-  cout << "   -byu file                   Specify input as a BYU mesh" << endl;
+  cout << "   -i <mesh>                   Input mesh file (VTK, STL, etc)" << endl;
   cout << "   -f                          Fill the interior of the mesh also" << endl;
   cout << "   -o NN NN NN                 Image origin in x,y,z in mesh space" << endl;
   cout << "   -s NN NN NN                 Image size in x,y,z in mesh space" << endl;
@@ -79,10 +74,14 @@ int main(int argc, char **argv)
   // Parse the optional parameters
   try 
     {
-    for(int i=1;i<argc-2;i++)
+    for(int i=1;i<argc-1;i++)
       {
       string arg = argv[i];
-      if(arg == "-vtk")
+      if(arg == "-i")
+        {
+        fnInput = argv[++i];
+        }
+      else if(arg == "-vtk")
         {
         fnInput = argv[++i];
         iMeshType = VTK;
@@ -151,7 +150,7 @@ int main(int argc, char **argv)
     }
 
   // If no file given, return
-  if(iMeshType == NONE)
+  if(fnInput.size() == 0)
     {
     cerr << "No input mesh specified!" << endl;
     return usage();
@@ -168,7 +167,6 @@ int main(int argc, char **argv)
     cout << "Reading the Reference file ..." << endl;
     Refreader->Update();
     ref = Refreader->GetOutput();
-
     }
 
   // Print the parameters
@@ -223,39 +221,7 @@ int main(int argc, char **argv)
   // The real program begins here
 
   // Read the appropriate mesh type
-  vtkPolyData *polyInput = NULL;
-  vtkObject *fltGenericReader = NULL;
-
-  if(iMeshType == BYU)
-    {
-    vtkBYUReader *reader = vtkBYUReader::New();
-    reader->SetFileName(fnInput.c_str());
-    cout << "Reading the BYU file ..." << endl;
-    reader->Update();
-
-    fltGenericReader = reader;
-    polyInput = reader->GetOutput();
-    }
-  else if(iMeshType == STL)
-    {
-    vtkSTLReader *reader = vtkSTLReader::New();
-    reader->SetFileName(fnInput.c_str());
-    cout << "Reading the STL file ..." << endl;
-    reader->Update();
-
-    fltGenericReader = reader;
-    polyInput = reader->GetOutput();
-    }
-  else if(iMeshType == VTK)
-    {
-    vtkPolyDataReader *reader = vtkPolyDataReader::New();
-    reader->SetFileName(fnInput.c_str());
-    cout << "Reading the VTK file ..." << endl;
-    reader->Update();
-
-    fltGenericReader = reader;
-    polyInput = reader->GetOutput();
-    }
+  vtkPolyData *polyInput = ReadVTKData(fnInput.c_str());
 
   // Convert the model to triangles
   vtkTriangleFilter *tri = vtkTriangleFilter::New();
@@ -296,19 +262,8 @@ int main(int argc, char **argv)
     cout << "   Image box size    : {" << bb[1][0] << ", " << bb[1][1] << ", " << bb[1][2] << "}" << endl << endl;
     }
 
-  if(pd->GetBounds()[0] < bb[0][0] || pd->GetBounds()[1] > bb[0][0] + bb[1][0] ||
-    pd->GetBounds()[2] < bb[0][1] || pd->GetBounds()[3] > bb[0][1] + bb[1][1] ||
-    pd->GetBounds()[4] < bb[0][2] || pd->GetBounds()[5] > bb[0][2] + bb[1][2])
-    {
-    cout << "User specified bounds (-o -s) are out of range! Can't continue!" << endl;
-    return -1;
-    }
-
-  // Clean up
-  fltGenericReader->Delete();
-
   // Create a ITK image to store the results
-  typedef OrientedRASImage<unsigned char,3> ImageType;
+  typedef itk::Image<unsigned char,3> ImageType;
   ImageType::Pointer img = ImageType::New();
   ImageType::RegionType region;
 
@@ -363,7 +318,7 @@ int main(int argc, char **argv)
 
   vtkCellArray *poly = pd->GetPolys();
   vtkIdType npts;
-  vtkIdType *pts;
+  const vtkIdType *pts;
   for(poly->InitTraversal();poly->GetNextCell(npts,pts);)
     {
     for(unsigned int i=0;i<3;i++)
@@ -374,10 +329,13 @@ int main(int argc, char **argv)
       // Use ITK to map from spatial to voxel coordinates
       Point<double,3> pt;
       for(unsigned int j=0;j<3;j++)
-        pt[j] = x[j];
+        if(j < 2)
+          pt[j] = -x[j];
+        else
+          pt[j] = x[j];
 
       ContinuousIndex<double,3> idx;
-      img->TransformRASPhysicalPointToContinuousIndex(pt, idx);
+      img->TransformPhysicalPointToContinuousIndex(pt, idx);
       for(unsigned int j=0;j<3;j++)
         vtx[it][j] = idx[j];
 

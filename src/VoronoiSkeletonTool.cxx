@@ -14,8 +14,6 @@
 #include <vtkCellArray.h>
 #include <vtkCellDataToPointData.h>
 #include <vtkPolyData.h>
-#include <vtkBYUReader.h>
-#include <vtkSTLReader.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkBYUWriter.h>
 #include <vtkSTLWriter.h>
@@ -26,7 +24,6 @@
 #include <vtkDoubleArray.h>
 #include <vtkCleanPolyData.h>
 #include <vtkPolyDataConnectivityFilter.h>
-#include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
 #include <vtkMath.h>
 #include <vtkTriangle.h>
@@ -48,28 +45,13 @@
 #include <itkLinearInterpolateImageFunction.h>
 #include <itkVectorImage.h>
 
+#include "util/ReadWriteVTK.h"
+
 using namespace std;
 
 typedef std::pair<vtkIdType, vtkIdType> VertexPair;
 typedef std::set< std::pair<vtkIdType, vtkIdType> > VertexPairSet;
 typedef std::vector<VertexPair> VertexPairArray;
-
-vtkPolyData *ReadVTKData(string fn)
-{
-  // Choose the reader based on extension
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fn.c_str());
-  reader->Update();
-  return reader->GetOutput();
-}
-
-void WriteVTKData(vtkPolyData *data, string fn)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fn.c_str());
-  writer->SetInputData(data);
-  writer->Update();
-}
 
 void WriteVTKData(vtkUnstructuredGrid *data, string fn)
 {
@@ -195,7 +177,8 @@ double ComputeAverageEdgeLength(vtkPolyData *poly)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
 
     for(vtkIdType j = 0; j < nPoints; j++)
@@ -223,7 +206,8 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
     
     // Only triangles are admitted
@@ -1107,7 +1091,8 @@ int main(int argc, char *argv[])
     for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
-      vtkIdType nPoints, *xPoints;
+      vtkIdType nPoints;
+      const vtkIdType *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points

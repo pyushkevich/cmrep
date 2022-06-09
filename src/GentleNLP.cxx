@@ -236,6 +236,40 @@ std::string SquareRootOperatorTraits::GetName(Expression *a)
   return oss.str();
 }
 
+Expression *CosOperatorTraits::Differentiate(
+    Problem *p, Expression *self, Expression *a, Expression *dA)
+{
+  if(dA)
+    {
+    return MakeProduct(p, MakeNegation(p, new Sin(p, a)), dA);
+    }
+  else return NULL;
+}
+
+std::string CosOperatorTraits::GetName(Expression *a)
+{
+  std::ostringstream oss;
+  oss << "cos(" << a->GetName() << ")";
+  return oss.str();
+}
+
+Expression *SinOperatorTraits::Differentiate(
+    Problem *p, Expression *self, Expression *a, Expression *dA)
+{
+  if(dA)
+    {
+    return MakeProduct(p, new Cos(p, a), dA);
+    }
+  else return NULL;
+}
+
+std::string SinOperatorTraits::GetName(Expression *a)
+{
+  std::ostringstream oss;
+  oss << "sin(" << a->GetName() << ")";
+  return oss.str();
+}
+
 Expression *PlusOperatorTraits::Differentiate(
     Problem *p, Expression *self,
     Expression *a, Expression *b, Expression *dA, Expression *dB)

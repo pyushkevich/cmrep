@@ -267,6 +267,24 @@ public:
   static std::string GetName(Expression *a);
 };
 
+class CosOperatorTraits
+{
+public:
+  static double Operate(double a) { return cos(a); }
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *dA);
+  static std::string GetName(Expression *a);
+};
+
+class SinOperatorTraits
+{
+public:
+  static double Operate(double a) { return sin(a); }
+  static Expression *Differentiate(Problem *p, Expression *self,
+                                   Expression *a, Expression *dA);
+  static std::string GetName(Expression *a);
+};
+
 
 template<class TOperatorTraits>
 class UnaryExpression : public CachingExpression
@@ -313,7 +331,8 @@ protected:
 typedef UnaryExpression<NegateOperatorTraits> Negation;
 typedef UnaryExpression<SquareOperatorTraits> Square;
 typedef UnaryExpression<SquareRootOperatorTraits> SquareRoot;
-
+typedef UnaryExpression<CosOperatorTraits> Cos;
+typedef UnaryExpression<SinOperatorTraits> Sin;
 
 
 

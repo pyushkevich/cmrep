@@ -286,7 +286,7 @@ int main(int argc, char *argv[])
   // Iterate over the cells in the image
   size_t nt = mesh->GetNumberOfPolys();
   vtkCellArray *tri = mesh->GetPolys();
-  vtkIdType npts; vtkIdType *pts;
+  vtkIdType npts; const vtkIdType *pts;
   typedef vnl_vector_fixed<double, 3> Vec;
   size_t itri = 0;
   size_t iwedge = 0;

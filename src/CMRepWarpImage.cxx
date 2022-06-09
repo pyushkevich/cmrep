@@ -304,7 +304,7 @@ int main(int argc, char *argv[])
   // Iterate over the cells in the image
   size_t nt = m1->GetNumberOfPolys();
   vtkCellArray *tri = m1->GetPolys();
-  vtkIdType npts; vtkIdType *pts;
+  vtkIdType npts; const vtkIdType *pts;
   typedef vnl_vector_fixed<double, 3> Vec;
   size_t itri = 0;
   for(tri->InitTraversal(); tri->GetNextCell(npts,pts); itri++)

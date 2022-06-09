@@ -2,6 +2,9 @@
 #include "itkImage.h"
 #include "itkLinearInterpolateImageFunction.h"
 #include "itkNearestNeighborInterpolateImageFunction.h"
+#include "itkBinaryThresholdImageFilter.h"
+#include "itkSignedMaurerDistanceMapImageFilter.h"
+#include "itkImageRegionIterator.h"
 #include <vtkPolyData.h>
 #include <vtkUnstructuredGrid.h>
 #include <vtkUnstructuredGridReader.h>
@@ -30,6 +33,8 @@ int usage()
   cout << "   -i n           : Interpolation, 0 for nearest neighbor, 1 for linear (*default*)" << endl;
   cout << "   -t min max     : Trim away anything in the mesh that falls outside of range" << endl;
   cout << "   -C n           : After trimming, retain n largest connected components" << endl;
+  cout << "   -V             : Voting mode - each vertex gets the label of the closest " << endl;
+  cout << "                    voxel with a non-zero label " << endl;
   return -1;
 }
 
@@ -93,7 +98,7 @@ vtkSmartPointer<vtkUnstructuredGrid> ThresholdMesh(
     conn->SetInputData(result);
     conn->SetExtractionModeToLargestRegion();
     conn->Update();
-    result = conn->GetOutput();
+    result = conn->GetUnstructuredGridOutput();
     }
 
   return result;
@@ -119,68 +124,165 @@ vtkSmartPointer<vtkPolyData> ThresholdMesh(
     conn->SetInputData(grid);
     conn->SetExtractionModeToLargestRegion();
     conn->Update();
-    grid = conn->GetOutput();
+    vtkSmartPointer<vtkPolyData> result = conn->GetPolyDataOutput();
 
     std::cout << "After connectivity filter " 
       << grid->GetNumberOfPoints() << " of " << mesh->GetNumberOfPoints() 
       << " remain." << std::endl;
+
+    return result;
     }
-
-  vtkSmartPointer<vtkGeometryFilter> geom = vtkGeometryFilter::New();
-  geom->SetInputData(grid);
-  geom->Update();
-  vtkSmartPointer<vtkPolyData> result = geom->GetOutput();
-
-  return result;
+  else
+    {
+    vtkSmartPointer<vtkGeometryFilter> geom = vtkGeometryFilter::New();
+    geom->SetInputData(grid);
+    geom->Update();
+    vtkSmartPointer<vtkPolyData> result = geom->GetOutput();
+    return result;
+    }
 }
 
 template <class TMeshType>
 int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp_mode,
-  bool flag_trim, float trim_min, float trim_max, bool trim_comp)
+  bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode)
 {
   // Read the input mesh
   TMeshType *mesh = ReadMesh<TMeshType>(argv[argc-4]);
-
-  // Read the input image
-  typedef itk::VectorImage<float, 3> ImageType;
-  typedef itk::ImageFileReader<ImageType> ReaderType;
-  ReaderType::Pointer fltReader = ReaderType::New();
-  fltReader->SetFileName(argv[argc-3]);
-  fltReader->Update();
-  ImageType::Pointer imgInput = fltReader->GetOutput();
-
-  // Create an interpolation function
-  typedef itk::InterpolateImageFunction<ImageType, double> InterpType;
-  InterpType::Pointer interp;
-  if(interp_mode == 0)
-    interp = itk::NearestNeighborInterpolateImageFunction<ImageType, double>::New();
-  else
-    interp = itk::LinearInterpolateImageFunction<ImageType, double>::New();
-
-  interp->SetInputImage(imgInput);
+  size_t n = mesh->GetNumberOfPoints();
 
   // Create an array to hold the output
   vtkFloatArray *array = vtkFloatArray::New();
-  array->SetNumberOfComponents(imgInput->GetNumberOfComponentsPerPixel());
   array->SetNumberOfTuples(mesh->GetNumberOfPoints());
 
-  // Sample the data
-  size_t n = mesh->GetNumberOfPoints();
-  size_t c = array->GetNumberOfComponents();
-  for(size_t i = 0; i < n; i++)
+  // Special case - voting mode
+  if(voting_mode)
     {
-    // Get the physical position of the point
-    double *x = mesh->GetPoint(i);
-    itk::Point<double,3> pt;
-    itk::ContinuousIndex<double,3> idx;
+    // Load the image as a scalar image
+    typedef itk::Image<float, 3> ImageType;
+    typedef itk::ImageFileReader<ImageType> ReaderType;
+    ReaderType::Pointer fltReader = ReaderType::New();
+    fltReader->SetFileName(argv[argc-3]);
+    fltReader->Update();
+    ImageType::Pointer imgInput = fltReader->GetOutput();
 
-    // The first two coordinates are flipped for RAS/LPS conversion
-    pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
+    // Find all the unique labels in the image
+    int last_label = 0;
+    std::set<int> unique_labels;
+    for(itk::ImageRegionIterator<ImageType> it(imgInput, imgInput->GetBufferedRegion());
+      !it.IsAtEnd(); ++it)
+      {
+      int label = (int) it.Get() + 0.5;
+      if(label != last_label && label != 0)
+        {
+        unique_labels.insert(label);
+        last_label = label;
+        }
+      }
 
-    imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
-    typename ImageType::PixelType pix = interp->EvaluateAtContinuousIndex(idx);
-    for(int j = 0; j < c; j++)
-      array->SetComponent(i, j, pix[j]);
+    // If too many unique labels, crash
+    if(unique_labels.size() > 128) 
+      {
+      std::cerr << "Too many unique intensity values in input image, max is 128" << std::endl;
+      return -1;
+      }
+    else
+      {
+      std::cout << "Voting among " << unique_labels.size() << " unique labels " << std::endl;
+      }
+
+    // Create an array to hold the highest vote
+    array->SetNumberOfComponents(1);
+    vtkFloatArray *vote = vtkFloatArray::New();
+    vote->SetNumberOfComponents(1);
+    vote->SetNumberOfTuples(mesh->GetNumberOfPoints());
+    vote->FillComponent(0, 0.0);
+
+    bool first_label = true;
+    for(auto label : unique_labels) 
+      {
+      // Threshhold on the label
+      typedef itk::BinaryThresholdImageFilter<ImageType, ImageType> ThresholdFilter;
+      typename ThresholdFilter::Pointer f_thresh = ThresholdFilter::New();
+      f_thresh->SetInput(imgInput);
+      f_thresh->SetLowerThreshold(label);
+      f_thresh->SetUpperThreshold(label);
+      f_thresh->SetInsideValue(1.0);
+      f_thresh->SetOutsideValue(0.0);
+
+      // Smooth the thresholded image
+      typedef itk::SignedMaurerDistanceMapImageFilter<ImageType, ImageType> DistanceFilter;
+      typename DistanceFilter::Pointer f_dist = DistanceFilter::New();
+      f_dist->SetInput(f_thresh->GetOutput());
+      f_dist->Update();
+
+      // Create an interpolation function
+      typedef itk::LinearInterpolateImageFunction<ImageType, double> InterpType;
+      typename InterpType::Pointer interp = InterpType::New();
+      interp->SetInputImage(f_dist->GetOutput());
+
+      // Sample the vertices
+      for(unsigned int i = 0; i < n; i++)
+        {
+        // Get the physical position of the point
+        double *x = mesh->GetPoint(i);
+        itk::Point<double,3> pt;
+        itk::ContinuousIndex<double,3> idx;
+
+        // The first two coordinates are flipped for RAS/LPS conversion
+        pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
+
+        imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
+        double pix = interp->EvaluateAtContinuousIndex(idx);
+
+        if(first_label || vote->GetComponent(i, 0) > pix)
+          {
+          vote->SetComponent(i, 0, pix);
+          array->SetComponent(i, 0, label);
+          }
+        }
+      first_label = false;
+      }
+    }
+  else
+    {
+    // Read the input image
+    typedef itk::VectorImage<float, 3> ImageType;
+    typedef itk::ImageFileReader<ImageType> ReaderType;
+    ReaderType::Pointer fltReader = ReaderType::New();
+    fltReader->SetFileName(argv[argc-3]);
+    fltReader->Update();
+    ImageType::Pointer imgInput = fltReader->GetOutput();
+
+    // Create an interpolation function
+    typedef itk::InterpolateImageFunction<ImageType, double> InterpType;
+    InterpType::Pointer interp;
+    if(interp_mode == 0)
+      interp = itk::NearestNeighborInterpolateImageFunction<ImageType, double>::New();
+    else
+      interp = itk::LinearInterpolateImageFunction<ImageType, double>::New();
+
+    interp->SetInputImage(imgInput);
+
+    // Set the output number of components
+    size_t c = imgInput->GetNumberOfComponentsPerPixel();
+    array->SetNumberOfComponents(c);
+
+    // Sample the data
+    for(size_t i = 0; i < n; i++)
+      {
+      // Get the physical position of the point
+      double *x = mesh->GetPoint(i);
+      itk::Point<double,3> pt;
+      itk::ContinuousIndex<double,3> idx;
+
+      // The first two coordinates are flipped for RAS/LPS conversion
+      pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
+
+      imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
+      typename ImageType::PixelType pix = interp->EvaluateAtContinuousIndex(idx);
+      for(int j = 0; j < c; j++)
+        array->SetComponent(i, j, pix[j]);
+      }
     }
 
   // Get the point data
@@ -243,7 +345,7 @@ int main(int argc, char *argv[])
 
   // Optional trimming parameters
   float trim_min, trim_max;
-  bool flag_trim = false, trim_comp = false;
+  bool flag_trim = false, trim_comp = false, voting_mode = false;
 
   for(int ip = 1; ip < argc-4; ip++)
     {
@@ -291,6 +393,10 @@ int main(int argc, char *argv[])
       {
       trim_comp = true;
       }
+    else if(strcmp(argv[ip], "-V") == 0)
+      {
+      voting_mode = true;
+      }
     else
       {
       cerr << "error: unrecognized parameter " << argv[ip] << endl;
@@ -312,13 +418,13 @@ int main(int argc, char *argv[])
     reader->Delete();
     isPolyData = false;
     return MeshImageSample<vtkUnstructuredGrid>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
     }
   else if(reader->IsFilePolyData())
     {
     reader->Delete();
     return MeshImageSample<vtkPolyData>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
 
     }
   else

@@ -51,7 +51,8 @@ public:
     for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
-      vtkIdType nPoints, *xPoints;
+      vtkIdType nPoints;
+      const vtkIdType *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points

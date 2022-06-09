@@ -126,10 +126,13 @@ const char *usage_text =
   "                 when the -M flag is supplied\n"
   "  -f / --flane   Use the Freedman-Lane procedure for permutation testing\n"
   "  -n / --nuissance nuissance.txt	\n"
-  "		    Optional Freedman-Lane specification. The nuissance vector is 1 x m, where\n"
-  "		    m is the number of independent variables. Nuissance variables should \n"
-  "		    be set to 1. Default specification assumes 0 variables in the \n"
-  "		    contrast vector are nuissance variables. \n";
+  "		              Optional Freedman-Lane specification. The nuissance vector is 1 x m, where\n"
+  "		              m is the number of independent variables. Nuissance variables should \n"
+  "		              be set to 1. Default specification assumes 0 variables in the \n"
+  "		              contrast vector are nuissance variables. \n"
+  "  -X <array>     Exclusion array. Should have the same dimensionality as the array \n"
+  "                 passed to -a. For every point/subject where the exclusion array is \n"
+  "                 non-zero, the corresponding value in the main array will be set to NaN\n";
 
 int usage()
 {
@@ -1547,7 +1550,7 @@ struct Parameters
   size_t np;
   
   // Array
-  string array_name;
+  string array_name, exclusion_array_name;
 
   // Domain
   Domain dom;
@@ -1835,6 +1838,36 @@ int meshcluster(Parameters &p, bool isPolyData)
       throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
         data->GetNumberOfComponents(), p.array_name.c_str(), 
         p.fn_mesh_input[i].c_str(), mat.rows()); 
+
+    // Check if there is an exclusion array
+    if(p.exclusion_array_name.length())
+      {
+      vtkDataArray *excl = GetArrayFromMesh(mesh[i], p.dom, p.exclusion_array_name);
+      if(!excl)
+        throw MCException("Array %s is missing in mesh %s",
+          p.exclusion_array_name.c_str(), p.fn_mesh_input[i].c_str());
+
+      if(excl->GetNumberOfComponents() != n_rows_before_cleanup)
+        throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
+          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
+          p.fn_mesh_input[i].c_str(), mat.rows());
+
+      if(data->GetNumberOfTuples() != excl->GetNumberOfTuples())
+        throw MCException("Wrong number of tuples (%d) in array %s in mesh %s. Should be %d.",
+          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
+          p.fn_mesh_input[i].c_str(), data->GetNumberOfTuples());
+
+      unsigned int n_excl = 0;
+      for(unsigned int j = 0; j < data->GetNumberOfTuples(); j++)
+        for(int k = 0; k < data->GetNumberOfComponents(); k++)
+          if(excl->GetComponent(j, k) != 0.0)
+            {
+            data->SetComponent(j, k, std::nan(0));
+            ++n_excl;
+            }
+
+      cout << "  Converted " << n_excl << " values to NaN based on exclusion array" << endl;
+      }
 
     // Clean the data if necessary
     if(rows_kept.size() < n_rows_before_cleanup)
@@ -2169,6 +2202,10 @@ int main(int argc, char *argv[])
       else if(arg == "-a" || arg == "--array")
         {
         p.array_name = argv[++i];
+        }
+      else if(arg == "-X")
+        {
+        p.exclusion_array_name = argv[++i];
         }
       else if(arg == "-p" || arg == "--perm")
         {

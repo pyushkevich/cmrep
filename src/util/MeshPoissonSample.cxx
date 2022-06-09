@@ -4,8 +4,8 @@
 
 #include <vcg/complex/algorithms/clean.h>
 #include <vcg/complex/algorithms/smooth.h>
-#include<vcg/complex/algorithms/point_sampling.h>
-#include<vcg/complex/algorithms/clustering.h>
+#include <vcg/complex/algorithms/point_sampling.h>
+#include <vcg/complex/algorithms/clustering.h>
 
 // input output
 #include <wrap/io_trimesh/import.h>
