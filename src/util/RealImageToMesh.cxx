@@ -18,7 +18,7 @@
 #include "vtkTriangleFilter.h"
 #include "vtkCell.h"
 #include "vtkContourFilter.h"
-#include <vtkDiscreteMarchingCubes.h>
+#include "vtkDiscreteFlyingEdges3D.h"
 #include <vtkUnsignedShortArray.h>
 #include <vtkAppendPolyData.h>
 
@@ -189,16 +189,16 @@ int main(int argc, char *argv[])
         std::cout << "  -- Processing Label: " << lbl << std::endl;
 
         // Extract one label
-        vtkDiscreteMarchingCubes *fltDMC = vtkDiscreteMarchingCubes::New();
-        fltDMC->SetInputConnection(fltImport->GetOutputPort());
-        fltDMC->ComputeGradientsOff();
-        fltDMC->ComputeScalarsOff();
-        fltDMC->SetNumberOfContours(1);
-        fltDMC->ComputeNormalsOn();
-        fltDMC->SetValue(0, lbl);
-        fltDMC->Update();
+        vtkNew<vtkDiscreteFlyingEdges3D> fltDFE;
+        fltDFE->SetInputConnection(fltImport->GetOutputPort());
+        fltDFE->ComputeGradientsOff();
+        fltDFE->ComputeScalarsOff();
+        fltDFE->ComputeNormalsOn();
+        fltDFE->SetNumberOfContours(1);
+        fltDFE->SetValue(0, lbl);
+        fltDFE->Update();
 
-        vtkPolyData *labelMesh = fltDMC->GetOutput();
+        vtkPolyData *labelMesh = fltDFE->GetOutput();
 
         // Set scalar values for the label
         vtkUnsignedShortArray *scalar = vtkUnsignedShortArray::New();
@@ -340,7 +340,7 @@ int main(int argc, char *argv[])
   vtkSmartPointer<vtkPolyData> mesh = fltTransform->GetOutput();
 
   // Flip normals if determinant of SFORM is negative
-  if(!preserveLabels && transform->GetMatrix()->Determinant() < 0)
+  if(transform->GetMatrix()->Determinant() < 0)
     {
     vtkPointData *pd = mesh->GetPointData();
     vtkDataArray *nrm = pd->GetNormals();
