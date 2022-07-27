@@ -125,14 +125,16 @@ const char *usage_text =
   "  -B / --binary  Write output meshes in binary format. This is turned on automatically\n"
   "                 when the -M flag is supplied\n"
   "  -f / --flane   Use the Freedman-Lane procedure for permutation testing\n"
-  "  -n / --nuissance nuissance.txt	\n"
-  "		              Optional Freedman-Lane specification. The nuissance vector is 1 x m, where\n"
-  "		              m is the number of independent variables. Nuissance variables should \n"
-  "		              be set to 1. Default specification assumes 0 variables in the \n"
-  "		              contrast vector are nuissance variables. \n"
+  "  -n / --nuissance nuissance.txt\n"
+  "                 Optional Freedman-Lane specification. The nuissance vector is 1 x m, where\n"
+  "                 m is the number of independent variables. Nuissance variables should \n"
+  "                 be set to 1. Default specification assumes 0 variables in the \n"
+  "                 contrast vector are nuissance variables. \n"
   "  -X <array>     Exclusion array. Should have the same dimensionality as the array \n"
   "                 passed to -a. For every point/subject where the exclusion array is \n"
-  "                 non-zero, the corresponding value in the main array will be set to NaN\n";
+  "                 non-zero, the corresponding value in the main array will be set to NaN\n"
+  "  -T             Apply triangulation filter to input meshes (polydata only). This is\n"
+  "                 in cases when input data has non-triangle faces\n";
 
 int usage()
 {
@@ -1579,13 +1581,16 @@ struct Parameters
   // Whether to use the freedman-lane procedure
   bool flag_freedman_lane;
 
+  // Triangulate?
+  bool flag_triangulate;
+
   // What is the threshold on
   ThresholdType ttype;
 
   Parameters()
     {
     np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
-    flag_missing_data = false; flag_write_binary = false; flag_freedman_lane = false;
+    flag_missing_data = false; flag_write_binary = false; flag_freedman_lane = false; flag_triangulate = false;
     }
 };
 
@@ -1698,6 +1703,21 @@ void ConvertToMeshType(vtkUnstructuredGrid *src, vtkSmartPointer<vtkUnstructured
   trg = src;
 }
 
+template <class TMeshType> 
+vtkSmartPointer<TMeshType> triangulate(TMeshType *mesh)
+{
+  throw MCException("Triangulation not supported");
+}
+
+template <>
+vtkSmartPointer<vtkPolyData> triangulate(vtkPolyData *mesh)
+{
+  vtkSmartPointer<vtkTriangleFilter> filter = vtkSmartPointer<vtkTriangleFilter>::New();
+  filter->SetInputData(mesh);
+  filter->Update();
+  vtkSmartPointer<vtkPolyData> result = filter->GetOutput();
+  return result;
+}
 
 template <class TMeshType>
 int meshcluster(Parameters &p, bool isPolyData)
@@ -1822,12 +1842,22 @@ int meshcluster(Parameters &p, bool isPolyData)
   }	
 
   // Read the meshes and initialize statistics arrays
-  vector<TMeshType *> mesh;
+  typedef vtkSmartPointer<TMeshType> MeshPointer;
+  vector<MeshPointer> mesh;
   for(size_t i = 0; i < p.fn_mesh_input.size(); i++)
     {
-    // Read mesh
+    // Read mesh and optionally triangulate
     cout << "Reading mesh " << p.fn_mesh_input[i] << endl;
-    mesh.push_back(ReadMesh<TMeshType>(p.fn_mesh_input[i].c_str()));
+    vtkSmartPointer<TMeshType> mi = ReadMesh<TMeshType>(p.fn_mesh_input[i].c_str());
+    if(p.flag_triangulate)
+      {
+      vtkSmartPointer<TMeshType> mi_tri = triangulate(mi.GetPointer());
+      mesh.push_back(mi_tri);
+      }
+    else
+      {
+      mesh.push_back(mi);
+      }
 
     // Get the data array from the mesh and error check
     vtkDataArray * data = GetArrayFromMesh(mesh[i], p.dom, p.array_name);
@@ -2216,15 +2246,19 @@ int main(int argc, char *argv[])
         p.glm_design = argv[++i];
         p.glm_contrast = argv[++i];
         }
-      else if(arg == "-fl" || arg == "--freedmanlane")
-	{
-	p.flag_freedman_lane = true;
-	p.fl_nuissance = "";
-	}
+      else if(arg == "-f" || arg == "--flane")
+        {
+        p.flag_freedman_lane = true;
+        p.fl_nuissance = "";
+        }
       else if(arg == "-n" || arg == "--nuiss")
-	{
-	p.fl_nuissance = argv[++i];
-	}
+        {
+        p.fl_nuissance = argv[++i];
+        }
+      else if (arg == "-T")
+        {
+        p.flag_triangulate = true;
+        }
       else if(arg == "-c" || arg == "--cell")
         {
         p.dom = CELL;
