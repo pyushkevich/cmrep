@@ -23,7 +23,7 @@ public:
     for(unsigned int iVtx=0; iVtx < nVertices; iVtx++)
       {
       // Get the number of cells for this point
-      unsigned short nCells;
+      vtkIdType nCells;
       vtkIdType *xDummy = NULL;
       xMesh->GetPointCells(iVtx, nCells, xDummy);
 
