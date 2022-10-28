@@ -1171,7 +1171,7 @@ class GeneralLinearModel
 public:
   GeneralLinearModel(
     vtkDataArray *data, vtkDataArray *contrast, 
-    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta, vtkDataArray *residual,
+    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta, vtkDataArray *residual, vtkDataArray *dfarray,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector);
 
@@ -1183,7 +1183,7 @@ public:
 
 private:
   // Pointers to the data arrays
-  vtkDataArray *data, *contrast, *tstat, *pval, *beta, *residual;
+  vtkDataArray *data, *contrast, *tstat, *pval, *beta, *residual, *dfarray;
 
   // Copies of the matrix, other data
   vnl_matrix<double> X,cv;
@@ -1193,7 +1193,7 @@ private:
 GeneralLinearModel::GeneralLinearModel(
     vtkDataArray *data, vtkDataArray *contrast, 
     vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
-    vtkDataArray *residual,
+    vtkDataArray *residual, vtkDataArray *dfarray,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector)
 {
@@ -1206,6 +1206,7 @@ GeneralLinearModel::GeneralLinearModel(
   this->X = design_matrix;
   this->cv = contrast_vector;
   this->residual = residual;
+  this->dfarray = dfarray;
 
   // Initialize other stuff
   nelt = data->GetNumberOfTuples();
@@ -1279,6 +1280,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
       {
       double t = den(0, j) > 0 ? res(0, j) / sqrt(den(0, j)) : 0.0;
       tstat->SetTuple1(j, t);
+      dfarray->SetTuple1(j, (double) df);
       if(need_p)
         {
         int dummy;
@@ -1315,7 +1317,7 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
     // Determine which elements have missing data (nan) and if that matches the last element we processed
     for(int k = 0; k < ns; k++)
       {
-      if(vnl_math::isnan(Yperm(k, j))) 
+      if(vnl_math::isnan(Yperm(k, j)))
         {
         n_nans++;
         if(j == 0 || !vnl_math::isnan(Yperm(k,j-1)))
@@ -1329,7 +1331,7 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
       }
 
     // If the pattern is changed, we need to compute the new A matrix
-    if(!same_pattern) 
+    if(!same_pattern)
       {
       // Copy rows from Xperm into Xj
       Xj.set_size(ns - n_nans, X.cols());
@@ -1344,10 +1346,10 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
 
       // Compute cv * A * cv^T
       cv_A_cvT = (cv * (A * cv.transpose()))(0,0);
-	
+
       // Resize Y
       Yj.set_size(ns - n_nans);
-	}
+      }
 
     // Copy the Y vector's elements into Yk
     for(int k = 0, p = 0; k < ns; k++)
@@ -1364,38 +1366,39 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
     vnl_vector<double> con_j = cv * beta_j;
     contrast->SetTuple1(j, con_j[0]);
 
-  //Compute the degrees of freedom
-  int df_j = Xj.rows()-rank;
+    //Compute the degrees of freedom
+    int df_j = Xj.rows()-rank;
 
     // The rest only if we need the t-stat
     if(need_t)
       {
       vnl_vector<double> Xj_beta = Xj * beta_j;
       vnl_vector<double> res_j = Yj - Xj * beta_j;
-     
+
       double resvar = res_j.squared_magnitude() / (double) df_j;
-     
+
       //if needed, copy the residuals to the output array
       if(need_res)
-      {
-	vnl_vector<double> res_j_ns;
+        {
+        vnl_vector<double> res_j_ns;
         res_j_ns.set_size(ns);
-	for(int k = 0, p = 0; k < ns; k++)
-      	   if(!vnl_math::isnan(Yperm(k,j)))
-	      res_j_ns[k] = res_j[p++];
-	   else
-	      res_j_ns[k] = NAN;
-	residual->SetTuple(j,res_j_ns.data_block());
-      }
-	
+        for(int k = 0, p = 0; k < ns; k++)
+          if(!vnl_math::isnan(Yperm(k,j)))
+            res_j_ns[k] = res_j[p++];
+          else
+            res_j_ns[k] = NAN;
+        residual->SetTuple(j,res_j_ns.data_block());
+        }
+
       // Compute t-stat / p-value
       double den = cv_A_cvT * resvar;
       double t = (den > 0) ? con_j[0] / sqrt(den) : 0.0;
       tstat->SetTuple1(j, t);
+      dfarray->SetTuple1(j, (double) df_j);
       if(need_p)
         {
         int dummy;
-        pval->SetTuple1(j, 1.0 - tnc(t, df_j, 0.0, &dummy)); 
+        pval->SetTuple1(j, 1.0 - tnc(t, df_j, 0.0, &dummy));
         }
       }
     }
@@ -1793,7 +1796,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Names for the statistics arrays
   string an_contrast = "Contrast", an_tstat = "T-statistic";
   string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
-  string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance";
+  string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance", an_dfarray="DOF";
 
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
@@ -1930,18 +1933,19 @@ int meshcluster(Parameters &p, bool isPolyData)
     // CONTRAST or TSTAT, never the PVALUE (as that would waste time computing tcdf)
     vtkFloatArray * contrast = AddArrayToMesh(mesh[i], p.dom, an_contrast, 1, 0, p.ttype == CONTRAST);
     vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, p.ttype != CONTRAST);
+    vtkFloatArray * dfarray = AddArrayToMesh(mesh[i], p.dom, an_dfarray, 1, 0, false);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
     vtkFloatArray * residual {0} ;	
     vtkFloatArray * beta_nuiss {0};
 
     // Create new GLM
-    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, residual, mat, con));
+    glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, residual, dfarray, mat, con));
 
     if(p.flag_freedman_lane)
 	 residual = AddArrayToMesh(mesh[i], p.dom, an_res, mat.rows(), NAN, false);
 	 beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);	
-	 glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, nuiss_mat, nuiss_con));	
+   glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, dfarray, nuiss_mat, nuiss_con));
     }
     
   // If the threshold is on the p-value, convert it to a threshold on T-statistic
