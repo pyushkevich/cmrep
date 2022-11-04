@@ -1717,6 +1717,8 @@ vtkSmartPointer<vtkPolyData> triangulate(vtkPolyData *mesh)
 {
   vtkSmartPointer<vtkTriangleFilter> filter = vtkSmartPointer<vtkTriangleFilter>::New();
   filter->SetInputData(mesh);
+  filter->PassLinesOff();
+  filter->PassVertsOff();
   filter->Update();
   vtkSmartPointer<vtkPolyData> result = filter->GetOutput();
   return result;
