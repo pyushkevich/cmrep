@@ -35,6 +35,7 @@ int usage()
   cout << "   -C n           : After trimming, retain n largest connected components" << endl;
   cout << "   -V             : Voting mode - each vertex gets the label of the closest " << endl;
   cout << "                    voxel with a non-zero label " << endl;
+  cout << "   -B             : Write VTK files as binary" << endl;
   return -1;
 }
 
@@ -62,24 +63,28 @@ vtkPolyData *ReadMesh<>(const char *fname)
 
 
 template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname)
+void WriteMesh(TMeshType *mesh, const char *fname, bool vtk_binary)
 { }
 
 template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
+void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool vtk_binary)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
 template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
+void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool vtk_binary)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
@@ -144,7 +149,7 @@ vtkSmartPointer<vtkPolyData> ThresholdMesh(
 
 template <class TMeshType>
 int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp_mode,
-  bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode)
+  bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode, bool vtk_binary)
 {
   // Read the input mesh
   TMeshType *mesh = ReadMesh<TMeshType>(argv[argc-4]);
@@ -330,7 +335,7 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
     }
 
   // Write the output
-  WriteMesh<TMeshType>(mesh, argv[argc - 2]);
+  WriteMesh<TMeshType>(mesh, argv[argc - 2], vtk_binary);
   return EXIT_SUCCESS;
 }
 
@@ -345,7 +350,7 @@ int main(int argc, char *argv[])
 
   // Optional trimming parameters
   float trim_min, trim_max;
-  bool flag_trim = false, trim_comp = false, voting_mode = false;
+  bool flag_trim = false, trim_comp = false, voting_mode = false, vtk_binary = false;
 
   for(int ip = 1; ip < argc-4; ip++)
     {
@@ -397,6 +402,10 @@ int main(int argc, char *argv[])
       {
       voting_mode = true;
       }
+    else if(strcmp(argv[ip], "-B") == 0)
+      {
+      vtk_binary = true;
+      }
     else
       {
       cerr << "error: unrecognized parameter " << argv[ip] << endl;
@@ -418,13 +427,13 @@ int main(int argc, char *argv[])
     reader->Delete();
     isPolyData = false;
     return MeshImageSample<vtkUnstructuredGrid>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode, vtk_binary);
     }
   else if(reader->IsFilePolyData())
     {
     reader->Delete();
     return MeshImageSample<vtkPolyData>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode, vtk_binary);
 
     }
   else

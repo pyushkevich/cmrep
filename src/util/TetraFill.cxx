@@ -2,6 +2,7 @@
 #include <string>
 #include <sstream>
 #include <set>
+#include <limits>
 
 #include <vtkPolyData.h>
 #include <vtkUnstructuredGrid.h>
@@ -40,6 +41,7 @@ int usage()
   cout << "  -c Name           Use cell array 'Name' to fill the tetrahedra" << endl;
   cout << "  -s source.vtk     Read the cell array data from source.vtk" << endl;
   cout << "  -b Value          Background value (default: 0)" << endl;
+  cout << "  -N                Background value is nan" << endl;
   return -1;
 }
 
@@ -110,13 +112,14 @@ int main(int argc, char **argv)
   string inCellArray = "";
   string sourceCellArray = "";
   double inBackground = 0.0;
-  while ((ch = getopt(argc, argv, "c:b:s:")) != -1)
+  while ((ch = getopt(argc, argv, "c:b:s:N")) != -1)
     {
     switch(ch)
       {
     case 'b': inBackground = atof(optarg); break;
     case 'c': inCellArray = optarg; break;
     case 's': sourceCellArray = optarg; break;
+    case 'N': inBackground = std::numeric_limits<double>::quiet_NaN(); break;
     default: return usage();
       }
     }
@@ -186,6 +189,7 @@ int main(int argc, char **argv)
   ImageType::PixelType bkg_pixel(ncomp);
   bkg_pixel.Fill(inBackground);
   out->FillBuffer(bkg_pixel);
+  std::cout << "Background value: " << inBackground << std::endl;
 
   // Scan convert each of the tetrahedra
   for(size_t ic = 0; ic < (size_t) tet->GetNumberOfCells(); ic++)
