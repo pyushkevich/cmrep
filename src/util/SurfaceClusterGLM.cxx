@@ -134,7 +134,11 @@ const char *usage_text =
   "                 passed to -a. For every point/subject where the exclusion array is \n"
   "                 non-zero, the corresponding value in the main array will be set to NaN\n"
   "  -T             Apply triangulation filter to input meshes (polydata only). This is\n"
-  "                 in cases when input data has non-triangle faces\n";
+  "                 in cases when input data has non-triangle faces\n"
+  "  -R rowmask.txt Row mask. The file should contain as many numbers as there are rows in\n"
+  "                 the design matrix, with 1 meaning the subject should be included in the \n"
+  "                 analysis, 0 meaning excluded. This makes it easier to run analysis on \n"
+  "                 different subsets of subjects without generating separate input meshes \n";
 
 int usage()
 {
@@ -1566,6 +1570,9 @@ struct Parameters
   // Freedman-Lane parameters
   string fl_nuissance;
 
+  // Row mask
+  string row_mask;
+
   // T statistic threshold
   double threshold;
 
@@ -1724,56 +1731,76 @@ vtkSmartPointer<vtkPolyData> triangulate(vtkPolyData *mesh)
   return result;
 }
 
+vnl_matrix<double> read_matrix(
+    const std::string &fn, const std::string &desc, vnl_matrix<double> &mat)
+{
+  try
+  {
+    mat = vnl_file_matrix<double>(fn.c_str());
+  }
+  catch(...)
+  {
+    throw MCException("Error reading %s from %s", desc.c_str(), fn.c_str());
+  }
+}
+
+vnl_matrix<double> read_vector(
+    const std::string &fn, const std::string &desc, vnl_vector<double> &vec)
+{
+  try
+  {
+    vnl_matrix<double> mat = vnl_file_matrix<double>(fn.c_str());
+    vec = mat.flatten_row_major();
+  }
+  catch(...)
+  {
+    throw MCException("Error reading %s from %s", desc.c_str(), fn.c_str());
+  }
+}
+
 template <class TMeshType>
 int meshcluster(Parameters &p, bool isPolyData)
 {
+  // Load design matrix, contrast vector and row mask from files
+  vnl_matrix<double> mat, con;
+  vnl_vector<double> row_mask;
 
-// Load design matrix and contrast vector files
-   vnl_matrix<double> mat, con;
+  read_matrix(p.glm_design, "design matrix", mat);
+  read_matrix(p.glm_contrast, "contrast vector", con);
+  if(p.row_mask.size())
+    read_vector(p.row_mask, "row mask", row_mask);
+  else
+    row_mask = vnl_vector<double>(mat.rows(), 1.0);
 
- try 
-   {
-   mat = vnl_file_matrix<double>(p.glm_design.c_str());
-   }
- catch(...)
-   {
-   throw MCException("Error reading design matrix from %s", p.glm_design.c_str());
-   }
+  if(p.row_mask.size() != mat.rows())
+    throw MCException("Row mask size does not match design matrix dimensions");
 
- try
-  { 
-   con = vnl_file_matrix<double>(p.glm_contrast.c_str());
-  }
- catch(...)
-  {
-  throw MCException("Error reading contrast vector from %s", p.glm_contrast.c_str());
-  }
-	
-  // Check the design matrix for missing values. Currently, we simply throw out the 
-  // rows with missing (NaN) values. In the future, we should implement a GLM with 
+  // Check the design matrix for missing values. Currently, we simply throw out the
+  // rows with missing (NaN) values. In the future, we should implement a GLM with
   // missing data, or just move the whole package to R.
   // Note: this actually does not work!!
   std::vector<int> rows_kept;
-  int n_rows_before_cleanup = mat.rows();
-  for(int i = 0; i < mat.rows(); i++)
+  unsigned int n_rows_before_cleanup = mat.rows();
+  for(unsigned int i = 0; i < mat.rows(); i++)
     {
-    bool keeprow = true;
-    for(int j = 0; j < mat.cols(); j++)
+    bool keep_row = row_mask[i] > 0.0;
+    for(unsigned int j = 0; j < mat.cols(); j++)
       {
       if(vnl_math::isnan(mat(i,j)))
         {
         std::cout << "Discarding row " << i << " due to missing data" << std::endl;
-        keeprow = false;
+        keep_row = false;
         }
       }
-    rows_kept.push_back(i);
+    if(keep_row)
+      rows_kept.push_back(i);
     }
 
   // Now trim the design matrix
   if(rows_kept.size() < mat.rows())
     {
     vnl_matrix<double> mat_keep(rows_kept.size(), mat.cols());
-    for(int i = 0; i < rows_kept.size(); i++)
+    for(unsigned int i = 0; i < rows_kept.size(); i++)
       mat_keep.set_row(i, mat.get_row(rows_kept[i]));
     mat = mat_keep;
     }
@@ -1784,8 +1811,8 @@ int meshcluster(Parameters &p, bool isPolyData)
 
   if(con.rows() != 1)
     throw MCException("Contrast vector must have one row");
- 
-// Create the shuffle arrays
+
+  // Create the shuffle arrays
   vector<int> true_order, permutation;
   for(size_t i = 0; i < mat.rows(); i++)
     true_order.push_back(i);
@@ -1803,48 +1830,46 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
 
- // Create an array of GLM objects for the reduced model and initialize flm variables
- vector <GeneralLinearModel *> glm_reduced;
- vnl_matrix <double> nuiss, nuiss_mat, nuiss_con;
+  // Create an array of GLM objects for the reduced model and initialize flm variables
+  vector <GeneralLinearModel *> glm_reduced;
+  vnl_matrix <double> nuiss, nuiss_mat, nuiss_con;
 
- if(p.flag_freedman_lane){ // If using freedman_lane procedure for permutation testing
-	
-   if(p.fl_nuissance.c_str() == ""){ // check if string is empty, use zero entries in contrast to determine nuissance variables
-
+  if(p.flag_freedman_lane)
+    {
+    // If using freedman_lane procedure for permutation testing
+    if(p.fl_nuissance.size() == 0)
+      {
+      // check if string is empty, use zero entries in contrast to determine nuissance variables
       nuiss.set_size(1, mat.cols());
       nuiss.fill(0);
-      for( int i = 0; i < con.cols(); i++)
-         if(con[0][i] == 0)
-           nuiss[0][i] = 1;
-    }
-   else{ // if the user specified the nuissance vector
-    try
-       {
-       nuiss = vnl_file_matrix<double>(p.fl_nuissance.c_str());
-       }
-    catch(...)
-       {
-       throw MCException("Error reading nuissance vector from %s", p.fl_nuissance.c_str());
-       }
+      for(unsigned int i = 0; i < con.cols(); i++)
+        if(con[0][i] == 0)
+          nuiss[0][i] = 1;
+      }
+    else
+      {
+      // if the user specified the nuissance vector
+      read_matrix(p.fl_nuissance, "nuissance vector", nuiss);
 
       if(nuiss.columns() != mat.columns())
-       throw MCException("Matrix and nuissance vector must have same number of columns");
+        throw MCException("Matrix and nuissance vector must have same number of columns");
 
       if(nuiss.rows() != 1)
-       throw MCException("Nuissance vector must have one row");
-   }
+        throw MCException("Nuissance vector must have one row");
+      }
 
-      // Create a design matrix containing only the nuissance variables
-      nuiss_mat.set_size(mat.rows(), nuiss.array_one_norm());
-      int p = 0;
-      for( int i=0, p = 0; i < nuiss.cols(); i++){
-	 if(nuiss[0][i] == 1)
-		nuiss_mat.set_column(p++, mat.get_column(i));
-       }	
-      // Create a contarst matrix of the same size for consistency (not used in computation)
-      nuiss_con.set_size(1, nuiss.array_one_norm());
-      nuiss_con.fill(1);
-  }	
+    // Create a design matrix containing only the nuissance variables
+    nuiss_mat.set_size(mat.rows(), nuiss.array_one_norm());
+    for(unsigned int i = 0, p = 0; i < nuiss.cols(); i++)
+      {
+      if(nuiss[0][i] == 1)
+        nuiss_mat.set_column(p++, mat.get_column(i));
+      }
+
+    // Create a contarst matrix of the same size for consistency (not used in computation)
+    nuiss_con.set_size(1, nuiss.array_one_norm());
+    nuiss_con.fill(1);
+    }
 
   // Read the meshes and initialize statistics arrays
   typedef vtkSmartPointer<TMeshType> MeshPointer;
@@ -1867,12 +1892,12 @@ int meshcluster(Parameters &p, bool isPolyData)
     // Get the data array from the mesh and error check
     vtkDataArray * data = GetArrayFromMesh(mesh[i], p.dom, p.array_name);
     if(!data)
-      throw MCException("Array %s is missing in mesh %s", 
-        p.array_name.c_str(), p.fn_mesh_input[i].c_str());
-    if(data->GetNumberOfComponents() != n_rows_before_cleanup)
+      throw MCException("Array %s is missing in mesh %s",
+                        p.array_name.c_str(), p.fn_mesh_input[i].c_str());
+    if(data->GetNumberOfComponents() != (int) n_rows_before_cleanup)
       throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
-        data->GetNumberOfComponents(), p.array_name.c_str(), 
-        p.fn_mesh_input[i].c_str(), mat.rows()); 
+                        data->GetNumberOfComponents(), p.array_name.c_str(),
+                        p.fn_mesh_input[i].c_str(), mat.rows());
 
     // Check if there is an exclusion array
     if(p.exclusion_array_name.length())
@@ -1880,17 +1905,17 @@ int meshcluster(Parameters &p, bool isPolyData)
       vtkDataArray *excl = GetArrayFromMesh(mesh[i], p.dom, p.exclusion_array_name);
       if(!excl)
         throw MCException("Array %s is missing in mesh %s",
-          p.exclusion_array_name.c_str(), p.fn_mesh_input[i].c_str());
+                          p.exclusion_array_name.c_str(), p.fn_mesh_input[i].c_str());
 
-      if(excl->GetNumberOfComponents() != n_rows_before_cleanup)
+      if(excl->GetNumberOfComponents() != (int) n_rows_before_cleanup)
         throw MCException("Wrong number of components (%d) in array %s in mesh %s. Should be %d.",
-          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
-          p.fn_mesh_input[i].c_str(), mat.rows());
+                          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
+                          p.fn_mesh_input[i].c_str(), mat.rows());
 
       if(data->GetNumberOfTuples() != excl->GetNumberOfTuples())
         throw MCException("Wrong number of tuples (%d) in array %s in mesh %s. Should be %d.",
-          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
-          p.fn_mesh_input[i].c_str(), data->GetNumberOfTuples());
+                          data->GetNumberOfComponents(), p.exclusion_array_name.c_str(),
+                          p.fn_mesh_input[i].c_str(), data->GetNumberOfTuples());
 
       unsigned int n_excl = 0;
       for(unsigned int j = 0; j < data->GetNumberOfTuples(); j++)
@@ -1938,18 +1963,18 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * dfarray = AddArrayToMesh(mesh[i], p.dom, an_dfarray, 1, 0, false);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
-    vtkFloatArray * residual {0} ;	
+    vtkFloatArray * residual {0} ;
     vtkFloatArray * beta_nuiss {0};
 
     // Create new GLM
     glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, residual, dfarray, mat, con));
 
     if(p.flag_freedman_lane)
-	 residual = AddArrayToMesh(mesh[i], p.dom, an_res, mat.rows(), NAN, false);
-	 beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);	
-   glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, dfarray, nuiss_mat, nuiss_con));
+      residual = AddArrayToMesh(mesh[i], p.dom, an_res, mat.rows(), NAN, false);
+    beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);
+    glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, dfarray, nuiss_mat, nuiss_con));
     }
-    
+
   // If the threshold is on the p-value, convert it to a threshold on T-statistic
   if(p.ttype == PVALUE)
     {
@@ -1971,28 +1996,28 @@ int meshcluster(Parameters &p, bool isPolyData)
     if(p.threshold > 0)
       {
       for(size_t i = 0; i < mesh.size(); i++)
-        clustcomp.push_back(new ClusterComputer(mesh[i], p.dom, p.threshold)); 
+        clustcomp.push_back(new ClusterComputer(mesh[i], p.dom, p.threshold));
       }
     }
- // For Freedman-Lane procedure, need to perform GLM with the reduced model containing only nuissance variables
-   if(p.flag_freedman_lane){
+  // For Freedman-Lane procedure, need to perform GLM with the reduced model containing only nuissance variables
+  if(p.flag_freedman_lane){
 
-	 for(size_t i = 0; i < mesh.size(); i++)
- 	{
-	  if(p.flag_missing_data)
-   	     glm_reduced[i]->ComputeWithMissingData(glm_reduced[i]->Y,true, false, true );  
-	  else
-	     glm_reduced[i]->Compute(glm_reduced[i]->Y,true, false, true);
-	}
-   }
+    for(size_t i = 0; i < mesh.size(); i++)
+      {
+      if(p.flag_missing_data)
+        glm_reduced[i]->ComputeWithMissingData(glm_reduced[i]->Y,true, false, true );
+      else
+        glm_reduced[i]->Compute(glm_reduced[i]->Y,true, false, true);
+      }
+    }
 
   // Run permutation analysis
   vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
-   
+
   for(size_t ip = 0; ip < p.np; ip++)
     {
 
-   // Initialize the histogram at zero
+    // Initialize the histogram at zero
     hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
 
     // Apply a random permutation to the labels array and update P matrix
@@ -2001,52 +2026,52 @@ int meshcluster(Parameters &p, bool isPolyData)
     // Build up the histogram of cluster areas (and powers)
     for(size_t i = 0; i < mesh.size(); i++)
       {
-         vnl_matrix <double> Ytrue = glm[i]->Y;
-	 vnl_matrix<double> Yperm = Ytrue;
+      vnl_matrix <double> Ytrue = glm[i]->Y;
+      vnl_matrix<double> Yperm = Ytrue;
 
-	// Shuffle the data according to the current permutation
-	
-	if(p.flag_freedman_lane) // Permute Y using nuissance model
-	{
-	 // Read residual array from mesh
-	  vtkDataArray * res = GetArrayFromMesh(mesh[i], p.dom, an_res);
-	  vtkDataArray * beta_n = GetArrayFromMesh(mesh[i], p.dom, an_betan);
-	  vnl_matrix <double> res_mat;
-	  res_mat.set_size(Ytrue.rows(), Ytrue.cols());
+      // Shuffle the data according to the current permutation
 
-	// Shuffle the residuals according to the current permutation
-	  for(size_t i = 0; i < res_mat.rows(); i++)
-    	     for(int j = 0; j < res_mat.cols(); j++)
-      	        res_mat(i,j) = res->GetComponent(j,i);
+      if(p.flag_freedman_lane) // Permute Y using nuissance model
+        {
+        // Read residual array from mesh
+        vtkDataArray * res = GetArrayFromMesh(mesh[i], p.dom, an_res);
+        vtkDataArray * beta_n = GetArrayFromMesh(mesh[i], p.dom, an_betan);
+        vnl_matrix <double> res_mat;
+        res_mat.set_size(Ytrue.rows(), Ytrue.cols());
 
-	  vnl_matrix <double> res_matperm = res_mat;
-	  
-	for (size_t i = 0; i < permutation.size(); i++)
-            res_matperm.set_row(i,res_mat.get_row(permutation[i]));
-	
-	// Read the nuissance model beta values from the mesh
-  	  vnl_matrix <double> beta_nuiss;
-	  beta_nuiss.set_size(nuiss_mat.cols(), Ytrue.cols());
-	  for(size_t i = 0; i < beta_nuiss.rows(); i++)
-             for(int j = 0; j < beta_nuiss.cols(); j++)
-                beta_nuiss(i,j) = beta_n->GetComponent(j,i);
+        // Shuffle the residuals according to the current permutation
+        for(size_t i = 0; i < res_mat.rows(); i++)
+          for(int j = 0; j < res_mat.cols(); j++)
+            res_mat(i,j) = res->GetComponent(j,i);
 
-	// Compute the permuted values 
-	  
-	Yperm = res_matperm + nuiss_mat*beta_nuiss; 
-	}
-	else
-	{
-         for (size_t i = 0; i < permutation.size(); i++)
-            Yperm.set_row(i,Ytrue.get_row(permutation[i]));
-	}
-	
-	if(p.flag_missing_data){
-            glm[i]->ComputeWithMissingData(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+        vnl_matrix <double> res_matperm = res_mat;
+
+        for (size_t i = 0; i < permutation.size(); i++)
+          res_matperm.set_row(i,res_mat.get_row(permutation[i]));
+
+        // Read the nuissance model beta values from the mesh
+        vnl_matrix <double> beta_nuiss;
+        beta_nuiss.set_size(nuiss_mat.cols(), Ytrue.cols());
+        for(size_t i = 0; i < beta_nuiss.rows(); i++)
+          for(int j = 0; j < beta_nuiss.cols(); j++)
+            beta_nuiss(i,j) = beta_n->GetComponent(j,i);
+
+        // Compute the permuted values
+
+        Yperm = res_matperm + nuiss_mat*beta_nuiss;
         }
-	else{
-            glm[i]->Compute(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
-       	}
+      else
+        {
+        for (size_t i = 0; i < permutation.size(); i++)
+          Yperm.set_row(i,Ytrue.get_row(permutation[i]));
+        }
+
+      if(p.flag_missing_data){
+        glm[i]->ComputeWithMissingData(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+        }
+      else{
+        glm[i]->Compute(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+        }
 
       // Generate a list of clusters (based on current scalars)
       if(p.threshold > 0)
@@ -2068,9 +2093,9 @@ int meshcluster(Parameters &p, bool isPolyData)
 
     // Some fancy formatting
     cout << "." << flush;
-    if((ip+1) % 100 == 0 || (ip+1) == p.np) 
+    if((ip+1) % 100 == 0 || (ip+1) == p.np)
       cout << " " << ip+1 << endl;
- } // end of permutation loop
+    } // end of permutation loop
 
   // Sort the histograms
   sort(hArea.begin(), hArea.end());
@@ -2086,7 +2111,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     if(p.flag_missing_data)
       glm[i]->ComputeWithMissingData(glm[i]->Y, true, true, false);
     else
-     glm[i]->Compute(glm[i]->Y, true, true, false);
+      glm[i]->Compute(glm[i]->Y, true, true, false);
 
     // The rest is done only if permutations > 0
     if(p.np > 0)
@@ -2112,8 +2137,8 @@ int meshcluster(Parameters &p, bool isPolyData)
             ca[c].pPower = 1.0 - zPower * 1.0 / p.np;
             bool sig = (ca[c].pArea <= 0.05 || ca[c].pPower <= 0.05);
             printf("Cluster %03d:  AvgT = %6f; Area = %6f (p = %6f);  Power = %6f (p = %6f); %s\n",
-              (int) c, ca[c].tvalue/ca[c].n, ca[c].area, ca[c].pArea, ca[c].power, ca[c].pPower, 
-              sig ? "***" : "");
+                   (int) c, ca[c].tvalue/ca[c].n, ca[c].area, ca[c].pArea, ca[c].power, ca[c].pPower,
+                   sig ? "***" : "");
             }
 
           // Create output mesh arrays for p-values
@@ -2178,7 +2203,7 @@ int meshcluster(Parameters &p, bool isPolyData)
             WriteMesh<TMeshType>(emesh, fnedge.c_str(), p.flag_write_binary);
             }
           }
-        else 
+        else
           {
           // No clusters found
           mout = mesh[i];
@@ -2207,11 +2232,11 @@ int meshcluster(Parameters &p, bool isPolyData)
       mout = mesh[i];
       }
 
-    // Save the output mesh 
+    // Save the output mesh
     cout << "Saving output mesh.." << endl;
     WriteMesh<TMeshType>(mout, p.fn_mesh_output[i].c_str(), p.flag_write_binary);
     }
-    return EXIT_SUCCESS;
+  return EXIT_SUCCESS;
 
 }
 
