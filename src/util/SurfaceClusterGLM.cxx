@@ -1731,8 +1731,7 @@ vtkSmartPointer<vtkPolyData> triangulate(vtkPolyData *mesh)
   return result;
 }
 
-vnl_matrix<double> read_matrix(
-    const std::string &fn, const std::string &desc, vnl_matrix<double> &mat)
+void read_matrix(const std::string &fn, const std::string &desc, vnl_matrix<double> &mat)
 {
   try
   {
@@ -1744,8 +1743,7 @@ vnl_matrix<double> read_matrix(
   }
 }
 
-vnl_matrix<double> read_vector(
-    const std::string &fn, const std::string &desc, vnl_vector<double> &vec)
+void read_vector(const std::string &fn, const std::string &desc, vnl_vector<double> &vec)
 {
   try
   {
@@ -1772,7 +1770,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   else
     row_mask = vnl_vector<double>(mat.rows(), 1.0);
 
-  if(p.row_mask.size() != mat.rows())
+  if(row_mask.size() != mat.rows())
     throw MCException("Row mask size does not match design matrix dimensions");
 
   // Check the design matrix for missing values. Currently, we simply throw out the
