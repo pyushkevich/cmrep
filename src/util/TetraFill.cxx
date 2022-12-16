@@ -73,11 +73,15 @@ void ScanTetrahedron(
   ImageType::IndexType idx;
   idx[0] = (long) ceil(xmin); idx[1] = (long) ceil(ymin); idx[2] = (long) ceil(zmin);
   ImageType::SizeType sz;
-  sz[0] = (unsigned long) ( ceil(xmax) - ceil(xmin) );
-  sz[1] = (unsigned long) ( ceil(ymax) - ceil(ymin) );
-  sz[2] = (unsigned long) ( ceil(zmax) - ceil(zmin) );
+  sz[0] = (unsigned long) ( ceil(xmax) - floor(xmin) );
+  sz[1] = (unsigned long) ( ceil(ymax) - floor(ymin) );
+  sz[2] = (unsigned long) ( ceil(zmax) - floor(zmin) );
   ImageType::RegionType rgn(idx, sz);
-  rgn.Crop(img->GetBufferedRegion());
+
+  // Crop the tetrahedron region by the image region, if this returns false then
+  // there is no overlap at all between them
+  if(!rgn.Crop(img->GetBufferedRegion()))
+    return;
 
   // Iterate over the region
   itk::ImageRegionIteratorWithIndex<ImageType> it(img, rgn);
