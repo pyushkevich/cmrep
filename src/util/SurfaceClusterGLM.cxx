@@ -2275,6 +2275,10 @@ int main(int argc, char *argv[])
         p.glm_design = argv[++i];
         p.glm_contrast = argv[++i];
         }
+      else if(arg == "-R")
+        {
+        p.row_mask = argv[++i];
+        }
       else if(arg == "-f" || arg == "--flane")
         {
         p.flag_freedman_lane = true;
