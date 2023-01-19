@@ -94,7 +94,9 @@ vtkSmartPointer<vtkUnstructuredGrid> ThresholdMesh(
   vtkSmartPointer<vtkThreshold> thresh = vtkThreshold::New();
   thresh->SetInputData(mesh);
   thresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, arrname);
-  thresh->ThresholdBetween(trim_min, trim_max);
+  thresh->SetLowerThreshold(trim_min);
+  thresh->SetUpperThreshold(trim_max);
+  thresh->SetThresholdFunction(vtkThreshold::THRESHOLD_BETWEEN);
   vtkSmartPointer<vtkUnstructuredGrid> result = thresh->GetOutput();
 
   if(trim_comp)
@@ -115,7 +117,9 @@ vtkSmartPointer<vtkPolyData> ThresholdMesh(
   vtkSmartPointer<vtkThreshold> thresh = vtkThreshold::New();
   thresh->SetInputData(mesh);
   thresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, arrname);
-  thresh->ThresholdBetween(trim_min, trim_max);
+  thresh->SetLowerThreshold(trim_min);
+  thresh->SetUpperThreshold(trim_max);
+  thresh->SetThresholdFunction(vtkThreshold::THRESHOLD_BETWEEN);
   thresh->Update();
   vtkSmartPointer<vtkUnstructuredGrid> grid = thresh->GetOutput();
   std::cout << "After thresholding " 

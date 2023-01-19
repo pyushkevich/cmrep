@@ -43,6 +43,8 @@
 #include <exception>
 #include <string>
 #include <cstdarg>
+#include <thread>
+#include <mutex>
 
 extern "C" {
   double tnc ( double t, double df, double delta, int *ifault );
@@ -138,7 +140,8 @@ const char *usage_text =
   "  -R rowmask.txt Row mask. The file should contain as many numbers as there are rows in\n"
   "                 the design matrix, with 1 meaning the subject should be included in the \n"
   "                 analysis, 0 meaning excluded. This makes it easier to run analysis on \n"
-  "                 different subsets of subjects without generating separate input meshes \n";
+  "                 different subsets of subjects without generating separate input meshes \n"
+  "  --threads <n>  Set the number of threads used in parallel\n";
 
 int usage()
 {
@@ -662,15 +665,17 @@ ClusterComputer
     fThresh->SetInputData(mesh);
     fThresh->SetInputArrayToProcess(0, 0, 0, 
       vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-    fThresh->ThresholdByUpper(thresh);
+    fThresh->SetUpperThreshold(thresh);
+    fThresh->SetThresholdFunction(vtkThreshold::THRESHOLD_UPPER);
     fConnect->SetInputConnection(fThresh->GetOutputPort());
 
     fThreshInv = vtkThreshold::New();
     fThreshInv->SetInputData(mesh);
     fThreshInv->SetInputArrayToProcess(0, 0, 0, 
       vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-    fThreshInv->ThresholdByLower(thresh - 1.e-6);
-    } 
+    fThreshInv->SetLowerThreshold(thresh);
+    fThreshInv->SetThresholdFunction(vtkThreshold::THRESHOLD_LOWER);
+    }
 
   // Initialize the output object
   mout = vtkUnstructuredGrid::New();
@@ -907,7 +912,8 @@ ClusterArray ComputeClusters(
     // Threshold the cell data field
     fThresh->SetInputData(mesh);
     fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-    fThresh->ThresholdByUpper(thresh);
+    fThresh->SetUpperThreshold(thresh);
+    fThresh->SetThresholdFunction(vtkThreshold::THRESHOLD_UPPER);
     fThresh->Update();
     fin = fThresh->GetOutput();
     } 
@@ -1015,7 +1021,8 @@ ClusterArray ComputeClusters(
       // Threshold the cell data field
       fThreshInv->SetInputData(mesh);
       fThreshInv->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-      fThreshInv->ThresholdByLower(thresh - 1.e-6);
+      fThreshInv->SetLowerThreshold(thresh - 1.e-6);
+      fThreshInv->SetThresholdFunction(vtkThreshold::THRESHOLD_LOWER);
       fThreshInv->Update();
       vtkUnstructuredGrid *cut = fThreshInv->GetOutput();
       fThreshInv->Delete();
@@ -1064,7 +1071,8 @@ ClusterArray ComputeClusters(
      // Threshold the cell data field
      fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
      fThresh->SetInputData(mesh);
-     fThresh->ThresholdByUpper(thresh);
+     fThresh->SetUpperThreshold(thresh);
+     fThresh->SetThresholdFunction(vtkThreshold::THRESHOLD_UPPER);
      fThresh->Update();
      f = fThresh->GetOutput();
   }
@@ -1174,10 +1182,13 @@ class GeneralLinearModel
 {
 public:
   GeneralLinearModel(
-    vtkDataArray *data, vtkDataArray *contrast, 
-    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta, vtkDataArray *residual, vtkDataArray *dfarray,
-    const vnl_matrix<double> &design_matrix, 
+    vtkFloatArray *data, vtkFloatArray *contrast,
+    vtkFloatArray *tstat, vtkFloatArray *pval, vtkFloatArray *beta, vtkFloatArray *residual, vtkFloatArray *dfarray,
+    const vnl_matrix<double> &design_matrix,
     const vnl_matrix<double> &contrast_vector);
+
+  // Make a deep copy of another GLM
+  GeneralLinearModel(const GeneralLinearModel *src);
 
   void Compute(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res);
   void ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res);
@@ -1186,8 +1197,11 @@ public:
   vnl_matrix<double> Y; // data matrix for permutations
 
 private:
+  void CommonInit();
+  vtkSmartPointer<vtkFloatArray> DeepCopyArray(vtkFloatArray *src);
+
   // Pointers to the data arrays
-  vtkDataArray *data, *contrast, *tstat, *pval, *beta, *residual, *dfarray;
+  vtkSmartPointer<vtkFloatArray> data, contrast, tstat, pval, beta, residual, dfarray;
 
   // Copies of the matrix, other data
   vnl_matrix<double> X,cv;
@@ -1195,9 +1209,9 @@ private:
 };
 
 GeneralLinearModel::GeneralLinearModel(
-    vtkDataArray *data, vtkDataArray *contrast, 
-    vtkDataArray *tstat, vtkDataArray *pval, vtkDataArray *beta,
-    vtkDataArray *residual, vtkDataArray *dfarray,
+    vtkFloatArray *data, vtkFloatArray *contrast,
+    vtkFloatArray *tstat, vtkFloatArray *pval, vtkFloatArray *beta,
+    vtkFloatArray *residual, vtkFloatArray *dfarray,
     const vnl_matrix<double> &design_matrix, 
     const vnl_matrix<double> &contrast_vector)
 {
@@ -1211,25 +1225,40 @@ GeneralLinearModel::GeneralLinearModel(
   this->cv = contrast_vector;
   this->residual = residual;
   this->dfarray = dfarray;
+  this->CommonInit();
+  }
 
-  // Initialize other stuff
-  nelt = data->GetNumberOfTuples();
+GeneralLinearModel::GeneralLinearModel(const GeneralLinearModel *src)
+{
+  // Copy input
+  this->data = DeepCopyArray(src->data);
+  this->contrast = DeepCopyArray(src->contrast);
+  this->tstat = DeepCopyArray(src->tstat);
+  this->pval = DeepCopyArray(src->pval);
+  this->beta = DeepCopyArray(src->beta);
+  this->residual = DeepCopyArray(src->residual);
+  this->dfarray = DeepCopyArray(src->dfarray);
+  this->X = src->X;
+  this->cv = src->cv;
+  this->CommonInit();
+}
 
-  // Rank and degrees of freedom
-  rank = vnl_rank(X.transpose() * X, vnl_rank_row);
-  df = X.rows() - rank;
- 
-  // Y matrix
-  Y.set_size(X.rows(), nelt);
-  for(size_t i = 0; i < X.rows(); i++)
-    for(int j = 0; j < nelt; j++)
-      Y(i,j) = data->GetComponent(j,i); 
-  
+vtkSmartPointer<vtkFloatArray>
+GeneralLinearModel
+::DeepCopyArray(vtkFloatArray *src)
+{
+  if(src)
+    {
+    vtkNew<vtkFloatArray> copy;
+    copy->DeepCopy(src);
+    return copy;
+    }
+  else return nullptr;
 }
 
 void
 GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res)
-{
+  {
 
   // Shuffle the rows according to current permutan_resr (size_t i = 0; i < permutation.size(); i++)
   //  for (size_t j = 0; j < X.cols(); j++)
@@ -1258,24 +1287,24 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
     vnl_matrix<double> resvar(1, nelt);
     resvar.fill(0.0);
     for(int j = 0; j < nelt; j++)
-       {
-       for(size_t i = 0; i < X.rows(); i++)
-          resvar(0, j) += errmat(i,j) * errmat(i,j);
-       if(j==0){
-	 std::cout << "res_mag" << resvar(0,j) << std::endl;
-	std::cout << "df" << df << std::endl;
-	}
-       resvar(0, j) = resvar(0, j) / (double) df;
-       }
+      {
+      for(size_t i = 0; i < X.rows(); i++)
+        resvar(0, j) += errmat(i,j) * errmat(i,j);
+      if(j==0){
+        std::cout << "res_mag" << resvar(0,j) << std::endl;
+        std::cout << "df" << df << std::endl;
+        }
+      resvar(0, j) = resvar(0, j) / (double) df;
+      }
 
     //if we need the residual, copy to the output vector
     if(need_res)
-    {	
-      for (int j = 0; j< nelt; j++)
       {
-      residual->SetTuple(j, errmat.get_column(j).data_block());
+      for (int j = 0; j< nelt; j++)
+        {
+        residual->SetTuple(j, errmat.get_column(j).data_block());
+        }
       }
-    }
 
     // Compute t-stat / p-value
     vnl_matrix<double> den(1, nelt);
@@ -1288,12 +1317,12 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
       if(need_p)
         {
         int dummy;
-        pval->SetTuple1(j, 1.0 - tnc(t, df, 0.0, &dummy)); 
+        pval->SetTuple1(j, 1.0 - tnc(t, df, 0.0, &dummy));
         }
       }
     }
 
-}
+  }
 
 void
 GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res)
@@ -1466,6 +1495,22 @@ GeneralLinearModel::PtoT(double p)
       break;
     }
   return t;
+  }
+
+void GeneralLinearModel::CommonInit()
+{
+  // Initialize other stuff
+  nelt = data->GetNumberOfTuples();
+
+  // Rank and degrees of freedom
+  rank = vnl_rank(X.transpose() * X, vnl_rank_row);
+  df = X.rows() - rank;
+
+  // Y matrix
+  Y.set_size(X.rows(), nelt);
+  for(size_t i = 0; i < X.rows(); i++)
+    for(int j = 0; j < nelt; j++)
+      Y(i,j) = data->GetComponent(j,i);
 }
 
 /*
@@ -1597,10 +1642,14 @@ struct Parameters
   // What is the threshold on
   ThresholdType ttype;
 
+  // Max threads
+  int max_threads;
+
   Parameters()
     {
     np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
     flag_missing_data = false; flag_write_binary = false; flag_freedman_lane = false; flag_triangulate = false;
+    max_threads = 0;
     }
 };
 
@@ -1811,10 +1860,9 @@ int meshcluster(Parameters &p, bool isPolyData)
     throw MCException("Contrast vector must have one row");
 
   // Create the shuffle arrays
-  vector<int> true_order, permutation;
+  vector<int> true_order;
   for(size_t i = 0; i < mat.rows(); i++)
     true_order.push_back(i);
-  permutation = true_order;
 
   // If the threshold is negative, throw up
   if(p.threshold < 0)
@@ -1888,7 +1936,7 @@ int meshcluster(Parameters &p, bool isPolyData)
       }
 
     // Get the data array from the mesh and error check
-    vtkDataArray * data = GetArrayFromMesh(mesh[i], p.dom, p.array_name);
+    vtkFloatArray *data = vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(mesh[i], p.dom, p.array_name));
     if(!data)
       throw MCException("Array %s is missing in mesh %s",
                         p.array_name.c_str(), p.fn_mesh_input[i].c_str());
@@ -1967,10 +2015,13 @@ int meshcluster(Parameters &p, bool isPolyData)
     // Create new GLM
     glm.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta, residual, dfarray, mat, con));
 
+    // For FL, create a reduced GLM
     if(p.flag_freedman_lane)
+      {
       residual = AddArrayToMesh(mesh[i], p.dom, an_res, mat.rows(), NAN, false);
-    beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);
-    glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, dfarray, nuiss_mat, nuiss_con));
+      beta_nuiss = AddArrayToMesh(mesh[i], p.dom, an_betan, nuiss_mat.cols(), 0, false);
+      glm_reduced.push_back(new GeneralLinearModel(data, contrast, tstat, pval, beta_nuiss, residual, dfarray, nuiss_mat, nuiss_con));
+      }
     }
 
   // If the threshold is on the p-value, convert it to a threshold on T-statistic
@@ -1985,18 +2036,6 @@ int meshcluster(Parameters &p, bool isPolyData)
       }
     }
 
-  // Create an array of cluster computers
-  vector<ClusterComputer *> clustcomp;
-
-  if(p.np > 0)
-    {
-    printf("Executing GLM on %d random permutations\n", (int) p.np);
-    if(p.threshold > 0)
-      {
-      for(size_t i = 0; i < mesh.size(); i++)
-        clustcomp.push_back(new ClusterComputer(mesh[i], p.dom, p.threshold));
-      }
-    }
   // For Freedman-Lane procedure, need to perform GLM with the reduced model containing only nuissance variables
   if(p.flag_freedman_lane){
 
@@ -2012,93 +2051,163 @@ int meshcluster(Parameters &p, bool isPolyData)
   // Run permutation analysis
   vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
 
-  for(size_t ip = 0; ip < p.np; ip++)
+  // Perform permutation test
+  if(p.np > 0)
     {
+    // Parallelize over threads
+    int nthreads = std::thread::hardware_concurrency();
+    if(p.max_threads > 0)
+      nthreads = std::min(nthreads, p.max_threads);
 
-    // Initialize the histogram at zero
-    hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
+    std::vector<std::thread> threads;
+    printf("Executing GLM on %d random permutations using %d threads\n", (int) p.np, (int) nthreads);
 
-    // Apply a random permutation to the labels array and update P matrix
-    random_shuffle(permutation.begin(), permutation.end());
-    
-    // Build up the histogram of cluster areas (and powers)
-    for(size_t i = 0; i < mesh.size(); i++)
+    // Mutex for printing dots
+    std::mutex critical;
+    int n_done = 0;
+
+    // For each thread, give it a set of permutations to run
+    for(int it = 0; it < nthreads; it++)
       {
-      vnl_matrix <double> Ytrue = glm[i]->Y;
-      vnl_matrix<double> Yperm = Ytrue;
-
-      // Shuffle the data according to the current permutation
-
-      if(p.flag_freedman_lane) // Permute Y using nuissance model
+      int ip_start = ceil(p.np / nthreads) * it;
+      int ip_end = std::min((int) p.np, (int) ceil(p.np / nthreads) * (it + 1));
+      threads.push_back(std::thread(std::bind([&](const int ip_start, const int ip_end)
         {
-        // Read residual array from mesh
-        vtkDataArray * res = GetArrayFromMesh(mesh[i], p.dom, an_res);
-        vtkDataArray * beta_n = GetArrayFromMesh(mesh[i], p.dom, an_betan);
-        vnl_matrix <double> res_mat;
-        res_mat.set_size(Ytrue.rows(), Ytrue.cols());
+        // Create thread's copy of permutations
+        vector<int> permutation = true_order;
 
-        // Shuffle the residuals according to the current permutation
-        for(size_t i = 0; i < res_mat.rows(); i++)
-          for(int j = 0; j < res_mat.cols(); j++)
-            res_mat(i,j) = res->GetComponent(j,i);
-
-        vnl_matrix <double> res_matperm = res_mat;
-
-        for (size_t i = 0; i < permutation.size(); i++)
-          res_matperm.set_row(i,res_mat.get_row(permutation[i]));
-
-        // Read the nuissance model beta values from the mesh
-        vnl_matrix <double> beta_nuiss;
-        beta_nuiss.set_size(nuiss_mat.cols(), Ytrue.cols());
-        for(size_t i = 0; i < beta_nuiss.rows(); i++)
-          for(int j = 0; j < beta_nuiss.cols(); j++)
-            beta_nuiss(i,j) = beta_n->GetComponent(j,i);
-
-        // Compute the permuted values
-
-        Yperm = res_matperm + nuiss_mat*beta_nuiss;
-        }
-      else
-        {
-        for (size_t i = 0; i < permutation.size(); i++)
-          Yperm.set_row(i,Ytrue.get_row(permutation[i]));
-        }
-
-      if(p.flag_missing_data){
-        glm[i]->ComputeWithMissingData(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
-        }
-      else{
-        glm[i]->Compute(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
-        }
-
-      // Generate a list of clusters (based on current scalars)
-      if(p.threshold > 0)
-        {
-        ClusterArray ca = clustcomp[i]->ComputeClusters(false);
-
-        // Now find the largest cluster
-        for(size_t c = 0; c < ca.size(); c++)
+        // We need to create a copy of the meshes for this thread because the GLM
+        // class updates arrays in the mesh
+        vector<MeshPointer> mesh_t;
+        vector<GeneralLinearModel *> glm_t;
+        vector<ClusterComputer *> clustcomp_t;
+        for(auto &m : mesh)
           {
-          if(ca[c].area > hArea[ip]) hArea[ip] = ca[c].area;
-          if(ca[c].power > hPower[ip]) hPower[ip] = ca[c].power;
+          // Create a copy of the mesh
+          vtkNew<TMeshType> m_copy;
+          m_copy->DeepCopy(m);
+          mesh_t.push_back(m_copy);
+
+          // Create a copy of the GLM
+          glm_t.push_back(new GeneralLinearModel(
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, p.array_name)),
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_contrast)),
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_tstat)),
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_pval)),
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_beta)),
+                            nullptr,
+                            vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_dfarray)),
+                            mat, con));
+
+          clustcomp_t.push_back(new ClusterComputer(m_copy, p.dom, p.threshold));
           }
-        }
 
-      // Likewise, find the largest scalar
-      vtkDataArray *stat = GetScalarsFromMesh(mesh[i], p.dom);
-      hStat[ip] = stat->GetMaxNorm();
+        // Perform permutations for this thread
+        for(unsigned int ip = ip_start; ip < ip_end; ip++)
+          {
+          // Shuffle the permutation
+          random_shuffle(permutation.begin(), permutation.end());
+
+          // Initialize the histogram at zero
+          hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
+
+          // Build up the histogram of cluster areas (and powers)
+          for(size_t i = 0; i < mesh_t.size(); i++)
+            {
+            vnl_matrix <double> Ytrue = glm_t[i]->Y;
+            vnl_matrix<double> Yperm = Ytrue;
+
+            if(p.flag_freedman_lane) // Permute Y using nuissance model
+              {
+              // Read residual array from mesh
+              vtkDataArray * res = GetArrayFromMesh(mesh_t[i], p.dom, an_res);
+              vtkDataArray * beta_n = GetArrayFromMesh(mesh_t[i], p.dom, an_betan);
+              vnl_matrix <double> res_mat;
+              res_mat.set_size(Ytrue.rows(), Ytrue.cols());
+
+              // Shuffle the residuals according to the current permutation
+              for(size_t i = 0; i < res_mat.rows(); i++)
+                for(int j = 0; j < res_mat.cols(); j++)
+                  res_mat(i,j) = res->GetComponent(j,i);
+
+              vnl_matrix <double> res_matperm = res_mat;
+              for (size_t i = 0; i < permutation.size(); i++)
+                res_matperm.set_row(i,res_mat.get_row(permutation[i]));
+
+              // Read the nuissance model beta values from the mesh
+              vnl_matrix <double> beta_nuiss;
+              beta_nuiss.set_size(nuiss_mat.cols(), Ytrue.cols());
+              for(size_t i = 0; i < beta_nuiss.rows(); i++)
+                for(int j = 0; j < beta_nuiss.cols(); j++)
+                  beta_nuiss(i,j) = beta_n->GetComponent(j,i);
+
+              // Compute the permuted values
+              Yperm = res_matperm + nuiss_mat * beta_nuiss;
+              }
+            else
+              {
+              for (size_t i = 0; i < permutation.size(); i++)
+                Yperm.set_row(i,Ytrue.get_row(permutation[i]));
+              }
+
+            if(p.flag_missing_data)
+              glm_t[i]->ComputeWithMissingData(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+            else
+              glm_t[i]->Compute(Yperm, p.ttype != CONTRAST, p.ttype == PVALUE, false);
+
+            // Generate a list of clusters (based on current scalars)
+            if(p.threshold > 0)
+              {
+              ClusterArray ca = clustcomp_t[i]->ComputeClusters(false);
+
+              // Now find the largest cluster
+              for(size_t c = 0; c < ca.size(); c++)
+                {
+                if(ca[c].area > hArea[ip]) hArea[ip] = ca[c].area;
+                if(ca[c].power > hPower[ip]) hPower[ip] = ca[c].power;
+                }
+              }
+
+            // Likewise, find the largest scalar
+            vtkDataArray *stat = GetScalarsFromMesh(mesh_t[i], p.dom);
+            hStat[ip] = stat->GetMaxNorm();
+            }
+
+          std::lock_guard<std::mutex> guard(critical);
+          n_done++;
+          cout << "." << flush;
+          if(n_done % 100 == 0 || n_done == p.np)
+            cout << " " << n_done << endl;
+          }
+        }, ip_start, ip_end))); // End of in-thread permutation loop
+      } // Threads have been created
+
+    // Run the threads
+    std::for_each(threads.begin(),threads.end(),[](std::thread& x){x.join();});
+
+    // Sort the histograms
+    sort(hArea.begin(), hArea.end());
+    sort(hPower.begin(), hPower.end());
+    sort(hStat.begin(), hStat.end());
+
+    } // End permutation conditional
+
+
+  /*
+  // Create an array of cluster computers
+  vector<ClusterComputer *> clustcomp;
+
+  if(p.np > 0)
+    {
+    printf("Executing GLM on %d random permutations\n", (int) p.np);
+    if(p.threshold > 0)
+      {
+      for(size_t i = 0; i < mesh.size(); i++)
+        clustcomp.push_back(new ClusterComputer(mesh[i], p.dom, p.threshold));
       }
+    }
+    */
 
-    // Some fancy formatting
-    cout << "." << flush;
-    if((ip+1) % 100 == 0 || (ip+1) == p.np)
-      cout << " " << ip+1 << endl;
-    } // end of permutation loop
-
-  // Sort the histograms
-  sort(hArea.begin(), hArea.end());
-  sort(hPower.begin(), hPower.end());
-  sort(hStat.begin(), hStat.end());
 
   // Going back to the original meshes, assign a cluster p-value to each mesh
   for(size_t i = 0; i < mesh.size(); i++)
@@ -2117,12 +2226,13 @@ int meshcluster(Parameters &p, bool isPolyData)
       if(p.threshold > 0)
         {
         // Generate true clusters (with full output)
-        ClusterArray ca = clustcomp[i]->ComputeClusters(true);
+        ClusterComputer clustcomp(mesh[i], p.dom, p.threshold);
+        ClusterArray ca = clustcomp.ComputeClusters(true);
         printf("MESH %s HAS %d CLUSTERS \n", p.fn_mesh_input[i].c_str(), (int) ca.size());
 
         if(ca.size() > 0)
           {
-          ConvertToMeshType<TMeshType>(clustcomp[i]->GetFullMesh(), mout);
+          ConvertToMeshType<TMeshType>(clustcomp.GetFullMesh(), mout);
 
           // Assign a p-value to each cluster
           for(size_t c = 0; c < ca.size(); c++)
@@ -2333,8 +2443,13 @@ int main(int argc, char *argv[])
         else
           throw MCException("Unknown parameter to --stat command (%s)", stat.c_str());
         }
+      else if(arg == "--threads")
+        {
+        p.max_threads = atof(argv[++i]);
+        }
       else throw MCException("Unknown command line switch %s", arg.c_str());
       }
+
 
     // Try reading the first mesh
     if (p.fn_mesh_input.size() == 0)
