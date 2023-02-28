@@ -12,6 +12,8 @@
 #include "ITKImageWrapper.h"
 #include "MedialModelIO.h"
 #include "IpIpoptApplication.hpp"
+#include "IpLinearSolvers.h"
+#include "IpIpoptAlg.hpp"
 #include "MedialAtomGrid.h"
 #include "VTKMeshBuilder.h"
 #include "vtkPolyDataWriter.h"
@@ -2251,12 +2253,12 @@ enum ProgramAction {
 int usage()
 {
   const char *usage =
-      "bcmrep - Boundary-constrained medial representation utility\n"
+      "bcmrep_main - Boundary-constrained medial representation utility\n"
       "usage:\n"
-      "  bcmrep [options]\n"
+      "  bcmrep_main [options]\n"
       "options that select an action (use one):\n"
-      "  -icp template.vtk target.vtk   : fit template mesh to target mesh\n"
-      "  -lsq template.vtk target.vtk   : least squares fit to target mesh\n"
+      "  -icp template.vtk target.vtk   : fit template to target with iterative closest point loss\n"
+      "  -lsq template.vtk target.vtk   : fit template to target least squares loss (matching vertices)\n"
       "  -sub template.vtk factor       : subdivide template by a factor\n"
       "  -cmr input.cmrep               : import a cm-rep template\n"
       "  -cfx input.cmrep               : fix a cm-rep template with bad triangles\n"
@@ -2276,7 +2278,7 @@ int usage()
       "  -reg-el W                      : penalize the length of the crest\n"
       "                                           curve with weight specified\n"
       "  -max-iter N                    : maximum iterations for IpOpt (200)\n"
-      "  -icp-iter N                    : Number of ICP iterations (200)\n"
+      "  -icp-iter N                    : Number of ICP iterations (5)\n"
       "triangle shape constraints:\n"
       "  -bc alpha beta min_area        : Set boundary triangle constraints \n"
       "                                     alpha:    minimum triangle angle (def: 12)\n"
@@ -2288,7 +2290,8 @@ int usage()
       "  -sub-edge                      : only subdivide trianges on free edges and branches\n"
       "  -sub-flat                      : flat (as opposed to Loop) subdivision\n"
       "IPOpt options:\n"
-      "  -solver NAME                   : select which solver to use (see IPOpt options. Def: ma86)\n"
+      "  -hsllib <path>                 : path to the HSL dynamic library to load at runtime\n"
+      "  -solver NAME                   : select which solver to use (see Coin-Or HSL docs. Def: ma86)\n"
       "  -no-hess                       : Turn off analytical hessian (does not work well)\n";
   std::cout << usage;
   return -1;
@@ -2301,7 +2304,7 @@ struct RegularizationOptions
   int SubdivisionLevel, BasisSize;
   double Weight;
   RegularizationMode Mode;
-  std::string Solver;
+  std::string Solver, HSLDylibPath;
   bool UseHessian;
 
   double EdgeLengthWeight;
@@ -2491,6 +2494,10 @@ int main(int argc, char *argv[])
       {
       regOpts.MaxICPIter = atoi(argv[++p]);
       }
+    else if(cmd == "-hsllib")
+      {
+      regOpts.HSLDylibPath = argv[++p];
+      }
     else if(cmd == "-solver")
       {
       regOpts.Solver = argv[++p];
@@ -2548,8 +2555,10 @@ int main(int argc, char *argv[])
     }
   
   // Get the parts of the output filename
-  std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutput);
-  std::string fnOutDir = itksys::SystemTools::GetParentDirectory(fnOutput);
+  std::string fnOutputFull = itksys::SystemTools::CollapseFullPath(fnOutput);
+  std::string fnOutBase = itksys::SystemTools::GetFilenameWithoutLastExtension(fnOutputFull);
+  std::string fnOutDir = itksys::SystemTools::GetParentDirectory(fnOutputFull);
+  std::cout << "Output base: " << fnOutDir << "/" << fnOutBase << std::endl;
 
   // Load the template
   BCMTemplate tmpl;
@@ -3975,6 +3984,9 @@ int main(int argc, char *argv[])
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
   app->Options()->SetStringValue("linear_solver", regOpts.Solver);
+  if(regOpts.HSLDylibPath.size())
+    app->Options()->SetStringValue("hsllib", regOpts.HSLDylibPath);
+
   // app->Options()->SetNumericValue("mu_init", 1e-3);
   // app->Options()->SetNumericValue("mu_target", 1e-5);
   // app->Options()->SetStringValue("mu_strategy", "adaptive");
@@ -3995,6 +4007,9 @@ int main(int argc, char *argv[])
     printf("\n\n*** Error during initialization!\n");
     return (int) status;
     }
+
+  // Print a message describing IpOpt
+  app->PrintCopyrightMessage();
 
   // Combine the regularization objectives
   WeightedSumGenerator wsgObj(p);
@@ -4018,6 +4033,11 @@ int main(int argc, char *argv[])
 
   // Ask Ipopt to solve the problem
   status = app->OptimizeTNLP(GetRawPtr(ip));
+  if(status < 0)
+    {
+    printf("\n\n*** Error %d during optimization!\n", (int) status);
+    return -1;
+    }
 
   // Evaluate the objective
   ocfit.PrintReport();
@@ -4071,6 +4091,11 @@ int main(int argc, char *argv[])
 
       // Ask Ipopt to solve the problem
       status = app->OptimizeTNLP(GetRawPtr(ip));
+      if(status < 0)
+        {
+        printf("\n\n*** Error %d during optimization!\n", (int) status);
+        return -1;
+        }
 
       // Evaluate the objective
       ocicp.PrintReport();
