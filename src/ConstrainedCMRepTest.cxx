@@ -38,6 +38,8 @@
 #include "ConstrainedCMRepObjectives.h"
 #include "itksys/SystemTools.hxx"
 
+#include "QCQPProblem.h"
+
 /**
   ---------
   TODO LIST
@@ -877,6 +879,154 @@ void ComputeTriangleAndEdgeProperties(
       }
     }
 }
+
+struct TriangleProperties
+{
+  qcqp::Variable<2> &triangle_normals;
+  qcqp::Variable<1> &triangle_areas;
+};
+
+TriangleProperties
+ComputeTriangleProperties(
+    qcqp::Problem &p, TriangleMesh *mesh, qcqp::Variable<2> &X,
+    const std::string &name_prefix, double minArea)
+{
+  // Number of triangles
+  int nt = mesh->triangles.size();
+
+  // Array names
+  std::string nm_nt = name_prefix + "NT", nm_at = name_prefix + "AT";
+  std::string nm_con_ntna = name_prefix + "NTNA", nm_con_ntnt = name_prefix + "NTNT";
+
+  // Create the triangle properties
+  qcqp::Variable<2> &tri_normals = p.AddVariable<2>(nm_nt.c_str(), {nt, 3});
+  qcqp::Variable<1> &tri_areas = p.AddVariable<1>(nm_nt.c_str(), {nt}, minArea);
+
+  // Iterate over all the triangles in this mesh
+  for(int it = 0; it < nt; it++)
+    {
+    // Here is a triangle
+    Triangle &t = mesh->triangles[it];
+    int v0 = t.vertices[0], v1 = t.vertices[1], v2 = t.vertices[2];
+
+    // First compute the actual normal and actual area
+    SMLVec3d Xu = X({v1}).as_vector<3>() - X({v0}).as_vector<3>();
+    SMLVec3d Xv = X({v2}).as_vector<3>() - X({v0}).as_vector<3>();
+    SMLVec3d Xu_cross_Xv = vnl_cross_3d(Xu, Xv);
+    double v_area = Xu_cross_Xv.magnitude();
+    SMLVec3d v_normal = Xu_cross_Xv / v_area;
+    v_area *= 0.5;
+
+    // Assign the variables initial values
+    tri_normals({it}).from_vector(v_normal);
+    tri_areas({it}) = v_area;
+
+    // Constraint that ties the area and the cross-product of the edges.
+    //   (a x b) + (b x c) + (c x a) = 2 * A * N
+    // where a,b,c are the triangle vertices
+    for(int j = 0; j < 3; j++)
+      {
+      auto &con_an = p.AddConstraint(nm_con_ntna.c_str(), 0.0, 0.0);
+
+      // For each pair of vertices, we want to add the j-th component of their
+      // cross product
+      int j1 = (j + 1) % 3, j2 = (j + 2) % 3;
+      con_an.A(X({v0,j1}), X({v1,j2})) =  1.0;
+      con_an.A(X({v0,j2}), X({v1,j1})) = -1.0;
+      con_an.A(X({v1,j1}), X({v2,j2})) =  1.0;
+      con_an.A(X({v1,j2}), X({v2,j1})) = -1.0;
+      con_an.A(X({v2,j1}), X({v0,j2})) =  1.0;
+      con_an.A(X({v2,j2}), X({v0,j1})) = -1.0;
+
+      // Place 2 * A * N in the right hand side
+      con_an.A(tri_normals({it,j}), tri_areas({it})) = -2.0;
+      }
+
+    // Constraint that makes the normal have unit length
+    auto &con_nn = p.AddConstraint(nm_con_ntnt.c_str(), 1.0, 1.0);
+    for(int j = 0; j < 3; j++)
+      con_nn.A(tri_normals({it,j}), tri_normals({it,j})) = 1.0;
+    }
+
+  return { tri_normals, tri_areas };
+}
+
+struct EdgeProperties
+{
+  // Edge length variables
+  qcqp::Variable<1> &edge_lengths;
+
+  // Maps each edge to the corresponding triangle/vertex pair
+  std::vector< std::tuple<int, int> > edge_triangle_index;
+};
+
+EdgeProperties
+ComputeEdgeProperties(
+    qcqp::Problem &p,
+    TriangleMesh *mesh,
+    qcqp::Variable<2> &X,
+    const std::string &name_prefix,
+    double min_edge_length = 0.0)
+{
+  // Number of triangles
+  int nt = mesh->triangles.size();
+
+  // Array names
+  std::string nm_el = name_prefix + "EL", nm_con_el = name_prefix + "EL";
+
+  // First pass is to compute all edges and mark unique edges
+  int n_edges = 0;
+  vnl_matrix<int> tri_edges(nt, 3, -1);
+  std::vector< std::tuple<int, int> > edge_tri_idx;
+  for(int it = 0; it < nt; it++)
+    {
+    Triangle &t = mesh->triangles[it];
+    for(int d = 0; d < 3; d++)
+      {
+      if(tri_edges(it, d) < 0)
+        {
+        tri_edges(it, d) = n_edges;
+        if(t.neighbors[d] != NOID)
+          tri_edges(t.neighbors[d],t.nedges[d]) = n_edges;
+        n_edges++;
+        edge_tri_idx.push_back({it, d});
+        }
+      }
+    }
+
+  // Create the edge lengths variable
+  qcqp::Variable<1> &edge_lengths = p.AddVariable<1>(nm_el.c_str(), {n_edges}, 0.0);
+
+  // Now we can compute the edge lengths and set constraints
+  for(int ie = 0; ie < n_edges; ie++)
+    {
+    int it = std::get<0>(edge_tri_idx[ie]);
+    int d = std::get<1>(edge_tri_idx[ie]);
+
+    // The opposite vertices
+    Triangle &t = mesh->triangles[it];
+    int v1 = t.vertices[(d + 1) % 3], v2 = t.vertices[(d + 2) % 3];
+
+    // Compute the edge length and assign as initial value
+    double e_len_sq = (X({v1}).as_vector<3>() - X({v2}).as_vector<3>()).squared_magnitude();
+    edge_lengths({ie}) = e_len_sq;
+
+    // Create a constraint: square of the edge length is equal to the squared
+    // distance between the points, el * el = sum_j (v2[j] - v1[j])^2
+    auto &con_el = p.AddConstraint(nm_con_el.c_str(), 0.0, 0.0);
+    con_el.A(edge_lengths({ie}), edge_lengths({ie})) = -1.0;
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      con_el.A(X({v1,j}), X({v1,j})) = 1.0;
+      con_el.A(X({v2,j}), X({v2,j})) = 1.0;
+      con_el.A(X({v1,j}), X({v2,j})) = -2.0;
+      }
+    }
+
+  return { edge_lengths, edge_tri_idx };
+}
+
+
 
 #include "BruteForceSubdivisionMedialModel.h"
 
@@ -2644,17 +2794,24 @@ int main(int argc, char *argv[])
   // Create the optimization problem
   ConstrainedNonLinearProblem *p = new ConstrainedNonLinearProblem();
 
+  // Create the fast QCQP problem builder
+  qcqp::Problem qp;
+
   // The boundary positions
   VarVecArray X(nb, VarVec(3, NULL));
+  qcqp::Variable<2> &qX = qp.AddVariable<2>("X", {nb, 3});
 
   // The medial positions
   VarVecArray M(nm, VarVec(3, NULL));
+  qcqp::Variable<2> &qM = qp.AddVariable<2>("M", {nm, 3});
 
   // The radius values
   VarVec R(nm, NULL);
+  qcqp::Variable<1> &qR = qp.AddVariable<1>("R", {nm}, 0.);
 
   // The boundary normal vectors
   VarVecArray N(nb, VarVec(3, NULL));
+  qcqp::Variable<2> &qN = qp.AddVariable<2>("N", {nb, 3});
 
   // The vectors U from the medial axis to the boundary. They are the same
   // as -R*N. They appear in multiple places though, so we should store them
@@ -2682,6 +2839,9 @@ int main(int argc, char *argv[])
       {
       sprintf(buffer, "X[%d,%d]", i, j);
       X[i][j] = p->AddVariable(buffer, x[j]);
+
+      // NEW WAY
+      qX({i,j}) = x[j];
       }
     }
 
@@ -2696,6 +2856,8 @@ int main(int argc, char *argv[])
   // Expressions describing Xu, Xv, Nu, Nv at each point on the boundary
   VarVecArray Xd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
   VarVecArray Nd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
+
+  //
 
   // Expression for the first fundamental and the shape operator
   VarVec curv_mean(nb, NULL);
@@ -2985,6 +3147,241 @@ int main(int argc, char *argv[])
       }
     }
 
+  // ------------------------------------------------------------------------
+  // QCQP Configuration: boundary normals and curvature computations
+  // ------------------------------------------------------------------------
+
+  // A list of all the boundary vertices that are crest points
+  std::vector<int> crestVertices;
+
+  // Index into the crest array for each boundary vertex
+  std::vector<int> btcIndex(nb);
+
+  // Compute crest indices
+  for(int i = 0; i < nb; i++)
+    {
+    if(mtbIndex[mIndex[i]].size() > 1)
+      {
+      btcIndex[i] = crestVertices.size();
+      crestVertices.push_back(i);
+      }
+    else
+      {
+      btcIndex[i] = -1;
+      }
+    }
+
+  int nCrest = crestVertices.size();
+
+  // Create the variables that are stored at the crest
+  qcqp::Variable<3> &qFF1 = qp.AddVariable<3>("FF1", {nCrest, 2, 2});
+  qcqp::Variable<3> &qSO = qp.AddVariable<3>("SO", {nCrest, 2, 2});
+  qcqp::Variable<1> &qKappa1 = qp.AddVariable<1>("Kappa1", {nCrest});
+
+  for(int i = 0; i < nb; i++)
+    {
+    // Medial atom index
+    int iAtom = mIndex[i];
+
+    // Walk around the vertex neighbors
+    EdgeWalkAroundVertex walk(bmesh, i);
+
+    // Collect the weights for this vertex for the u and v derivatives
+    struct NeighborWeight { int index; double weight[2]; };
+    std::vector<NeighborWeight> neighbor_weights;
+
+    // Take our own weight
+    neighbor_weights.push_back({ i, { lts.GetOwnWeight(0, i), lts.GetOwnWeight(1, i) } });
+
+    // Take neighbor weights
+    for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
+      {
+      int i_nbr = (int) walk.MovingVertexId();
+      neighbor_weights.push_back(
+            { i_nbr, { lts.GetNeighborWeight(0, walk), lts.GetNeighborWeight(1, walk) } });
+      }
+
+    // Compute the partial derivatives of X with respect to u/v and the
+    // constraints of the normal vector
+    vnl_vector_fixed<double, 3> q_Xdi[2];
+    for(int d = 0; d < 2; d++)
+      {
+      // Constraint that dot(N, Xd) == 0
+      auto &con_norm_xd = qp.AddConstraint("N.Xu", 0.0, 0.0);
+
+      for(auto w : neighbor_weights)
+        {
+        // Add to Xu/Xv
+        q_Xdi[d] += w.weight[d] * qX({w.index}).as_vector<3u>();
+
+        // Set coefficient for the constraint
+        for(unsigned int j = 0; j < 3; j++)
+          con_norm_xd.A(qN({w.index,j}), qX({w.index,j})) = w.weight[d];
+        }
+      }
+
+    // Assign the initial value for the normal
+    vnl_vector_fixed<double, 3> q_v_n = vnl_cross_3d(q_Xdi[0], q_Xdi[1]).normalize();
+    qN({i}).from_vector(q_v_n);
+
+    // Constraint that dot(N, N) == 1
+    auto &con_norm_len = qp.AddConstraint("N.N", 1.0, 1.0);
+    for(unsigned int j = 0; j < 3; j++)
+      con_norm_len.A(qN({i,j}), qN({i,j})) = 1.0;
+
+    // Now setup the medial constraints, X - r * N - M = 0
+    for(int j = 0; j < 3; j++)
+      {
+      auto &con_medial = qp.AddConstraint("XRNM", 0.0, 0.0);
+      con_medial.b(qX({i,j})) = 1.0;
+      con_medial.b(qM({iAtom,j})) = 1.0;
+      con_medial.A(qN({i,j}), qR({iAtom})) = -1.0;
+      }
+
+    // The rest of the constraints are in the single-tangency case
+    int i_crest = btcIndex[i];
+    if(i_crest >= 0)
+      {
+      // Compute the partial derivatives of N with respect to u/v and the
+      // constraints of the first fundamental form
+      vnl_vector_fixed<double, 3> q_Ndi[2];
+      vnl_matrix_fixed<double, 2, 2> m_FF1, m_FF2, m_SO;
+      for(int d = 0; d < 2; d++)
+        {
+        for(auto w : neighbor_weights)
+          {
+          // Add to Nu/Nv
+          q_Ndi[d] += w.weight[d] * qN({w.index}).as_vector<3u>();
+          }
+
+        // Set up first fundamental form constraints
+        for(int r = 0; r < 2; r++)
+          {
+          // Set the value of the first fundamental form
+          qFF1({i_crest, d, r}) = m_FF1(d,r) = dot_product(q_Xdi[d], q_Xdi[r]);
+
+          // Constraint that FF1[d][r] == dot(Xd[d], Xd[r])
+          auto &con_ff1_dr = qp.AddConstraint("FF1", 0.0, 0.0);
+          con_ff1_dr.b(qFF1({i_crest, d, r})) = -1;
+
+          for(auto w1 : neighbor_weights)
+            for(auto w2 : neighbor_weights)
+              for(unsigned int j = 0; j < 3; j++)
+                con_ff1_dr.A(qX({w1.index, j}), qX({w2.index, j})) = w1.weight[d] * w2.weight[r];
+          }
+        }
+
+      // Compute the second fundamental form and shape operator
+      for(int d = 0; d < 2; d++)
+        for(int r = 0; r < 2; r++)
+          m_FF2[d][r] = dot_product(q_Xdi[d], q_Ndi[r]);
+
+      // Numerically solve for the shape operator
+      m_SO = - vnl_inverse(m_FF1) * m_FF2;
+
+      // Set up the constraints for the shape operator
+      for(int d = 0; d < 2; d++)
+        {
+        for(int r = 0; r < 2; r++)
+          {
+          // Set the initial value for the shape operator variable
+          qSO({i_crest, d, r}) = m_SO(d,r);
+
+          // Create the constraint on the shape operator, that FF1 * SO = SFF
+          auto &con_so_dr = qp.AddConstraint("SO", 0.0, 0.0);
+
+          // The left hand side of the constraint is (FF1 * SO)[d,r], which is to say
+          // FF1[d][0] * SO[0][r] + FF1[d][1] * SO[1][r]
+          con_so_dr.A(qFF1({i_crest, d, 0}), qSO({i_crest, 0, r})) = 1.0;
+          con_so_dr.A(qFF1({i_crest, d, 1}), qSO({i_crest, 1, r})) = 1.0;
+
+          // The right hand side is the second fundamental form, i.e., dot product of
+          // the derivative of X and derivative of N
+          for(auto w1 : neighbor_weights)
+            for(auto w2 : neighbor_weights)
+              for(unsigned int j = 0; j < 3; j++)
+                con_so_dr.A(qX({w1.index, j}), qN({w2.index, j})) = w1.weight[d] * w2.weight[r];
+          }
+        }
+
+      // Numerically solve for the principal curvature k1
+      double mH = vnl_trace(m_SO) / 2;
+      double mK = vnl_det(m_SO);
+      double mk1 = mH - sqrt(mH*mH - mK);
+
+      // Assign the initial value for the principal curvature
+      qKappa1({i_crest}) = mk1;
+
+      // The equality constraint on kappa1 is to ensure it is an eigenvalue, i.e,
+      // det(SO-k1*I) = 0. Written out, this has the form
+      // SO[0][0] * SO[1][1] - SO[0][1] * SO[1][0] - k1 * SO[0][0] - k1 * SO[1][1] + k1^2 = 0
+      auto &con_kappa1 = qp.AddConstraint("Kappa1_ev", 0.0, 0.0);
+      con_kappa1.A(qSO({i_crest,0,0}), qSO({i_crest,1,1})) = 1.0;
+      con_kappa1.A(qSO({i_crest,0,1}), qSO({i_crest,1,0})) = -1.0;
+      con_kappa1.A(qSO({i_crest,0,0}), qKappa1({i_crest})) = -1.0;
+      con_kappa1.A(qSO({i_crest,1,1}), qKappa1({i_crest})) = -1.0;
+      con_kappa1.A(qKappa1({i_crest}), qKappa1({i_crest})) = 1.0;
+
+      // The inequality constraint on kappa1 is to ensure it is less than the mean curvature
+      // (trace of SO/2), i.e., k1 - 0.5 (S[0][0]+S[1][1]) < 0
+      auto &con_kappa1_ineq = qp.AddConstraint("Kappa1_ineq", qcqp::LBINF, 0.0);
+      con_kappa1_ineq.b(qKappa1({i_crest})) = 1.0;
+      con_kappa1_ineq.b(qSO({i_crest,0,0})) = -0.5;
+      con_kappa1_ineq.b(qSO({i_crest,1,1})) = -0.5;
+
+      // Set the value of the radius at this crest atom
+      qR({iAtom}) = -1.0 / mk1;
+
+      // Create constraint linking R and kappa1, R * kappa1 = -1
+      auto &con_R_kappa1 = qp.AddConstraint("R_Kappa1", -1.0, -1.0);
+      con_R_kappa1.A(qR({iAtom}), qKappa1({i_crest})) = 1.0;
+
+      // Set the value of the M variable based on the single R
+      vnl_vector_fixed<double, 3> v_m = qX({i}).as_vector<3>() - qN({i}).as_vector<3>() * (double) qR({iAtom});
+      qM({iAtom}).from_vector(v_m);
+      }
+    }
+
+  // Set initial values of M and R for the bitangent or greater medial atoms
+  for(int i = 0; i < nm; i++)
+    {
+    int k = mtbIndex[i].size();
+    if(k > 1)
+      {
+      // MULTIPLE TANGENCY CASE
+
+      // For atoms that are bi-tangent or greater, we find R and M that
+      // minimize the expression Sum_j ||Xj - r Nj - M)||^2, i.e, the radius
+      // such that the medial atoms computed for each boundary atom idependently
+      // are as close together as possible. The r is found as
+      // r = (Sum_{ij} (Xi-Xj)^t N_i) / (k^2 - Sum_{ij} Nj^t N_i)
+      double numerator = 0.0, denominator = k*k;
+      SMLVec3d sumX(0.0, 0.0, 0.0), sumN(0.0, 0.0, 0.0);
+      for(int q = 0; q < k; q++)
+        {
+        int iq = mtbIndex[i][q];
+        SMLVec3d Xq = qX({iq}).as_vector<3>(), Nq = qN({iq}).as_vector<3>();
+        for(int p = 0; p < k; p++)
+          {
+          int ip = mtbIndex[i][p];
+          SMLVec3d Xp = qX({ip}).as_vector<3>(), Np = qN({ip}).as_vector<3>();
+
+          numerator += dot_product(Xq - Xp, Nq);
+          denominator -= dot_product(Np, Nq);
+          }
+
+        sumX += Xq; sumN += Nq;
+        }
+
+      // Compute the best fit r and m
+      double v_r = numerator / denominator;
+      SMLVec3d v_m = (sumX - sumN * v_r) / ((double) k);
+
+      // Store those values
+      qR({i}) = v_r;
+      qM({i}).from_vector(v_m);
+      }
+    }
 
 
   // ------------------------------------------------------------------------
@@ -3170,6 +3567,90 @@ int main(int argc, char *argv[])
       }
     */
     }
+
+
+  // ------------------------------------------------------------------------
+  // Define the QCQP regularization objective (NEW)
+  // ------------------------------------------------------------------------
+  auto &q_loss_basis_residual = qp.AddLoss("BasisResidual", 1.0);
+
+  if(regOpts.Mode == RegularizationOptions::SUBDIVISION)
+    {
+    // Try to obtain a parent mesh
+    BCMTemplate tmplParent;
+    if(!ReverseEngineerSubdivisionMesh(tmpl, tmplParent, regOpts.SubdivisionLevel))
+      {
+      cerr << "Unable to deduce coarse-level mesh by reversing subdivision!" << endl;
+      return -1;
+      }
+
+    // Save the parent-level mesh
+    // tmplParent.Save("reverse_eng.vtk");
+
+    // TODO - do we want to regularize R as well???
+
+    // Create control points, i.e., vertices in the parent mesh
+    SubdivisionSurface::MeshLevel &pmesh = tmplParent.bmesh;
+    qcqp::Variable<2> qXC = qp.AddVariable<2>("XC", { (int) pmesh.nVertices, 3});
+
+    // Assign the control point initial values
+    for(int i = 0; i <  pmesh.nVertices; i++)
+      qXC({i}).from_vector(tmplParent.x[i]);
+
+    // Apply the weight matrix to compute the residual
+    ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
+
+    // Define the residual objective
+    for(int i = 0; i < nb; i++)
+      {
+      for(int j = 0; j < 3; j++)
+        {
+        // A linear expression for the distance between interpolated and actual vertices
+        qcqp::LinearExpression delta;
+        delta.b(qX({i,j})) = -1.0;
+
+        // Use the weighted matrix iterator
+        for(ImmutableSparseMatrix<double>::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
+          delta.b(qXC({(int) it.Column(),j})) += it.Value();
+
+        // Add the squared distance to the loss
+        q_loss_basis_residual.add_dotted(delta, delta);
+        }
+      }
+    }
+
+  if(regOpts.Mode == RegularizationOptions::SPECTRAL)
+    {
+    // Define a basis for the surface
+    MeshBasisCoefficientMapping basismap_X(bmesh, regOpts.BasisSize, 3);
+
+    // Define a basis for the medial axis
+    // TODO: to what extent is this a valid basis - we need to visualize!
+    // MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
+
+    // Create the coefficient variables
+    qcqp::Variable<2> qXC = qp.AddVariable<2>("XC", { (int) regOpts.BasisSize, 3});
+
+    // Define the objective on the basis
+    for(int iBnd = 0; iBnd < nb; iBnd++)
+      {
+      SMLVec3d Xfixed = xInput[iBnd];
+
+      for(int j = 0; j < 3; j++)
+        {
+        // Compute expression (X_init - X) - interpolate(XC)
+        qcqp::LinearExpression delta;
+        delta.c() = Xfixed[j];
+        delta.b(qX({iBnd,j})) = -1.0;
+        for(int i = 0; i < regOpts.BasisSize; i++)
+          delta.b(qXC({i,j})) += basismap_X.GetBasisComponent(i, iBnd);
+
+        // Add square of this expression to the loss
+        q_loss_basis_residual.add_dotted(delta, delta);
+        }
+      }
+    }
+
 
   // ------------------------------------------------------------------------
   // Create a total volume objective -
@@ -3983,6 +4464,7 @@ int main(int argc, char *argv[])
   // Note: The following choices are only examples, they might not be
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
+  app->Options()->SetBoolValue("print_timing_statistics", true);
   app->Options()->SetStringValue("linear_solver", regOpts.Solver);
   if(regOpts.HSLDylibPath.size())
     app->Options()->SetStringValue("hsllib", regOpts.HSLDylibPath);

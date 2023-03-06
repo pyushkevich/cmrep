@@ -392,7 +392,8 @@ IF(USE_IPOPT AND USE_TETGEN)
                  src/IPOptProblemInterface.cxx
                  src/ConstrainedCMRepObjectives.cxx
                  src/ConstrainedCMRepTest.cxx
-                 src/VTKMeshBuilder.cxx)
+                 src/VTKMeshBuilder.cxx
+                 src/QCQPProblem.h)
   TARGET_LINK_LIBRARIES(bcmrep_test cmrep ${CMREP_BCMREP_LIBS})
   TARGET_LINK_LIBRARIES(bcmrep_main cmrep ${CMREP_BCMREP_LIBS})
 
