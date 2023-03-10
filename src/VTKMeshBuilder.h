@@ -35,7 +35,7 @@ public:
     char buffer[256];
     va_list args;
     va_start (args, format);
-    vsprintf (buffer,format, args);
+    vsnprintf (buffer, 256, format, args);
     AddArrayInternal(arr, buffer);
     va_end (args);
   }

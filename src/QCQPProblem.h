@@ -6,6 +6,9 @@
 #include <map>
 #include <vnl_vector.h>
 #include <vnl_vector_fixed.h>
+#include <tuple>
+#include <unordered_set>
+#include "SparseMatrix.h"
 
 namespace qcqp {
 
@@ -43,27 +46,29 @@ struct Index<1u>
   Index(int in_first = 0) : first(in_first) {}
   int product() const { return first; }
   Index<1u> make_offset_table() const { return Index<1u>(1); }
-  int flatten(const Index<1> &offset_table) const { return first; }
+  int flatten(const Index<1> &) const { return first; }
 };
 
-Index<5> test(1,2,3,4,5);
-Index<5> test_ot = test.make_offset_table();
-int z = test.product();
-int y = test.flatten(test_ot);
-
-// Partial specification, same as test_partial(1,2,3,0,0)
-Index<5> test_partial(1,2,3);
-
-
-class VariableBase
+class VariableRefBase
 {
 public:
-  VariableBase(const std::string &name, double cmin, double cmax, int start_index)
-    : name(name), cmin(cmin), cmax(cmax), start_index(start_index) {}
+  VariableRefBase(const std::string &name, double cmin, double cmax,
+                  int start_index, int flat_size)
+    : name(name), cmin(cmin), cmax(cmax),
+      start_index(start_index), flat_size(flat_size) {}
 
+  VariableRefBase()
+    : cmin(LBINF), cmax(UBINF), start_index(-1), flat_size(0) {}
+
+  const char *GetName() const { return name.c_str(); }
+  int GetFlatSize() const { return flat_size; }
+  int GetStartIndex() const { return start_index; }
+
+  friend class ElementConstRef;
   friend class ElementRef;
   friend class QuadraticExpression;
   friend class LinearExpression;
+  friend class Problem;
 
 protected:
 
@@ -74,29 +79,43 @@ protected:
   double cmin, cmax;
 
   // Index of the variable in complete variable array
-  int start_index;
+  int start_index, flat_size;
 
-  // Data array
-  vnl_vector<double> data;
+  // Pointer to the data for this variable, managed by the problem
+  double *data = nullptr;
 };
 
 /**
  * A reference to a position in the variable - used to access data and also
  * to set elements in constraint matrices/vectors
  */
-class ElementRef
+class ElementConstRef
 {
 public:
-  ElementRef(VariableBase &v, int offset) : v(v), offset(offset) {}
+  ElementConstRef(VariableRefBase &v, int offset) : v(v), offset(offset) {}
 
   operator double() const { return v.data[offset]; }
-  ElementRef &operator = (double x) { v.data[offset] = x; return *this; }
 
   template <unsigned int N>
   vnl_vector_fixed<double, N> as_vector() const
     {
-    return vnl_vector_fixed<double, N>(v.data.data_block() + offset);
+    return vnl_vector_fixed<double, N>(v.data + offset);
     }
+
+  friend class QuadraticExpression;
+  friend class LinearExpression;
+
+protected:
+  VariableRefBase &v;
+  int offset;
+};
+
+class ElementRef : public ElementConstRef
+{
+public:
+  ElementRef(VariableRefBase &v, int offset) : ElementConstRef(v, offset) {}
+
+  ElementRef &operator = (double x) { v.data[offset] = x; return *this; }
 
   template <unsigned int N>
   ElementRef &from_vector(vnl_vector_fixed<double, N> &x)
@@ -108,39 +127,36 @@ public:
 
   friend class QuadraticExpression;
   friend class LinearExpression;
-
-protected:
-  VariableBase &v;
-  int offset;
 };
 
 /**
  * @brief Storage for an optimization variable, represented as a tensor of doubles
  */
 template <unsigned int VDim>
-struct Variable : public VariableBase
+struct VariableRef : public VariableRefBase
 {
 public:
 
   // Constructor
-  Variable(const std::string &name, const Index<VDim> &size, double cmin, double cmax, int start_index)
-    : VariableBase({name, cmin, cmax, start_index}), size(size), offset_table(size.make_offset_table())
+  VariableRef(const std::string &name, const Index<VDim> &size, double cmin, double cmax, int start_index)
+    : VariableRefBase({name, cmin, cmax, start_index, size.product()}), size(size), offset_table(size.make_offset_table())
     {
-    data.set_size(size.product());
     }
 
-  // Data access
-  ElementRef operator()(const Index<VDim> &idx)
+  VariableRef() {}
+
+  template<class... T>
+  ElementRef operator()(int in_first, T... in_rest)
     {
-    int offset = idx.flatten(offset_table);
+    int offset = Index<VDim>(in_first, in_rest...).flatten(offset_table);
     return ElementRef(*this, offset);
     }
 
-  // Data access
-  const ElementRef operator()(const Index<VDim> &idx) const
+  template<class... T>
+  ElementConstRef operator()(int in_first, T... in_rest) const
     {
-    int offset = idx.flatten(offset_table);
-    return ElementRef(*this, offset);
+    int offset = Index<VDim>(in_first, in_rest...).flatten(offset_table);
+    return ElementConstRef(*this, offset);
     }
 
 protected:
@@ -152,17 +168,24 @@ protected:
 };
 
 /**
+ * A wrapper around an atomic type that always initializes to zero
+ */
+template <class T>
+struct zero_init
+{
+  zero_init() : value(0) {}
+  zero_init(T v) : value(v) {}
+  operator T() const { return value; }
+  zero_init<T> &operator= (T v) { value = v; return *this; }
+
+  T value;
+};
+
+/**
  * Entry in the sparse matrices when constructing them, just a double
  * that takes default value 0
  */
-struct Weight
-{
-  Weight() : value(0.0) {}
-  Weight(double v) : value(v) {}
-  double value;
-  operator double() const { return value; }
-  Weight &operator= (double v) { value = v; return *this; }
-};
+using Weight = zero_init<double>;
 
 /**
  * A linear expression of the form b^t x + c. Can be used to build up
@@ -193,6 +216,9 @@ protected:
  * A quadratic expression of the form x^t A x + b^t x + c. It represents either a
  * constraint or an objective function term. It can be built up by adding weights
  * corresponding to variables in a problem
+ *
+ * The matrix A is triangular; regardless of the order in which variables
+ * are specified, they will be ordered to insert into the upper triangle (row <= column)
  */
 class QuadraticExpression
 {
@@ -203,13 +229,16 @@ public:
     {
     int pos1 = e1.v.start_index + e1.offset;
     int pos2 = e2.v.start_index + e2.offset;
-    return m_A[{pos1, pos2}].value;
+    if(pos1 <= pos2)
+      return m_Ab[pos1].m_b[pos2].value;
+    else
+      return m_Ab[pos2].m_b[pos1].value;
     }
 
   double &b(ElementRef e1)
     {
     int pos1 = e1.v.start_index + e1.offset;
-    return m_b[pos1].value;
+    return m_Ab[pos1].m_c;
     }
 
   double &c() { return m_c; }
@@ -217,27 +246,47 @@ public:
   void add_dotted(const LinearExpression &l1, const LinearExpression &l2)
     {
     // We need to compute the outer product of the two linear expressions
+    /*
+    for(auto i1 : l1.m_b)
+      {
+      auto &Ab_i = m_Ab[i1.first];
+      for(auto i2 : l2.m_b)
+        Ab_i.m_b[i2.first].value += i1.second * i2.second;
+
+      Ab_i.m_c += i1.second * l2.m_c;
+      }
+    for(auto i2 : l2.m_b)
+      {
+      m_Ab[i2.first].m_c += i2.second * l1.m_c;
+      }
+    m_c += l1.m_c * l2.m_c;
+    */
     for(auto i1 : l1.m_b)
       {
       for(auto i2 : l2.m_b)
         {
-        m_A[{i1.first, i2.first}].value += i1.second * i2.second;
+        int pos1 = std::min(i1.first, i2.first);
+        int pos2 = std::max(i1.first, i2.first);
+        m_Ab[pos1].m_b[pos2].value += i1.second * i2.second;
         }
-      m_b[i1.first].value += i1.second * l2.m_c;
+      m_Ab[i1.first].m_c += i1.second * l2.m_c;
       }
     for(auto i2 : l2.m_b)
       {
-      m_b[i2.first].value += i2.second * l1.m_c;
+      m_Ab[i2.first].m_c += i2.second * l1.m_c;
       }
     m_c += l1.m_c * l2.m_c;
     }
 
 protected:
 
-  using MatrixMap = std::map< std::tuple<int, int>, Weight>;
-  using VectorMap = std::map< int, Weight >;
-  MatrixMap m_A;
-  VectorMap m_b;
+  // For converting to sparse matrices, it is more efficient to
+  // index by row and column separately, rather than by a row/col
+  // index
+  using MatrixMap = std::map< int, LinearExpression >;
+  MatrixMap m_Ab;
+
+  // The only thing stored separately is the offset c
   double m_c = 0.0;
 };
 
@@ -250,6 +299,8 @@ class Constraint : public QuadraticExpression
 public:
   Constraint(const std::string &name, double lower, double upper)
     : name(name), lower_bound(lower), upper_bound(upper) {}
+
+  friend class Problem;
 
 protected:
 
@@ -271,6 +322,8 @@ public:
   Loss(const std::string &name, double weight)
     : name(name), weight(weight) {}
 
+  friend class Problem;
+
 protected:
 
   // Name of constraint
@@ -289,21 +342,36 @@ protected:
 class Problem
 {
 public:
+  // The Jacobian and the Hessian of Lagrangean are represented as sparse
+  // 2D arrays, where each entry is used to compute the expression w^t x + z
+  // or w^t lambda + z.
+  struct TensorRow
+  {
+    std::vector< std::tuple<size_t, double> > w;
+    double z;
+  };
 
+  using SparseTensor = ImmutableSparseArray<TensorRow>;
 
   /**
-   * Add a variable to the optimization. The variable is really just an index into the
+   * Add a variable tensor to the optimization. The variable is really just an index into the
    * array of optimization variables that can then be referenced by name conveniently.
    *
    * The method supports adding an array of indexed variables by setting the size value
    * to the array size.
    */
   template <unsigned int VDim>
-  Variable<VDim> &AddVariable(const char *id, Index<VDim> size, double cmin = LBINF, double cmax = UBINF)
+  VariableRef<VDim> AddVariableTensor(const char *id, Index<VDim> size, double cmin = LBINF, double cmax = UBINF)
     {
-    // Create the variable
-    Variable<VDim> *v = new Variable<VDim>({ std::string(id), size, cmin, cmax, (int) m_Size });
-    m_Size += size.product();
+    // Create the variable reference
+    VariableRef<VDim> *v = new VariableRef<VDim>({ std::string(id), size, cmin, cmax, (int) m_Size });
+
+    // Create the data for this variable and place in the variable ref
+    m_VariableData[v->name].set_size(v->flat_size);
+    v->data = m_VariableData[v->name].data_block();
+
+    // Update the total problem size
+    m_Size += v->flat_size;
 
     // Store the pointer
     m_Variables.push_back(v);
@@ -311,6 +379,12 @@ public:
     // Return a const reference to the variable
     return *v;
     }
+
+  /** Get the number of added variable tensors */
+  int GetNumberOfVariableTensors() const { return m_Variables.size(); }
+
+  /** Get the poinster to the i-th variable tensor */
+  const VariableRefBase *GetVariableTensor(int i) const { return m_Variables[i]; }
 
   /**
    * Add a constraint or set of similar constraints. Each constraint is associated with
@@ -333,10 +407,290 @@ public:
     return *l;
     }
 
+  /** Get number of registered variables */
+  unsigned int GetNumberOfVariables() const { return m_Size; }
+
+  /** Get number of registered constraints */
+  unsigned int GetNumberOfConstraints() const { return m_Constraints.size(); }
+
+  /** Get the sparse array used to compute the Jacobian */
+  SparseTensor &GetConstraintsJacobian() { return m_Jacobian; }
+
+  /** Get the sparse array used to compute the Jacobian */
+  SparseTensor &GetHessianOfLagrangean() { return m_Hessian; }
+
+  /** Get the bounds on variables */
+  void GetVariableBounds(int i_var, double &lb, double &ub)
+  {
+    lb = m_VariableLB[i_var];
+    ub = m_VariableUB[i_var];
+  }
+
+  /** Get the bounds on constraints */
+  void GetConstraintBounds(int i_con, double &lb, double &ub)
+  {
+    lb = m_Constraints[i_con]->lower_bound;
+    ub = m_Constraints[i_con]->upper_bound;
+  }
+
+  /** Get the initial value of a variable */
+  double GetVariableValue(int i)
+  {
+    return m_VariableValue[i];
+  }
+
+  /** Update the value of a variable */
+  void SetVariableValue(int i, double x)
+  {
+    m_VariableValue[i] = x;
+  }
+
+  /** Compute the objective function for given x */
+  template <typename T>
+  double EvaluateLoss(const T* x)
+  {
+    // Evaluating the function means computing the quadratic form xAx+bx+c
+    // for each of the loss terms. In the future we might want to create more
+    // efficient data structures for these constraints
+    double total_loss = 0;
+    for(auto *l : m_Losses)
+      {
+      double curr_loss = l->m_c;
+      for(auto it_row : l->m_Ab)
+        {
+        int i = it_row.first;
+        double z = it_row.second.m_c;
+        for(auto it_col : it_row.second.m_b)
+          {
+          int j = it_col.first;
+          z += it_col.second.value * x[j];
+          }
+        curr_loss += x[i] * z;
+        }
+      total_loss += curr_loss * l->weight;
+      }
+
+    return total_loss;
+  }
+
+  /** Compute the gradient of the objective function for given x */
+  template <typename T>
+  void EvaluateLossGradient(const T* x, T *grad_x)
+  {
+    // Initialize the gradient to zero
+    for(unsigned int i = 0; i < m_Size; i++)
+      grad_x[i] = 0.0;
+
+    // Evaluating the function means computing the quadratic form xAx+bx+c
+    // for each of the loss terms. In the future we might want to create more
+    // efficient data structures for these constraints
+    for(auto *l : m_Losses)
+      {
+      for(auto it_row : l->m_Ab)
+        {
+        int i = it_row.first;
+        double z = 0.5 * it_row.second.m_c;
+        for(auto it_col : it_row.second.m_b)
+          {
+          int j = it_col.first;
+          z += it_col.second.value * x[j];
+          }
+        grad_x[i] += 2.0 * z * l->weight;
+        }
+      }
+  }
+
+  /** Compute the individual constraints */
+  template <typename T>
+  double EvaluateConstraint(const T* x, int k)
+  {
+    // Evaluating the function means computing the quadratic form xAx+bx+c
+    // for each of the loss terms. In the future we might want to create more
+    // efficient data structures for these constraints
+    Constraint *c = m_Constraints[k];
+    double g = c->m_c;
+    for(auto it_row : c->m_Ab)
+      {
+      int i = it_row.first;
+      double z = it_row.second.m_c;
+      for(auto it_col : it_row.second.m_b)
+        {
+        int j = it_col.first;
+        z += it_col.second.value * x[j];
+        }
+      g += x[i] * z;
+      }
+
+    return g;
+  }
+
+  /** Get the name of the constraint */
+  std::string GetConstraintName(int k) const
+  {
+    return m_Constraints[k]->name;
+  }
+
+
+  /**
+   * Setup the problem
+   */
+  void SetupProblem()
+  {
+    // Compute the constraints Jacobian. Each constraint is in the form
+    // lb <= g(x) <= ub, where g(x) = sum_ij a_ij x_i x_i + sum_i b_i x_i + c
+    //
+    // so its derivative with respect to x_k is
+    //   sum_i a_ik x_i + sum_i a_ki x_i + b_k
+    //
+    // The Jacobian matrix is a matrix where every row corresponds
+    // to a constraint, and every column to a variable, i.e., columns are
+    // the z-values.
+
+    // Allocate the row array
+    size_t ncon = m_Constraints.size();
+    size_t *jac_row_arr = new size_t[ncon + 1];
+    jac_row_arr[0] = 0;
+
+    // The Jacobian for constraint g(x) wrt x_k is non-zero if k appears in the
+    // non-zero entries for g as either row or column
+
+    // For each row, count the number of nonzero entries in the Jacobian
+    for(size_t i = 0; i < ncon; i++)
+      jac_row_arr[i+1] = jac_row_arr[i] + m_Constraints[i]->m_Ab.size();
+
+    // Allocate storage for the entries
+    size_t *jac_col_arr = new size_t[jac_row_arr[ncon]];
+    TensorRow *jac_val = new TensorRow[jac_row_arr[ncon]];
+
+    // Second pass - allocate individual entries
+    for(size_t i = 0; i < ncon; i++)
+      {
+      // Reference to the constraint
+      auto &c = *m_Constraints[i];
+
+      // Record the indices of the non_zeros in the Jacobian matrix
+      int j = jac_row_arr[i];
+
+      // Iterate over the rows of the constraint matrix m_Ab
+      for(auto &it: c.m_Ab)
+        {
+        jac_col_arr[j] = it.first;
+        jac_val[j].w.reserve(it.second.m_b.size());
+        for(auto it2: it.second.m_b)
+          jac_val[j].w.push_back({it2.first, it2.second});
+        jac_val[j].z = it.second.m_c;
+        j++;
+        }
+      }
+
+    // Create the Jacobian matrix
+    m_Jacobian.SetArrays(ncon, m_Size, jac_row_arr, jac_col_arr, jac_val);
+
+    // Now compute the Hessian of the Lagrangian. This has the dimensions
+    // n x n where n is the number of variables, and when computing we need
+    // to iterate over the Lagrange multipliers. To form this matrix, we need
+    // to 'splat' each of the constraints' A matrices
+
+    // What we essentially have to do is to transpose the way in which the
+    // constraint information is stored so that it is row/col/constraint order
+    // as opposed to the constraint/row/col order. One way to do this is using
+    // maps of maps - might be slow but let's try
+    struct SrcEntry
+    {
+      double h_loss = 0.;             // Hessian of the losses
+      std::map<int, double> h_con;    // Constraint Hessians
+    };
+
+    std::vector< std::map<int, SrcEntry > > hol_src;
+
+    // No sparsity in the rows
+    hol_src.resize(m_Size);
+
+    // Iterate over the constraints
+    for(unsigned int k = 0; k < ncon; k++)
+      {
+      // Within the constraint, iterate over NNZ rows
+      for(auto &it_row: m_Constraints[k]->m_Ab)
+        {
+        auto &hol_src_row = hol_src[it_row.first];
+        for(auto &it_col: it_row.second.m_b)
+          hol_src_row[it_col.first].h_con[k] = it_col.second.value;
+        }
+      }
+
+    // We also need to add the losses to the hessian, we can add them
+    // using index -1
+    for(auto *l : m_Losses)
+      {
+      // Within the loss, iterate over NNZ rows
+      for(auto &it_row: l->m_Ab)
+        {
+        auto &hol_src_row = hol_src[it_row.first];
+        for(auto &it_col: it_row.second.m_b)
+          hol_src_row[it_col.first].h_loss += it_col.second.value * l->weight;
+        }
+      }
+
+    // Set the row index
+    size_t *hol_row_arr = new size_t[m_Size + 1];
+    hol_row_arr[0] = 0;
+    for(size_t i = 0; i < m_Size; i++)
+      hol_row_arr[i+1] = hol_row_arr[i] + hol_src[i].size();
+
+    // We can now allocate the HoL column index and data
+    size_t *hol_col_arr = new size_t[hol_row_arr[m_Size]];
+    TensorRow *hol_val = new TensorRow[hol_row_arr[m_Size]];
+
+    // Now set the values of the column arrays
+    for(size_t i = 0; i < m_Size; i++)
+      {
+      size_t j = hol_row_arr[i];
+      for(auto &it_row : hol_src[i])
+        {
+        hol_col_arr[j] = it_row.first;
+        hol_val[j].z = it_row.second.h_loss;
+        hol_val[j].w.reserve(it_row.second.h_con.size());
+        for(auto &it_w : it_row.second.h_con)
+          hol_val[j].w.push_back({it_w.first, it_w.second});
+        j++;
+        }
+      }
+
+    // Create the sparse matrix
+    m_Hessian.SetArrays(m_Size, m_Size, hol_row_arr, hol_col_arr, hol_val);
+
+    // Create the bounds arrays
+    m_VariableLB.set_size(m_Size);
+    m_VariableUB.set_size(m_Size);
+    m_VariableValue.set_size(m_Size);
+    for(auto *v : m_Variables)
+      {
+      for(int i = 0; i < v->flat_size; i++)
+        {
+        m_VariableLB[i + v->start_index] = v->cmin;
+        m_VariableUB[i + v->start_index] = v->cmax;
+        m_VariableValue[i + v->start_index] = m_VariableData[v->name][i];
+        }
+      }
+
+  }
+
+  /** Maps variable values from flat array back to the per-variable arrays */
+  void Finalize()
+  {
+    for(auto *v : m_Variables)
+      {
+      for(int i = 0; i < v->flat_size; i++)
+        {
+        m_VariableData[v->name][i] = m_VariableValue[i + v->start_index];
+        }
+      }
+  }
+
 protected:
 
   // Known variables
-  std::vector<VariableBase *> m_Variables;
+  std::vector<VariableRefBase *> m_Variables;
 
   // Known constraints
   std::vector<Constraint *> m_Constraints;
@@ -344,8 +698,18 @@ protected:
   // Known losses
   std::vector<Loss *> m_Losses;
 
+  // Variables, referenced by name
+  std::map<std::string, vnl_vector<double> > m_VariableData;
+
   // Total number of variables so far
   unsigned int m_Size = 0;
+
+  // Jacobian and Hessian computed for this problem
+  SparseTensor m_Jacobian, m_Hessian;
+
+  // Variable bounds - available after SetupProblem
+  vnl_vector<double> m_VariableLB, m_VariableUB, m_VariableValue;
+
 
 };
 

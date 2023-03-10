@@ -390,6 +390,7 @@ IF(USE_IPOPT AND USE_TETGEN)
   ADD_EXECUTABLE(bcmrep_main
                  src/GentleNLP.cxx
                  src/IPOptProblemInterface.cxx
+                 src/IPOptQCQPProblemInterface.cxx
                  src/ConstrainedCMRepObjectives.cxx
                  src/ConstrainedCMRepTest.cxx
                  src/VTKMeshBuilder.cxx
