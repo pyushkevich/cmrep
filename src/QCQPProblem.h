@@ -229,16 +229,29 @@ public:
     {
     int pos1 = e1.v.start_index + e1.offset;
     int pos2 = e2.v.start_index + e2.offset;
+    return A(pos1, pos2);
+    }
+
+  double &A(int pos1, int pos2)
+    {
+    m_Dependencies.insert(pos1);
+    m_Dependencies.insert(pos2);
     if(pos1 <= pos2)
-      return m_Ab[pos1].m_b[pos2].value;
+      return m_Aij[{pos1, pos2}];
     else
-      return m_Ab[pos2].m_b[pos1].value;
+      return m_Aij[{pos2, pos1}];
     }
 
   double &b(ElementRef e1)
     {
     int pos1 = e1.v.start_index + e1.offset;
-    return m_Ab[pos1].m_c;
+    return b(pos1);
+    }
+
+  double &b(int pos1)
+    {
+    m_Dependencies.insert(pos1);
+    return m_bi[pos1];
     }
 
   double &c() { return m_c; }
@@ -246,39 +259,73 @@ public:
   void add_dotted(const LinearExpression &l1, const LinearExpression &l2)
     {
     // We need to compute the outer product of the two linear expressions
-    /*
-    for(auto i1 : l1.m_b)
-      {
-      auto &Ab_i = m_Ab[i1.first];
-      for(auto i2 : l2.m_b)
-        Ab_i.m_b[i2.first].value += i1.second * i2.second;
-
-      Ab_i.m_c += i1.second * l2.m_c;
-      }
-    for(auto i2 : l2.m_b)
-      {
-      m_Ab[i2.first].m_c += i2.second * l1.m_c;
-      }
-    m_c += l1.m_c * l2.m_c;
-    */
     for(auto i1 : l1.m_b)
       {
       for(auto i2 : l2.m_b)
         {
         int pos1 = std::min(i1.first, i2.first);
         int pos2 = std::max(i1.first, i2.first);
-        m_Ab[pos1].m_b[pos2].value += i1.second * i2.second;
+        A(pos1, pos2) += i1.second * i2.second;
         }
-      m_Ab[i1.first].m_c += i1.second * l2.m_c;
+      b(i1.first) += i1.second * l2.m_c;
       }
     for(auto i2 : l2.m_b)
       {
-      m_Ab[i2.first].m_c += i2.second * l1.m_c;
+      b(i2.first) += i2.second * l1.m_c;
       }
     m_c += l1.m_c * l2.m_c;
     }
 
+  template <typename T>
+  double Evaluate(const T* x)
+  {
+    // Evaluating the function means computing the quadratic form xAx+bx+c
+    // for each of the loss terms. In the future we might want to create more
+    // efficient data structures for these constraints
+    double y = m_c;
+    for(auto it_a : m_Aij)
+      {
+      int i = std::get<0>(it_a.first);
+      int j = std::get<1>(it_a.first);
+      y += x[i] * x[j] * it_a.second;
+      }
+    for(auto it_b : m_bi)
+      {
+      int i = it_b.first;
+      y += x[i] * it_b.second;
+      }
+
+    return y;
+  }
+
+  template <typename T>
+  void ComputeGradient(const T* x, T* grad_x, double weight)
+  {
+    for(auto it_a : m_Aij)
+      {
+      int i = std::get<0>(it_a.first);
+      int j = std::get<1>(it_a.first);
+      grad_x[i] += x[j] * it_a.second * weight;
+      grad_x[j] += x[i] * it_a.second * weight;
+      }
+    for(auto it_b : m_bi)
+      {
+      int i = it_b.first;
+      grad_x[i] += it_b.second * weight;
+      }
+  }
+
 protected:
+
+  // Sparse storage for the components a_ij
+  std::map< std::tuple<int,int>, double> m_Aij;
+  std::map< int, double> m_bi;
+  double m_c;
+
+  // Set of all variables that we depend on
+  std::unordered_set<int> m_Dependencies;
+
+  /*
 
   // For converting to sparse matrices, it is more efficient to
   // index by row and column separately, rather than by a row/col
@@ -288,6 +335,8 @@ protected:
 
   // The only thing stored separately is the offset c
   double m_c = 0.0;
+
+  */
 };
 
 /**
@@ -454,21 +503,7 @@ public:
     // efficient data structures for these constraints
     double total_loss = 0;
     for(auto *l : m_Losses)
-      {
-      double curr_loss = l->m_c;
-      for(auto it_row : l->m_Ab)
-        {
-        int i = it_row.first;
-        double z = it_row.second.m_c;
-        for(auto it_col : it_row.second.m_b)
-          {
-          int j = it_col.first;
-          z += it_col.second.value * x[j];
-          }
-        curr_loss += x[i] * z;
-        }
-      total_loss += curr_loss * l->weight;
-      }
+      total_loss += l->Evaluate(x) * l->weight;
 
     return total_loss;
   }
@@ -485,19 +520,7 @@ public:
     // for each of the loss terms. In the future we might want to create more
     // efficient data structures for these constraints
     for(auto *l : m_Losses)
-      {
-      for(auto it_row : l->m_Ab)
-        {
-        int i = it_row.first;
-        double z = 0.5 * it_row.second.m_c;
-        for(auto it_col : it_row.second.m_b)
-          {
-          int j = it_col.first;
-          z += it_col.second.value * x[j];
-          }
-        grad_x[i] += 2.0 * z * l->weight;
-        }
-      }
+      l->ComputeGradient(x, grad_x, l->weight);
   }
 
   /** Compute the individual constraints */
@@ -507,21 +530,7 @@ public:
     // Evaluating the function means computing the quadratic form xAx+bx+c
     // for each of the loss terms. In the future we might want to create more
     // efficient data structures for these constraints
-    Constraint *c = m_Constraints[k];
-    double g = c->m_c;
-    for(auto it_row : c->m_Ab)
-      {
-      int i = it_row.first;
-      double z = it_row.second.m_c;
-      for(auto it_col : it_row.second.m_b)
-        {
-        int j = it_col.first;
-        z += it_col.second.value * x[j];
-        }
-      g += x[i] * z;
-      }
-
-    return g;
+    return m_Constraints[k]->Evaluate(x);
   }
 
   /** Get the name of the constraint */
@@ -554,9 +563,32 @@ public:
     // The Jacobian for constraint g(x) wrt x_k is non-zero if k appears in the
     // non-zero entries for g as either row or column
 
+    // For each constraint, we need to compute the gradient entries. Right now we
+    // do this using a map, which might be slow
+    struct TensorRowSource { double z; std::map<int, double> w; };
+    std::vector< std::map<int, TensorRowSource> > con_jac_map(ncon);
+    for(size_t i = 0; i < ncon; i++)
+      {
+      auto &c = *m_Constraints[i];
+      auto &cm = con_jac_map[i];
+
+      for(auto it_a : c.m_Aij)
+        {
+        int i = std::get<0>(it_a.first);
+        int j = std::get<1>(it_a.first);
+        cm[i].w[j] += it_a.second;
+        cm[j].w[i] += it_a.second;
+        }
+      for(auto it_b : c.m_bi)
+        {
+        int i = it_b.first;
+        cm[i].z += it_b.second;
+        }
+      }
+
     // For each row, count the number of nonzero entries in the Jacobian
     for(size_t i = 0; i < ncon; i++)
-      jac_row_arr[i+1] = jac_row_arr[i] + m_Constraints[i]->m_Ab.size();
+      jac_row_arr[i+1] = jac_row_arr[i] + con_jac_map[i].size();
 
     // Allocate storage for the entries
     size_t *jac_col_arr = new size_t[jac_row_arr[ncon]];
@@ -572,13 +604,13 @@ public:
       int j = jac_row_arr[i];
 
       // Iterate over the rows of the constraint matrix m_Ab
-      for(auto &it: c.m_Ab)
+      for(auto &it: con_jac_map[i])
         {
         jac_col_arr[j] = it.first;
-        jac_val[j].w.reserve(it.second.m_b.size());
-        for(auto it2: it.second.m_b)
+        jac_val[j].w.reserve(it.second.w.size());
+        for(auto it2: it.second.w)
           jac_val[j].w.push_back({it2.first, it2.second});
-        jac_val[j].z = it.second.m_c;
+        jac_val[j].z = it.second.z;
         j++;
         }
       }
@@ -610,11 +642,14 @@ public:
     for(unsigned int k = 0; k < ncon; k++)
       {
       // Within the constraint, iterate over NNZ rows
-      for(auto &it_row: m_Constraints[k]->m_Ab)
+      for(auto it : m_Constraints[k]->m_Aij)
         {
-        auto &hol_src_row = hol_src[it_row.first];
-        for(auto &it_col: it_row.second.m_b)
-          hol_src_row[it_col.first].h_con[k] = it_col.second.value;
+        int i = std::get<0>(it.first);
+        int j = std::get<1>(it.first);
+        if(i <= j)
+          hol_src[i][j].h_con[k] += it.second;
+        if(j <= i)
+          hol_src[j][i].h_con[k] += it.second;
         }
       }
 
@@ -623,11 +658,14 @@ public:
     for(auto *l : m_Losses)
       {
       // Within the loss, iterate over NNZ rows
-      for(auto &it_row: l->m_Ab)
+      for(auto it: l->m_Aij)
         {
-        auto &hol_src_row = hol_src[it_row.first];
-        for(auto &it_col: it_row.second.m_b)
-          hol_src_row[it_col.first].h_loss += it_col.second.value * l->weight;
+        int i = std::get<0>(it.first);
+        int j = std::get<1>(it.first);
+        if(i <= j)
+          hol_src[i][j].h_loss += it.second * l->weight;
+        if(j <= i)
+          hol_src[j][i].h_loss += it.second * l->weight;
         }
       }
 

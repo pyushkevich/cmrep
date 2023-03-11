@@ -73,6 +73,13 @@ bool IPOptQCQPProblemInterface::eval_grad_f(
 bool IPOptQCQPProblemInterface::eval_g(
     Index n, const Number *x, bool new_x, Index m, Number *g)
 {
+  for(unsigned int i = 0; i < m; i++)
+    g[i] = m_Problem.EvaluateConstraint(x, i);
+
+  return true;
+
+  /*
+  // Slow code
   // Keep track of categories
   typedef std::map<std::string, double> CatMap;
   CatMap cmap;
@@ -115,6 +122,7 @@ bool IPOptQCQPProblemInterface::eval_g(
     }
 
   return true;
+  */
 }
 
 bool IPOptQCQPProblemInterface::eval_jac_g(

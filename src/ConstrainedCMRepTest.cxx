@@ -40,6 +40,8 @@
 #include "QCQPProblem.h"
 #include "IPOptQCQPProblemInterface.h"
 
+#include <vnl_random.h>
+
 /**
   ---------
   TODO LIST
@@ -931,15 +933,15 @@ ComputeTriangleProperties(
       // For each pair of vertices, we want to add the j-th component of their
       // cross product
       int j1 = (j + 1) % 3, j2 = (j + 2) % 3;
-      con_an.A(X(v0,j1), X(v1,j2)) =  1.0;
-      con_an.A(X(v0,j2), X(v1,j1)) = -1.0;
-      con_an.A(X(v1,j1), X(v2,j2)) =  1.0;
-      con_an.A(X(v1,j2), X(v2,j1)) = -1.0;
-      con_an.A(X(v2,j1), X(v0,j2)) =  1.0;
-      con_an.A(X(v2,j2), X(v0,j1)) = -1.0;
+      con_an.A(X(v0,j1), X(v1,j2)) = -1.0;
+      con_an.A(X(v0,j2), X(v1,j1)) = 1.0;
+      con_an.A(X(v1,j1), X(v2,j2)) = -1.0;
+      con_an.A(X(v1,j2), X(v2,j1)) = 1.0;
+      con_an.A(X(v2,j1), X(v0,j2)) = -1.0;
+      con_an.A(X(v2,j2), X(v0,j1)) = 1.0;
 
       // Place 2 * A * N in the right hand side
-      con_an.A(tri_normals(it,j), tri_areas(it)) = -2.0;
+      con_an.A(tri_normals(it,j), tri_areas(it)) = 2.0;
       }
 
     // Constraint that makes the normal have unit length
@@ -1017,12 +1019,12 @@ ComputeEdgeProperties(
     // Create a constraint: square of the edge length is equal to the squared
     // distance between the points, el * el = sum_j (v2[j] - v1[j])^2
     auto &con_el = p.AddConstraint(nm_con_el.c_str(), 0.0, 0.0);
-    con_el.A(edge_lengths(ie), edge_lengths(ie)) = -1.0;
+    con_el.A(edge_lengths(ie), edge_lengths(ie)) = 1.0;
     for(unsigned int j = 0; j < 3; j++)
       {
-      con_el.A(X(v1,j), X(v1,j)) = 1.0;
-      con_el.A(X(v2,j), X(v2,j)) = 1.0;
-      con_el.A(X(v1,j), X(v2,j)) = -2.0;
+      con_el.A(X(v1,j), X(v1,j)) = -1.0;
+      con_el.A(X(v2,j), X(v2,j)) = -1.0;
+      con_el.A(X(v1,j), X(v2,j)) = 2.0;
       }
     }
 
@@ -2722,6 +2724,24 @@ struct Statistics
   double max() { return maxx; }
 };
 
+std::string short_name(ConstrainedNonLinearProblem *p, int i)
+{
+  std::string n_varfull = p->GetVariable(i)->GetName();
+  return n_varfull.substr(0, n_varfull.find_first_of('['));
+}
+
+std::string qp_var_name(qcqp::Problem &qp, int i)
+{
+  for(int q = 0; q < qp.GetNumberOfVariableTensors(); q++)
+    {
+    auto *vt = qp.GetVariableTensor(q);
+    if(vt->GetStartIndex() <= i && vt->GetStartIndex()+vt->GetFlatSize() > i)
+      return vt->GetName();
+    }
+
+  return "";
+}
+
 int main(int argc, char *argv[])
 {
   // Usage help
@@ -3398,12 +3418,15 @@ int main(int argc, char *argv[])
       vp_i.Xd[d].fill(0.0);
       for(auto w : vp_i.neighbor_weights)
         {
-        // Add to Xu/Xv
-        vp_i.Xd[d] += w.weight[d] * qX(w.index).as_vector<3u>();
+        if(w.weight[d] != 0.0)
+          {
+          // Add to Xu/Xv
+          vp_i.Xd[d] += w.weight[d] * qX(w.index).as_vector<3u>();
 
-        // Set coefficient for the constraint
-        for(unsigned int j = 0; j < 3; j++)
-          con_norm_xd.A(qN(i,j), qX(w.index,j)) = w.weight[d];
+          // Set coefficient for the constraint
+          for(unsigned int j = 0; j < 3; j++)
+            con_norm_xd.A(qN(i,j), qX(w.index,j)) = w.weight[d];
+          }
         }
       }
 
@@ -3446,8 +3469,11 @@ int main(int argc, char *argv[])
         q_Ndi[d].fill(0.0);
         for(auto w : vp_i.neighbor_weights)
           {
-          // Add to Nu/Nv
-          q_Ndi[d] += w.weight[d] * qN(w.index).as_vector<3u>();
+          if(w.weight[d] != 0.0)
+            {
+            // Add to Nu/Nv
+            q_Ndi[d] += w.weight[d] * qN(w.index).as_vector<3u>();
+            }
           }
 
         // Set up first fundamental form constraints
@@ -3458,12 +3484,19 @@ int main(int argc, char *argv[])
 
           // Constraint that FF1[d][r] == dot(Xd[d], Xd[r])
           auto &con_ff1_dr = qp.AddConstraint("FF1", 0.0, 0.0);
-          con_ff1_dr.b(qFF1(i_crest, d, r)) = -1;
+          con_ff1_dr.b(qFF1(i_crest, d, r)) = 1;
 
           for(auto w1 : vp_i.neighbor_weights)
+            {
             for(auto w2 : vp_i.neighbor_weights)
-              for(unsigned int j = 0; j < 3; j++)
-                con_ff1_dr.A(qX(w1.index, j), qX(w2.index, j)) += w1.weight[d] * w2.weight[r];
+              {
+              if(w1.weight[d] * w2.weight[r] != 0.0)
+                {
+                for(unsigned int j = 0; j < 3; j++)
+                  con_ff1_dr.A(qX(w1.index, j), qX(w2.index, j)) -= w1.weight[d] * w2.weight[r];
+                }
+              }
+            }
           }
         }
 
@@ -3494,9 +3527,16 @@ int main(int argc, char *argv[])
           // The right hand side is the second fundamental form, i.e., dot product of
           // the derivative of X and derivative of N
           for(auto w1 : vp_i.neighbor_weights)
+            {
             for(auto w2 : vp_i.neighbor_weights)
-              for(unsigned int j = 0; j < 3; j++)
-                con_so_dr.A(qX(w1.index, j), qN(w2.index, j)) = w1.weight[d] * w2.weight[r];
+              {
+              if(w1.weight[d] * w2.weight[r] != 0.0)
+                {
+                for(unsigned int j = 0; j < 3; j++)
+                  con_so_dr.A(qX(w1.index, j), qN(w2.index, j)) = w1.weight[d] * w2.weight[r];
+                }
+              }
+            }
           }
         }
 
@@ -4876,6 +4916,23 @@ int main(int argc, char *argv[])
   // Print a message describing IpOpt
   app->PrintCopyrightMessage();
 
+  // Apply some random noise to X and N for better comparison
+  vnl_random rndl;
+  for(unsigned int i = 0; i < nb; i++)
+    {
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      auto *x = dynamic_cast<Variable *>(X[i][j]);
+      x->SetValue(x->Evaluate() + rndl.normal() * 0.1);
+      qX(i,j) = x->Evaluate();
+
+      auto *n = dynamic_cast<Variable *>(N[i][j]);
+      n->SetValue(n->Evaluate() + rndl.normal() * 0.1);
+      qN(i,j) = n->Evaluate();
+      }
+    }
+  p->MakeChildrenDirty();
+
   // Combine the regularization objectives
   WeightedSumGenerator wsgObj(p);
   wsgObj.AddTerm(objBasisResidual, regOpts.Weight);
@@ -4912,9 +4969,7 @@ int main(int argc, char *argv[])
   std::map<std::string, Statistics> p_var_count;
   for(unsigned int i = 0; i < p->GetNumberOfVariables(); i++)
     {
-    std::string fullname = p->GetVariable(i)->GetName();
-    int posbr = fullname.find_first_of('[');
-    std::string prefix = fullname.substr(0, posbr);
+    std::string prefix = short_name(p, i);
     p_var_count[prefix].add(p->GetVariable(i)->Evaluate());
     }
 
@@ -4985,6 +5040,48 @@ int main(int argc, char *argv[])
 
   printf("QP objective: %12.8f\n", qp.EvaluateLoss(x_qp.data_block()));
 
+  /* Compute the objective gradient */
+  std::map<std::string, Statistics> p_gradf_count;
+  for(int i = 0; i < p->GetNumberOfVariables(); i++)
+    {
+    auto *pd = p->GetObjectivePD(i);
+    double pdval = pd ? pd->Evaluate() : 0.0;
+    std::string nvar = short_name(p, i);
+    p_gradf_count[nvar].add(pdval);
+    }
+
+  printf("P Grad Objective Stats\n");
+  p_count = 0;
+  for(auto &it : p_gradf_count)
+    {
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+    p_count += it.second.n;
+    }
+  printf("Total: %d\n", p_count);
+
+  /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
+  std::map<std::string, Statistics> qp_gradf_count;
+  vnl_vector<double> gradf_qp(qp.GetNumberOfVariables());
+  qp.EvaluateLossGradient(x_qp.data_block(), gradf_qp.data_block());
+  for(int i = 0; i < qp.GetNumberOfVariables(); i++)
+    {
+    std::string n_var = qp_var_name(qp, i);
+    qp_gradf_count[n_var].add(gradf_qp[i]);
+    }
+
+  printf("QP Grad Objective stats\n");
+  p_count = 0;
+  for(auto &it : qp_gradf_count)
+    {
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+    p_count += it.second.n;
+    }
+  printf("Total: %d\n", p_count);
+
+
+
   /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
   auto &jp = p->GetConstraintsJacobian();
   std::map<std::string, Statistics> p_cv_count;
@@ -4993,9 +5090,8 @@ int main(int argc, char *argv[])
     std::string n_con = p->GetConstraintCategory(i);
     for(auto ri = jp.Row(i); !ri.IsAtEnd(); ++ri)
       {
-      std::string n_varfull = p->GetVariable(ri.Column())->GetName();
-      std::string n_var = n_varfull.substr(0, n_varfull.find_first_of('['));
-      std::string name = n_con + "/" + n_var;
+      std::string nvar = short_name(p, ri.Column());
+      std::string name = n_con + "/" + nvar;
       p_cv_count[name].add(ri.Value()->Evaluate());
       }
     }
@@ -5004,7 +5100,7 @@ int main(int argc, char *argv[])
   p_count = 0;
   for(auto &it : p_cv_count)
     {
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
            it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
     p_count += it.second.n;
     }
@@ -5018,18 +5114,12 @@ int main(int argc, char *argv[])
     std::string n_con = qp.GetConstraintName(i);
     for(auto ri = jqp.Row(i); !ri.IsAtEnd(); ++ri)
       {
-      std::string n_var;
-      for(int q = 0; q < qp.GetNumberOfVariableTensors(); q++)
-        {
-        auto *vt = qp.GetVariableTensor(q);
-        if(vt->GetStartIndex() <= ri.Column() && vt->GetStartIndex()+vt->GetFlatSize() > ri.Column())
-          n_var = vt->GetName();
-        }
+      std::string n_var = qp_var_name(qp, ri.Column());
       std::string name = n_con + "/" + n_var;
       auto &wz = ri.Value();
       double val = wz.z;
       for(auto it_w : wz.w)
-        val += 2.0 * qp.GetVariableValue(std::get<0>(it_w)) * std::get<1>(it_w);
+        val += qp.GetVariableValue(std::get<0>(it_w)) * std::get<1>(it_w);
 
       qp_cv_count[name].add(val);
       }
@@ -5039,16 +5129,72 @@ int main(int argc, char *argv[])
   p_count = 0;
   for(auto &it : qp_cv_count)
     {
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
            it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
     p_count += it.second.n;
     }
   printf("Total: %d\n", p_count);
 
-  return -1;
+
+  /* Compute the Hessian statistics, this has to be done by variable and constraint type */
+  std::map<std::string, Statistics> p_hess_count;
+
+  // Set all the lambdas to 1
+  vnl_vector<double> lambda_test(p->GetNumberOfConstraints());
+  lambda_test.fill(1.0);
+  p->SetLambdaValues(lambda_test.data_block());
+  p->SetSigma(1.0);
+  auto &p_hol = p->GetHessianOfLagrangean();
+
+  for(int i = 0; i < p_hol.GetNumberOfRows(); i++)
+    {
+    std::string nm_i = short_name(p, i);
+    for(auto it = p_hol.Row(i); !it.IsAtEnd(); ++it)
+      {
+      std::string nm_j = short_name(p, it.Column());
+      p_hess_count[nm_i+","+nm_j].add(it.Value()->Evaluate());
+      }
+    }
+
+  printf("P Hessian stats\n");
+  p_count = 0;
+  for(auto &it : p_hess_count)
+    {
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+    p_count += it.second.n;
+    }
+  printf("Total: %d\n", p_count);
+
+  // Compute qp hessian stats
+  std::map<std::string, Statistics> qp_hess_count;
+  auto &qp_hol = qp.GetHessianOfLagrangean();
+
+  for(int i = 0; i < qp_hol.GetNumberOfRows(); i++)
+    {
+    std::string nm_i = qp_var_name(qp, i);
+    for(auto it = qp_hol.Row(i); !it.IsAtEnd(); ++it)
+      {
+      std::string nm_j = qp_var_name(qp, it.Column());
+      auto &wz = it.Value();
+      double hval = wz.z;
+      for(auto qtw : wz.w)
+        hval += std::get<1>(qtw);
+      qp_hess_count[nm_i+","+nm_j].add(hval);
+      }
+    }
+
+  printf("QP Hessian stats\n");
+  p_count = 0;
+  for(auto &it : qp_hess_count)
+    {
+    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+    p_count += it.second.n;
+    }
+  printf("Total: %d\n", p_count);
 
 
-/*
   // Ask Ipopt to solve the problem
   app->Options()->SetStringValue("derivative_test", "none");
   status = app->OptimizeTNLP(GetRawPtr(q_ip));
@@ -5057,7 +5203,6 @@ int main(int argc, char *argv[])
     printf("\n\n*** Error %d during optimization!\n", (int) status);
     return -1;
     }
-*/
 
   // Ask Ipopt to solve the problem
   app->Options()->SetStringValue("derivative_test", "none");
@@ -5067,6 +5212,8 @@ int main(int argc, char *argv[])
     printf("\n\n*** Error %d during optimization!\n", (int) status);
     return -1;
     }
+
+  return -1;
 
   // Evaluate the objective
   ocfit.PrintReport();
