@@ -2742,6 +2742,668 @@ std::string qp_var_name(qcqp::Problem &qp, int i)
   return "";
 }
 
+class BCMRepQuadraticProblemBuilder
+{
+public:
+  typedef std::vector<std::vector<int> > MedialToBoundaryIndex;
+
+  BCMRepQuadraticProblemBuilder(
+      BCMTemplate &tmpl,
+      RegularizationOptions &regOpts,
+      TriangleConstraint tc_bnd, TriangleConstraint tc_med);
+
+  ~BCMRepQuadraticProblemBuilder()
+    {
+    delete mmesh;
+    }
+
+  // Build the geometry without attachment terms
+  void BuildGeometry();
+
+  // Build the regularization terms
+  void BuildRegularization();
+
+  // Build the least squares objective
+  void BuildLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget);
+
+  // Get the wrapped problem
+  qcqp::Problem &GetProblem() { return qp; }
+
+public:
+  // Parameters
+  RegularizationOptions &regOpts;
+  TriangleConstraint tc_bnd, tc_med;
+
+  // Template
+  BCMTemplate &tmpl;
+
+  // Input meshes
+  TriangleMesh *bmesh, *mmesh;
+
+  // Medial link encoding
+  std::vector<int> mIndex;
+  MedialToBoundaryIndex mtbIndex;
+
+  // Problem dimensions
+  int nb, nm;
+
+  // The wrapped problem
+  qcqp::Problem qp;
+
+  // The boundary positions and normals, medial positions
+  qcqp::VariableRef<2> qX, qN, qM;
+
+  // The radius values
+  qcqp::VariableRef<1> qR;
+
+  // Differential geometry at crests
+  qcqp::VariableRef<3> qFF1, qSO;
+  qcqp::VariableRef<1> qKappa1;
+
+  // Triangle and edge geometry for medial and boundary triangles
+  TriangleProperties tp_bnd, tp_med;
+  EdgeProperties ep_bnd, ep_med;
+
+  // Regularlization vars
+  qcqp::VariableRef<2> qXC;
+};
+
+BCMRepQuadraticProblemBuilder::BCMRepQuadraticProblemBuilder(
+    BCMTemplate &tmpl, RegularizationOptions &regOpts,
+    TriangleConstraint tc_bnd, TriangleConstraint tc_med)
+  : tmpl(tmpl), regOpts(regOpts), tc_bnd(tc_bnd), tc_med(tc_med)
+{
+  // Get the properties from the template
+  bmesh = &tmpl.bmesh;
+  mIndex = tmpl.mIndex;
+
+  // Set the vertex numbers
+  nb = bmesh->nVertices;
+
+  // Create a medial mesh that duplicates the boundary mesh
+  mmesh = new TriangleMesh(*bmesh);
+
+  // Change the triangle vertices to use m_index
+  for(int i = 0; i < mmesh->triangles.size(); i++)
+    for(int j = 0; j < 3; j++)
+      mmesh->triangles[i].vertices[j] = mIndex[bmesh->triangles[i].vertices[j]];
+
+  // Get the number of medial points. TODO: we need to make sure that every
+  // index between 0 and nm is represented.
+  nm = 1 + *std::max_element(mIndex.begin(), mIndex.end());
+
+  // Create a list of boundary atoms for each medial atom
+  mtbIndex.resize(nm);
+  for(int i = 0; i < nb; i++)
+    mtbIndex[mIndex[i]].push_back(i);
+}
+
+void BCMRepQuadraticProblemBuilder::BuildGeometry()
+{
+  // The boundary positions
+  qX = qp.AddVariableTensor<2>("X", {nb, 3});
+
+  // The medial positions
+  qM = qp.AddVariableTensor<2>("M", {nm, 3});
+
+  // The radius values
+  qR = qp.AddVariableTensor<1>("R", {nm}, 0.);
+
+  // The boundary normal vectors
+  qN = qp.AddVariableTensor<2>("N", {nb, 3});
+
+  // A list of all the boundary vertices that are crest points
+  std::vector<int> crestVertices;
+
+  // Index into the crest array for each boundary vertex
+  std::vector<int> btcIndex(nb);
+
+  // Assign the X variables
+  for(int i = 0; i < nb; i++)
+    for(int j = 0; j < 3; j++)
+      qX(i,j) = tmpl.x[i][j];
+
+  // Compute crest indices
+  for(int i = 0; i < nb; i++)
+    {
+    if(mtbIndex[mIndex[i]].size() == 1)
+      {
+      btcIndex[i] = crestVertices.size();
+      crestVertices.push_back(i);
+      }
+    else
+      {
+      btcIndex[i] = -1;
+      }
+    }
+
+  int nCrest = crestVertices.size();
+
+  // Create the variables that are stored at the crest
+  qFF1 = qp.AddVariableTensor<3>("FF1", {nCrest, 2, 2});
+  qSO = qp.AddVariableTensor<3>("SO", {nCrest, 2, 2});
+  qKappa1 = qp.AddVariableTensor<1>("Kappa1", {nCrest});
+
+  // For each vertex, we need to temporarily store an array of neighbor weights
+  // for partial derivative computation and the computed partial derivatives.
+  struct VertexPartials
+  {
+    struct NeighborWeight { int index; double weight[2]; };
+    std::vector<NeighborWeight> neighbor_weights;
+    vnl_vector_fixed<double, 3> Xd[2];
+  };
+
+  std::vector<VertexPartials> vertex_partials(nb);
+
+  // Create a LoopScheme for specifying normal vector constraints
+  LoopTangentScheme lts;
+  lts.SetMesh(bmesh);
+
+  // The first pass computes the first partial derivatives and normals at all
+  // boundary vertices, and sets the constraints linking N, M, R and X
+  for(int i = 0; i < nb; i++)
+    {
+    // Medial atom index
+    int iAtom = mIndex[i];
+
+    // Walk around the vertex neighbors
+    EdgeWalkAroundVertex walk(bmesh, i);
+
+    // Collect the weights for this vertex for the u and v derivatives
+    auto &vp_i = vertex_partials[i];
+
+    // Take our own weight
+    vp_i.neighbor_weights.push_back({ i, { lts.GetOwnWeight(0, i), lts.GetOwnWeight(1, i) } });
+
+    // Take neighbor weights
+    for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
+      {
+      int i_nbr = (int) walk.MovingVertexId();
+      vp_i.neighbor_weights.push_back(
+            { i_nbr, { lts.GetNeighborWeight(0, walk), lts.GetNeighborWeight(1, walk) } });
+      }
+
+    // Compute the partial derivatives of X with respect to u/v and the
+    // constraints of the normal vector
+    for(int d = 0; d < 2; d++)
+      {
+      // Constraint that dot(N, Xd) == 0
+      auto &con_norm_xd = qp.AddConstraint("N.Xu", 0.0, 0.0);
+      vp_i.Xd[d].fill(0.0);
+      for(auto w : vp_i.neighbor_weights)
+        {
+        if(w.weight[d] != 0.0)
+          {
+          // Add to Xu/Xv
+          vp_i.Xd[d] += w.weight[d] * qX(w.index).as_vector<3u>();
+
+          // Set coefficient for the constraint
+          for(unsigned int j = 0; j < 3; j++)
+            con_norm_xd.A(qN(i,j), qX(w.index,j)) = w.weight[d];
+          }
+        }
+      }
+
+    // Assign the initial value for the normal
+    vnl_vector_fixed<double, 3> q_v_n = vnl_cross_3d(vp_i.Xd[0], vp_i.Xd[1]).normalize();
+    qN(i).from_vector(q_v_n);
+
+    // Constraint that dot(N, N) == 1
+    auto &con_norm_len = qp.AddConstraint("N.N", 1.0, 1.0);
+    for(unsigned int j = 0; j < 3; j++)
+      con_norm_len.A(qN(i,j), qN(i,j)) = 1.0;
+
+    // Now setup the medial constraints, X - r * N - M = 0
+    for(int j = 0; j < 3; j++)
+      {
+      auto &con_medial = qp.AddConstraint("X-rNM", 0.0, 0.0);
+      con_medial.b(qX(i,j)) = 1.0;
+      con_medial.b(qM(iAtom,j)) = -1.0;
+      con_medial.A(qN(i,j), qR(iAtom)) = -1.0;
+      }
+    }
+
+  // The second pass is for second derivative properties, and requires all
+  // the normals to have been computed already
+  for(int i = 0; i < nb; i++)
+    {
+    int iAtom = mIndex[i];
+    auto &vp_i = vertex_partials[i];
+
+    // The rest of the constraints are in the single-tangency case
+    int i_crest = btcIndex[i];
+    if(i_crest >= 0)
+      {
+      // Compute the partial derivatives of N with respect to u/v and the
+      // constraints of the first fundamental form
+      vnl_vector_fixed<double, 3> q_Ndi[2];
+      vnl_matrix_fixed<double, 2, 2> m_FF1, m_FF2, m_SO;
+      for(int d = 0; d < 2; d++)
+        {
+        q_Ndi[d].fill(0.0);
+        for(auto w : vp_i.neighbor_weights)
+          {
+          if(w.weight[d] != 0.0)
+            {
+            // Add to Nu/Nv
+            q_Ndi[d] += w.weight[d] * qN(w.index).as_vector<3u>();
+            }
+          }
+
+        // Set up first fundamental form constraints
+        for(int r = 0; r < 2; r++)
+          {
+          // Set the value of the first fundamental form
+          qFF1(i_crest, d, r) = m_FF1(d,r) = dot_product(vp_i.Xd[d], vp_i.Xd[r]);
+
+          // Constraint that FF1[d][r] == dot(Xd[d], Xd[r])
+          auto &con_ff1_dr = qp.AddConstraint("FF1", 0.0, 0.0);
+          con_ff1_dr.b(qFF1(i_crest, d, r)) = 1;
+
+          for(auto w1 : vp_i.neighbor_weights)
+            {
+            for(auto w2 : vp_i.neighbor_weights)
+              {
+              if(w1.weight[d] * w2.weight[r] != 0.0)
+                {
+                for(unsigned int j = 0; j < 3; j++)
+                  con_ff1_dr.A(qX(w1.index, j), qX(w2.index, j)) -= w1.weight[d] * w2.weight[r];
+                }
+              }
+            }
+          }
+        }
+
+      // Compute the second fundamental form and shape operator
+      for(int d = 0; d < 2; d++)
+        for(int r = 0; r < 2; r++)
+          m_FF2[d][r] = dot_product(vp_i.Xd[d], q_Ndi[r]);
+
+      // Numerically solve for the shape operator
+      m_SO = - vnl_inverse(m_FF1) * m_FF2;
+
+      // Set up the constraints for the shape operator
+      for(int d = 0; d < 2; d++)
+        {
+        for(int r = 0; r < 2; r++)
+          {
+          // Set the initial value for the shape operator variable
+          qSO(i_crest, d, r) = m_SO(d,r);
+
+          // Create the constraint on the shape operator, that FF1 * SO = SFF
+          auto &con_so_dr = qp.AddConstraint("SO", 0.0, 0.0);
+
+          // The left hand side of the constraint is (FF1 * SO)[d,r], which is to say
+          // FF1[d][0] * SO[0][r] + FF1[d][1] * SO[1][r]
+          con_so_dr.A(qFF1(i_crest, d, 0), qSO(i_crest, 0, r)) = 1.0;
+          con_so_dr.A(qFF1(i_crest, d, 1), qSO(i_crest, 1, r)) = 1.0;
+
+          // The right hand side is the second fundamental form, i.e., dot product of
+          // the derivative of X and derivative of N
+          for(auto w1 : vp_i.neighbor_weights)
+            {
+            for(auto w2 : vp_i.neighbor_weights)
+              {
+              if(w1.weight[d] * w2.weight[r] != 0.0)
+                {
+                for(unsigned int j = 0; j < 3; j++)
+                  con_so_dr.A(qX(w1.index, j), qN(w2.index, j)) = w1.weight[d] * w2.weight[r];
+                }
+              }
+            }
+          }
+        }
+
+      // Numerically solve for the principal curvature k1
+      double mH = vnl_trace(m_SO) / 2;
+      double mK = vnl_det(m_SO);
+      double mk1 = mH - sqrt(mH*mH - mK);
+
+      // Assign the initial value for the principal curvature
+      qKappa1(i_crest) = mk1;
+
+      // The equality constraint on kappa1 is to ensure it is an eigenvalue, i.e,
+      // det(SO-k1*I) = 0. Written out, this has the form
+      // SO[0][0] * SO[1][1] - SO[0][1] * SO[1][0] - k1 * SO[0][0] - k1 * SO[1][1] + k1^2 = 0
+      auto &con_kappa1 = qp.AddConstraint("Kappa1_eq", 0.0, 0.0);
+      con_kappa1.A(qSO(i_crest,0,0), qSO(i_crest,1,1)) = 1.0;
+      con_kappa1.A(qSO(i_crest,0,1), qSO(i_crest,1,0)) = -1.0;
+      con_kappa1.A(qSO(i_crest,0,0), qKappa1(i_crest)) = -1.0;
+      con_kappa1.A(qSO(i_crest,1,1), qKappa1(i_crest)) = -1.0;
+      con_kappa1.A(qKappa1(i_crest), qKappa1(i_crest)) = 1.0;
+
+      // The inequality constraint on kappa1 is to ensure it is less than the mean curvature
+      // (trace of SO/2), i.e., k1 - 0.5 (S[0][0]+S[1][1]) < 0
+      auto &con_kappa1_ineq = qp.AddConstraint("Kappa1_ineq", qcqp::LBINF, 0.0);
+      con_kappa1_ineq.b(qKappa1(i_crest)) = 1.0;
+      con_kappa1_ineq.b(qSO(i_crest,0,0)) = -0.5;
+      con_kappa1_ineq.b(qSO(i_crest,1,1)) = -0.5;
+
+      // Set the value of the radius at this crest atom
+      qR(iAtom) = -1.0 / mk1;
+
+      // Create constraint linking R and kappa1, R * kappa1 = -1
+      auto &con_R_kappa1 = qp.AddConstraint("R_Kappa1", -1.0, -1.0);
+      con_R_kappa1.A(qR(iAtom), qKappa1(i_crest)) = 1.0;
+
+      // Set the value of the M variable based on the single R
+      vnl_vector_fixed<double, 3> v_m = qX(i).as_vector<3>() - qN(i).as_vector<3>() * (double) qR(iAtom);
+      qM(iAtom).from_vector(v_m);
+      }
+    }
+
+  // Set initial values of M and R for the bitangent or greater medial atoms
+  for(int i = 0; i < nm; i++)
+    {
+    int k = mtbIndex[i].size();
+    if(k > 1)
+      {
+      // MULTIPLE TANGENCY CASE
+
+      // For atoms that are bi-tangent or greater, we find R and M that
+      // minimize the expression Sum_j ||Xj - r Nj - M)||^2, i.e, the radius
+      // such that the medial atoms computed for each boundary atom idependently
+      // are as close together as possible. The r is found as
+      // r = (Sum_{ij} (Xi-Xj)^t N_i) / (k^2 - Sum_{ij} Nj^t N_i)
+      double numerator = 0.0, denominator = k*k;
+      SMLVec3d sumX(0.0, 0.0, 0.0), sumN(0.0, 0.0, 0.0);
+      for(int q = 0; q < k; q++)
+        {
+        int iq = mtbIndex[i][q];
+        SMLVec3d Xq = qX(iq).as_vector<3>(), Nq = qN(iq).as_vector<3>();
+        for(int p = 0; p < k; p++)
+          {
+          int ip = mtbIndex[i][p];
+          SMLVec3d Xp = qX(ip).as_vector<3>(), Np = qN(ip).as_vector<3>();
+
+          numerator += dot_product(Xq - Xp, Nq);
+          denominator -= dot_product(Np, Nq);
+          }
+
+        sumX += Xq; sumN += Nq;
+        }
+
+      // Compute the best fit r and m
+      double v_r = numerator / denominator;
+      SMLVec3d v_m = (sumX - sumN * v_r) / ((double) k);
+
+      // Store those values
+      qR(i) = v_r;
+      qM(i).from_vector(v_m);
+      }
+    }
+
+  // ------------------------------------------------------------------------
+  // Create the QCQP MIB constraint (NEW Code)
+  // ------------------------------------------------------------------------
+  for(int iBnd = 0; iBnd < nb; iBnd++)
+    {
+    int iAtom = mIndex[iBnd];
+
+    for(EdgeWalkAroundVertex walk(bmesh, iBnd); !walk.IsAtEnd(); ++walk)
+      {
+      int k = walk.MovingVertexId();
+
+      // Constraint is in the form |X[k] - M|^2 - R^2 > 0
+      auto &con_mib = qp.AddConstraint("MIB", 0, qcqp::UBINF);
+      for(int j = 0; j < 3; j++)
+        {
+        con_mib.A(qX(k,j), qX(k,j)) = 1.0;
+        con_mib.A(qX(k,j), qM(iAtom,j)) = -2.0;
+        con_mib.A(qM(iAtom,j), qM(iAtom,j)) = 1.0;
+        con_mib.A(qR(iAtom), qR(iAtom)) = -1.0;
+        }
+      }
+    }
+
+
+  // ------------------------------------------------------------------------
+  // Boundary QCQP Triangle and Edge Geometry Constraints (NEW CODE)
+  // ------------------------------------------------------------------------
+  if(tc_bnd.min_dih_angle > 0 || tc_bnd.min_tri_angle > 0 || tc_bnd.min_tri_area > 0)
+    tp_bnd = ComputeTriangleProperties(qp, bmesh, qX, "bnd_", tc_bnd.min_tri_area);
+
+  if(tc_bnd.min_tri_angle > 0 || regOpts.EdgeLengthWeight > 0.0)
+    ep_bnd = ComputeEdgeProperties(qp, bmesh, qX, "bnd_", 0.0);
+
+  // Boundary minimal angle constraint
+  if(tc_bnd.min_tri_angle > 0)
+    CreateTriangleMinAngleConstraints(
+          qp, bmesh, tp_bnd, ep_bnd, tc_bnd.min_tri_angle, "bnd_");
+
+  // Boundary minimal dihedral angle constraint
+  if(tc_bnd.min_dih_angle > 0)
+    {
+    // First we need to find the minimal angle for each edge, since crest edges
+    // should be allowed a larger dihedral angle than plain edges
+    vnl_matrix<double> edgewise_min_angle(bmesh->triangles.size(), 3);
+    for(unsigned int k = 0; k < bmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        int v1 = bmesh->triangles[k].vertices[(d+1)%3];
+        int v2 = bmesh->triangles[k].vertices[(d+2)%3];
+        bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
+
+        // TODO: why this hard-coded value?
+        edgewise_min_angle(k, d) = isBnd ? 25.84 : tc_bnd.min_dih_angle;
+        }
+      }
+
+    // Create the actual constraints
+    CreateTriangleDihedralAngleConstraints(
+          qp, bmesh, tp_bnd, edgewise_min_angle, "bnd_");
+    }
+
+
+  // ------------------------------------------------------------------------
+  // Medial QCQP Triangle and Edge Geometry Constraints (NEW CODE)
+  // ------------------------------------------------------------------------
+  // TODO: this is redundant, as it computes two sets of equal normals and
+  // areas for each medial triangle, one facing each boundary triangle. We
+  // could avoid this by checking for opposite triangles.
+  if(tc_med.min_dih_angle > 0 || tc_med.min_tri_angle > 0 || tc_med.min_tri_area > 0)
+    tp_med = ComputeTriangleProperties(qp, mmesh, qX, "med_", tc_med.min_tri_area);
+
+  if(tc_med.min_tri_angle > 0)
+    ep_med = ComputeEdgeProperties(qp, mmesh, qX, "med_", 0.0);
+
+  // Boundary dihedral angle constraint
+  if(tc_med.min_tri_angle > 0)
+    CreateTriangleMinAngleConstraints(
+          qp, mmesh, tp_med, ep_med, tc_med.min_tri_angle, "med_");
+
+  if(tc_med.min_dih_angle > 0)
+    {
+    // We first need to compute the multiplicity of each edge in the medial mesh so that we
+    // can exclude the edges that are on seam and edge curves of the medial model. Those edges
+    // are shared by a number of triangles other than two.
+    typedef std::pair<size_t, size_t> Edge;
+    std::map<Edge, unsigned int> edge_mult;
+
+    // First pass computes the edge multiplicities, visiting each edge twice
+    for(unsigned int k = 0; k < mmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        unsigned int kopp = mmesh->triangles[k].neighbors[d];
+        if(kopp != NOID && k < kopp)
+          {
+          // Is this a boundary edge?
+          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
+          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
+          Edge edge(std::min(v1,v2), std::max(v1,v2));
+          auto it = edge_mult.find(edge);
+          if(it == edge_mult.end())
+            edge_mult.insert(make_pair(edge, 1));
+          else
+            it->second++;
+          }
+        }
+      }
+
+    // Minimum dihedral angle for each edge (represented by triangle/vertex)
+    vnl_matrix<double> edgewise_min_angle(bmesh->triangles.size(), 3);
+
+    // Second pass assigns minimum DA to the edges
+    for(unsigned int k = 0; k < mmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        unsigned int kopp = mmesh->triangles[k].neighbors[d];
+        if(kopp != NOID && k < kopp)
+          {
+          // Is this a boundary edge?
+          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
+          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
+          Edge edge(std::min(v1,v2), std::max(v1,v2));
+          edgewise_min_angle(k,d) = (edge_mult[edge] == 2) ? tc_med.min_dih_angle : 0;
+          }
+        }
+      }
+
+    // Finally, create the constraints
+    CreateTriangleDihedralAngleConstraints(
+          qp, mmesh, tp_med, edgewise_min_angle, "med_");
+    }
+}
+
+void BCMRepQuadraticProblemBuilder::BuildRegularization()
+{
+  // ------------------------------------------------------------------------
+  // Define the QCQP regularization objective (NEW)
+  // ------------------------------------------------------------------------
+  auto &q_loss_basis_residual = qp.AddLoss("BasisResidual", 1.0);
+
+  if(regOpts.Mode == RegularizationOptions::SUBDIVISION)
+    {
+    // Try to obtain a parent mesh
+    BCMTemplate tmplParent;
+    if(!ReverseEngineerSubdivisionMesh(tmpl, tmplParent, regOpts.SubdivisionLevel))
+      throw MedialModelException("Unable to deduce coarse-level mesh by reversing subdivision.");
+
+    // Save the parent-level mesh
+    // tmplParent.Save("reverse_eng.vtk");
+
+    // TODO - do we want to regularize R as well???
+
+    // Create control points, i.e., vertices in the parent mesh
+    SubdivisionSurface::MeshLevel &pmesh = tmplParent.bmesh;
+    qXC = qp.AddVariableTensor<2>("XC", { (int) pmesh.nVertices, 3});
+
+    // Assign the control point initial values
+    for(int i = 0; i <  pmesh.nVertices; i++)
+      qXC(i).from_vector(tmplParent.x[i]);
+
+    // Apply the weight matrix to compute the residual
+    ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
+
+    // Define the residual objective
+    for(int i = 0; i < nb; i++)
+      {
+      for(int j = 0; j < 3; j++)
+        {
+        // A linear expression for the distance between interpolated and actual vertices
+        qcqp::LinearExpression delta;
+        delta.b(qX(i,j)) = -1.0;
+
+        // Use the weighted matrix iterator
+        for(ImmutableSparseMatrix<double>::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
+          delta.b(qXC(it.Column(), j)) += it.Value();
+
+        // Add the squared distance to the loss
+        q_loss_basis_residual.add_dotted(delta, delta);
+        }
+      }
+    }
+
+  if(regOpts.Mode == RegularizationOptions::SPECTRAL)
+    {
+    // Define a basis for the surface
+    MeshBasisCoefficientMapping basismap_X(bmesh, regOpts.BasisSize, 3);
+
+    // Define a basis for the medial axis
+    // TODO: to what extent is this a valid basis - we need to visualize!
+    // MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
+
+    // Create the coefficient variables
+    qXC = qp.AddVariableTensor<2>("XC", { (int) regOpts.BasisSize, 3});
+    for(int i = 0; i < regOpts.BasisSize; i++)
+      for(int j = 0; j < 3; j++)
+        qXC(i,j) = 0.0;
+
+    // Define the objective on the basis
+    for(int iBnd = 0; iBnd < nb; iBnd++)
+      {
+      SMLVec3d Xfixed = tmpl.x[iBnd];
+
+      for(int j = 0; j < 3; j++)
+        {
+        // Compute expression (X_init - X) - interpolate(XC)
+        qcqp::LinearExpression delta;
+        delta.c() = Xfixed[j];
+        delta.b(qX(iBnd,j)) = -1.0;
+        for(int i = 0; i < regOpts.BasisSize; i++)
+          delta.b(qXC(i,j)) += basismap_X.GetBasisComponent(i, iBnd);
+
+        // Add square of this expression to the loss
+        q_loss_basis_residual.add_dotted(delta, delta);
+        }
+      }
+    }
+
+  // ------------------------------------------------------------------------
+  // QCQP Boundary Total Edge Length Loss (NEW CODE)
+  // ------------------------------------------------------------------------
+  // TODO: add a constraint on the angle between adjacent boundary edges, b/c
+  // that seems to become quite small sometimes and setting a minimum on it might
+  // work better than penalizing the total length
+  if(regOpts.EdgeLengthWeight > 0.0)
+    {
+    auto &loss_el = qp.AddLoss("edge_length", regOpts.EdgeLengthWeight);
+
+    // Add all the crest edges
+    for(unsigned int k = 0; k < bmesh->triangles.size(); k++)
+      {
+      for(int d = 0; d < 3; d++)
+        {
+        int v1 = bmesh->triangles[k].vertices[(d + 1) % 3];
+        int v2 = bmesh->triangles[k].vertices[(d + 2) % 3];
+        if(v1 < v2)
+          {
+          // Are these edge vertices?
+          if(mtbIndex[mIndex[v1]].size() == 1 && mtbIndex[mIndex[v2]].size() == 1)
+            {
+            int i_edge = ep_bnd.tri_edges(k,d);
+            loss_el.b(ep_bnd.edge_lengths(i_edge)) = 1.0;
+            }
+          }
+        }
+      }
+    }
+}
+
+void BCMRepQuadraticProblemBuilder::BuildLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget)
+{
+  // ------------------------------------------------------------------------
+  // QCQP displacement objective (NEW CODE)
+  // ------------------------------------------------------------------------
+  auto &loss_disp = qp.AddLoss("disp", 1.0);
+  for(int i = 0; i < nb; i++)
+    {
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      // Loss is in the form sum [ |X_i - xtarg_i|^2 ]
+      double xtarg = xLSQTarget[i][j];
+      loss_disp.A(qX(i,j), qX(i,j)) = 1.0;
+      loss_disp.b(qX(i,j)) = -2.0 * xtarg;
+      loss_disp.c() += xtarg * xtarg;
+      }
+    }
+}
+
+
+
 int main(int argc, char *argv[])
 {
   // Usage help
@@ -2990,24 +3652,17 @@ int main(int argc, char *argv[])
   // Create the optimization problem
   ConstrainedNonLinearProblem *p = new ConstrainedNonLinearProblem();
 
-  // Create the fast QCQP problem builder
-  qcqp::Problem qp;
-
   // The boundary positions
   VarVecArray X(nb, VarVec(3, NULL));
-  qcqp::VariableRef<2> qX = qp.AddVariableTensor<2>("X", {nb, 3});
 
   // The medial positions
   VarVecArray M(nm, VarVec(3, NULL));
-  qcqp::VariableRef<2> qM = qp.AddVariableTensor<2>("M", {nm, 3});
 
   // The radius values
   VarVec R(nm, NULL);
-  qcqp::VariableRef<1> qR = qp.AddVariableTensor<1>("R", {nm}, 0.);
 
   // The boundary normal vectors
   VarVecArray N(nb, VarVec(3, NULL));
-  qcqp::VariableRef<2> qN = qp.AddVariableTensor<2>("N", {nb, 3});
 
   // The vectors U from the medial axis to the boundary. They are the same
   // as -R*N. They appear in multiple places though, so we should store them
@@ -3035,9 +3690,6 @@ int main(int argc, char *argv[])
       {
       snprintf(buffer, 16, "X[%d,%d]", i, j);
       X[i][j] = p->AddVariable(buffer, x[j]);
-
-      // NEW WAY
-      qX(i,j) = x[j];
       }
     }
 
@@ -3343,282 +3995,6 @@ int main(int argc, char *argv[])
       }
     }
 
-  // ------------------------------------------------------------------------
-  // QCQP Configuration: boundary normals and curvature computations
-  // ------------------------------------------------------------------------
-
-  // A list of all the boundary vertices that are crest points
-  std::vector<int> crestVertices;
-
-  // Index into the crest array for each boundary vertex
-  std::vector<int> btcIndex(nb);
-
-  // Compute crest indices
-  for(int i = 0; i < nb; i++)
-    {
-    if(mtbIndex[mIndex[i]].size() == 1)
-      {
-      btcIndex[i] = crestVertices.size();
-      crestVertices.push_back(i);
-      }
-    else
-      {
-      btcIndex[i] = -1;
-      }
-    }
-
-  int nCrest = crestVertices.size();
-
-  // Create the variables that are stored at the crest
-  qcqp::VariableRef<3> qFF1 = qp.AddVariableTensor<3>("FF1", {nCrest, 2, 2});
-  qcqp::VariableRef<3> qSO = qp.AddVariableTensor<3>("SO", {nCrest, 2, 2});
-  qcqp::VariableRef<1> qKappa1 = qp.AddVariableTensor<1>("Kappa1", {nCrest});
-
-  // For each vertex, we need to temporarily store an array of neighbor weights
-  // for partial derivative computation and the computed partial derivatives.
-  struct VertexPartials
-  {
-    struct NeighborWeight { int index; double weight[2]; };
-    std::vector<NeighborWeight> neighbor_weights;
-    vnl_vector_fixed<double, 3> Xd[2];
-  };
-
-  std::vector<VertexPartials> vertex_partials(nb);
-
-  // The first pass computes the first partial derivatives and normals at all
-  // boundary vertices, and sets the constraints linking N, M, R and X
-  for(int i = 0; i < nb; i++)
-    {
-    // Medial atom index
-    int iAtom = mIndex[i];
-
-    // Walk around the vertex neighbors
-    EdgeWalkAroundVertex walk(bmesh, i);
-
-    // Collect the weights for this vertex for the u and v derivatives
-    auto &vp_i = vertex_partials[i];
-
-    // Take our own weight
-    vp_i.neighbor_weights.push_back({ i, { lts.GetOwnWeight(0, i), lts.GetOwnWeight(1, i) } });
-
-    // Take neighbor weights
-    for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
-      {
-      int i_nbr = (int) walk.MovingVertexId();
-      vp_i.neighbor_weights.push_back(
-            { i_nbr, { lts.GetNeighborWeight(0, walk), lts.GetNeighborWeight(1, walk) } });
-      }
-
-    // Compute the partial derivatives of X with respect to u/v and the
-    // constraints of the normal vector
-    for(int d = 0; d < 2; d++)
-      {
-      // Constraint that dot(N, Xd) == 0
-      auto &con_norm_xd = qp.AddConstraint("N.Xu", 0.0, 0.0);
-      vp_i.Xd[d].fill(0.0);
-      for(auto w : vp_i.neighbor_weights)
-        {
-        if(w.weight[d] != 0.0)
-          {
-          // Add to Xu/Xv
-          vp_i.Xd[d] += w.weight[d] * qX(w.index).as_vector<3u>();
-
-          // Set coefficient for the constraint
-          for(unsigned int j = 0; j < 3; j++)
-            con_norm_xd.A(qN(i,j), qX(w.index,j)) = w.weight[d];
-          }
-        }
-      }
-
-    // Assign the initial value for the normal
-    vnl_vector_fixed<double, 3> q_v_n = vnl_cross_3d(vp_i.Xd[0], vp_i.Xd[1]).normalize();
-    qN(i).from_vector(q_v_n);
-
-    // Constraint that dot(N, N) == 1
-    auto &con_norm_len = qp.AddConstraint("N.N", 1.0, 1.0);
-    for(unsigned int j = 0; j < 3; j++)
-      con_norm_len.A(qN(i,j), qN(i,j)) = 1.0;
-
-    // Now setup the medial constraints, X - r * N - M = 0
-    for(int j = 0; j < 3; j++)
-      {
-      auto &con_medial = qp.AddConstraint("X-rNM", 0.0, 0.0);
-      con_medial.b(qX(i,j)) = 1.0;
-      con_medial.b(qM(iAtom,j)) = -1.0;
-      con_medial.A(qN(i,j), qR(iAtom)) = -1.0;
-      }
-    }
-
-  // The second pass is for second derivative properties, and requires all
-  // the normals to have been computed already
-  for(int i = 0; i < nb; i++)
-    {
-    int iAtom = mIndex[i];
-    auto &vp_i = vertex_partials[i];
-
-    // The rest of the constraints are in the single-tangency case
-    int i_crest = btcIndex[i];
-    if(i_crest >= 0)
-      {
-      // Compute the partial derivatives of N with respect to u/v and the
-      // constraints of the first fundamental form
-      vnl_vector_fixed<double, 3> q_Ndi[2];
-      vnl_matrix_fixed<double, 2, 2> m_FF1, m_FF2, m_SO;
-      for(int d = 0; d < 2; d++)
-        {
-        q_Ndi[d].fill(0.0);
-        for(auto w : vp_i.neighbor_weights)
-          {
-          if(w.weight[d] != 0.0)
-            {
-            // Add to Nu/Nv
-            q_Ndi[d] += w.weight[d] * qN(w.index).as_vector<3u>();
-            }
-          }
-
-        // Set up first fundamental form constraints
-        for(int r = 0; r < 2; r++)
-          {
-          // Set the value of the first fundamental form
-          qFF1(i_crest, d, r) = m_FF1(d,r) = dot_product(vp_i.Xd[d], vp_i.Xd[r]);
-
-          // Constraint that FF1[d][r] == dot(Xd[d], Xd[r])
-          auto &con_ff1_dr = qp.AddConstraint("FF1", 0.0, 0.0);
-          con_ff1_dr.b(qFF1(i_crest, d, r)) = 1;
-
-          for(auto w1 : vp_i.neighbor_weights)
-            {
-            for(auto w2 : vp_i.neighbor_weights)
-              {
-              if(w1.weight[d] * w2.weight[r] != 0.0)
-                {
-                for(unsigned int j = 0; j < 3; j++)
-                  con_ff1_dr.A(qX(w1.index, j), qX(w2.index, j)) -= w1.weight[d] * w2.weight[r];
-                }
-              }
-            }
-          }
-        }
-
-      // Compute the second fundamental form and shape operator
-      for(int d = 0; d < 2; d++)
-        for(int r = 0; r < 2; r++)
-          m_FF2[d][r] = dot_product(vp_i.Xd[d], q_Ndi[r]);
-
-      // Numerically solve for the shape operator
-      m_SO = - vnl_inverse(m_FF1) * m_FF2;
-
-      // Set up the constraints for the shape operator
-      for(int d = 0; d < 2; d++)
-        {
-        for(int r = 0; r < 2; r++)
-          {
-          // Set the initial value for the shape operator variable
-          qSO(i_crest, d, r) = m_SO(d,r);
-
-          // Create the constraint on the shape operator, that FF1 * SO = SFF
-          auto &con_so_dr = qp.AddConstraint("SO", 0.0, 0.0);
-
-          // The left hand side of the constraint is (FF1 * SO)[d,r], which is to say
-          // FF1[d][0] * SO[0][r] + FF1[d][1] * SO[1][r]
-          con_so_dr.A(qFF1(i_crest, d, 0), qSO(i_crest, 0, r)) = 1.0;
-          con_so_dr.A(qFF1(i_crest, d, 1), qSO(i_crest, 1, r)) = 1.0;
-
-          // The right hand side is the second fundamental form, i.e., dot product of
-          // the derivative of X and derivative of N
-          for(auto w1 : vp_i.neighbor_weights)
-            {
-            for(auto w2 : vp_i.neighbor_weights)
-              {
-              if(w1.weight[d] * w2.weight[r] != 0.0)
-                {
-                for(unsigned int j = 0; j < 3; j++)
-                  con_so_dr.A(qX(w1.index, j), qN(w2.index, j)) = w1.weight[d] * w2.weight[r];
-                }
-              }
-            }
-          }
-        }
-
-      // Numerically solve for the principal curvature k1
-      double mH = vnl_trace(m_SO) / 2;
-      double mK = vnl_det(m_SO);
-      double mk1 = mH - sqrt(mH*mH - mK);
-
-      // Assign the initial value for the principal curvature
-      qKappa1(i_crest) = mk1;
-
-      // The equality constraint on kappa1 is to ensure it is an eigenvalue, i.e,
-      // det(SO-k1*I) = 0. Written out, this has the form
-      // SO[0][0] * SO[1][1] - SO[0][1] * SO[1][0] - k1 * SO[0][0] - k1 * SO[1][1] + k1^2 = 0
-      auto &con_kappa1 = qp.AddConstraint("Kappa1_eq", 0.0, 0.0);
-      con_kappa1.A(qSO(i_crest,0,0), qSO(i_crest,1,1)) = 1.0;
-      con_kappa1.A(qSO(i_crest,0,1), qSO(i_crest,1,0)) = -1.0;
-      con_kappa1.A(qSO(i_crest,0,0), qKappa1(i_crest)) = -1.0;
-      con_kappa1.A(qSO(i_crest,1,1), qKappa1(i_crest)) = -1.0;
-      con_kappa1.A(qKappa1(i_crest), qKappa1(i_crest)) = 1.0;
-
-      // The inequality constraint on kappa1 is to ensure it is less than the mean curvature
-      // (trace of SO/2), i.e., k1 - 0.5 (S[0][0]+S[1][1]) < 0
-      auto &con_kappa1_ineq = qp.AddConstraint("Kappa1_ineq", qcqp::LBINF, 0.0);
-      con_kappa1_ineq.b(qKappa1(i_crest)) = 1.0;
-      con_kappa1_ineq.b(qSO(i_crest,0,0)) = -0.5;
-      con_kappa1_ineq.b(qSO(i_crest,1,1)) = -0.5;
-
-      // Set the value of the radius at this crest atom
-      qR(iAtom) = -1.0 / mk1;
-
-      // Create constraint linking R and kappa1, R * kappa1 = -1
-      auto &con_R_kappa1 = qp.AddConstraint("R_Kappa1", -1.0, -1.0);
-      con_R_kappa1.A(qR(iAtom), qKappa1(i_crest)) = 1.0;
-
-      // Set the value of the M variable based on the single R
-      vnl_vector_fixed<double, 3> v_m = qX(i).as_vector<3>() - qN(i).as_vector<3>() * (double) qR(iAtom);
-      qM(iAtom).from_vector(v_m);
-      }
-    }
-
-  // Set initial values of M and R for the bitangent or greater medial atoms
-  for(int i = 0; i < nm; i++)
-    {
-    int k = mtbIndex[i].size();
-    if(k > 1)
-      {
-      // MULTIPLE TANGENCY CASE
-
-      // For atoms that are bi-tangent or greater, we find R and M that
-      // minimize the expression Sum_j ||Xj - r Nj - M)||^2, i.e, the radius
-      // such that the medial atoms computed for each boundary atom idependently
-      // are as close together as possible. The r is found as
-      // r = (Sum_{ij} (Xi-Xj)^t N_i) / (k^2 - Sum_{ij} Nj^t N_i)
-      double numerator = 0.0, denominator = k*k;
-      SMLVec3d sumX(0.0, 0.0, 0.0), sumN(0.0, 0.0, 0.0);
-      for(int q = 0; q < k; q++)
-        {
-        int iq = mtbIndex[i][q];
-        SMLVec3d Xq = qX(iq).as_vector<3>(), Nq = qN(iq).as_vector<3>();
-        for(int p = 0; p < k; p++)
-          {
-          int ip = mtbIndex[i][p];
-          SMLVec3d Xp = qX(ip).as_vector<3>(), Np = qN(ip).as_vector<3>();
-
-          numerator += dot_product(Xq - Xp, Nq);
-          denominator -= dot_product(Np, Nq);
-          }
-
-        sumX += Xq; sumN += Nq;
-        }
-
-      // Compute the best fit r and m
-      double v_r = numerator / denominator;
-      SMLVec3d v_m = (sumX - sumN * v_r) / ((double) k);
-
-      // Store those values
-      qR(i) = v_r;
-      qM(i).from_vector(v_m);
-      }
-    }
-
 
   // ------------------------------------------------------------------------
   // Configure the boundary and medial triangle area variables
@@ -3805,201 +4181,7 @@ int main(int argc, char *argv[])
     }
 
 
-  // ------------------------------------------------------------------------
-  // Define the QCQP regularization objective (NEW)
-  // ------------------------------------------------------------------------
-  auto &q_loss_basis_residual = qp.AddLoss("BasisResidual", 1.0);
 
-  if(regOpts.Mode == RegularizationOptions::SUBDIVISION)
-    {
-    // Try to obtain a parent mesh
-    BCMTemplate tmplParent;
-    if(!ReverseEngineerSubdivisionMesh(tmpl, tmplParent, regOpts.SubdivisionLevel))
-      {
-      cerr << "Unable to deduce coarse-level mesh by reversing subdivision!" << endl;
-      return -1;
-      }
-
-    // Save the parent-level mesh
-    // tmplParent.Save("reverse_eng.vtk");
-
-    // TODO - do we want to regularize R as well???
-
-    // Create control points, i.e., vertices in the parent mesh
-    SubdivisionSurface::MeshLevel &pmesh = tmplParent.bmesh;
-    qcqp::VariableRef<2> qXC = qp.AddVariableTensor<2>("XC", { (int) pmesh.nVertices, 3});
-
-    // Assign the control point initial values
-    for(int i = 0; i <  pmesh.nVertices; i++)
-      qXC(i).from_vector(tmplParent.x[i]);
-
-    // Apply the weight matrix to compute the residual
-    ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
-
-    // Define the residual objective
-    for(int i = 0; i < nb; i++)
-      {
-      for(int j = 0; j < 3; j++)
-        {
-        // A linear expression for the distance between interpolated and actual vertices
-        qcqp::LinearExpression delta;
-        delta.b(qX(i,j)) = -1.0;
-
-        // Use the weighted matrix iterator
-        for(ImmutableSparseMatrix<double>::RowIterator it = W.Row(i); !it.IsAtEnd(); ++it)
-          delta.b(qXC(it.Column(), j)) += it.Value();
-
-        // Add the squared distance to the loss
-        q_loss_basis_residual.add_dotted(delta, delta);
-        }
-      }
-    }
-
-  if(regOpts.Mode == RegularizationOptions::SPECTRAL)
-    {
-    // Define a basis for the surface
-    MeshBasisCoefficientMapping basismap_X(bmesh, regOpts.BasisSize, 3);
-
-    // Define a basis for the medial axis
-    // TODO: to what extent is this a valid basis - we need to visualize!
-    // MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
-
-    // Create the coefficient variables
-    qcqp::VariableRef<2> qXC = qp.AddVariableTensor<2>("XC", { (int) regOpts.BasisSize, 3});
-
-    // Define the objective on the basis
-    for(int iBnd = 0; iBnd < nb; iBnd++)
-      {
-      SMLVec3d Xfixed = xInput[iBnd];
-
-      for(int j = 0; j < 3; j++)
-        {
-        // Compute expression (X_init - X) - interpolate(XC)
-        qcqp::LinearExpression delta;
-        delta.c() = Xfixed[j];
-        delta.b(qX(iBnd,j)) = -1.0;
-        for(int i = 0; i < regOpts.BasisSize; i++)
-          delta.b(qXC(i,j)) += basismap_X.GetBasisComponent(i, iBnd);
-
-        // Add square of this expression to the loss
-        q_loss_basis_residual.add_dotted(delta, delta);
-        }
-      }
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Create a total volume objective -
-  // ------------------------------------------------------------------------
-  /*
-  BigSum *objVolume = new BigSum(p);
-
-  // Measure the wedge volume for each boundary triangle
-  VarVec wedgeVol(bmesh->triangles.size(), NULL);
-
-  // Add the Jacobian constraints - all tetrahedra must have positive volume
-  for(int i = 0; i < bmesh->triangles.size(); i++)
-    {
-    Triangle &T = bmesh->triangles[i];
-
-    // Get the boundary vertices
-    VarVec x[] = { X[T.vertices[0]], X[T.vertices[1]], X[T.vertices[2]] };
-
-    // And the medial vertices
-    VarVec m[] = { M[mIndex[T.vertices[0]]],
-                   M[mIndex[T.vertices[1]]],
-                   M[mIndex[T.vertices[2]]] };
-
-    // There are several ways to cut a wedge into tetras, we choose one
-    Expression *c1 = TetraHedronVolume(p, m[2], x[0], x[1], x[2]);
-    Expression *c2 = TetraHedronVolume(p, m[1], x[0], x[1], m[2]);
-    Expression *c3 = TetraHedronVolume(p, m[2], x[0], m[0], m[1]);
-
-    // printf("Tetra Vols: %f, %f, %f\n", c1->Evaluate(), c2->Evaluate(), c3->Evaluate());
-
-    // Save the total wedge volume for use in integration
-    wedgeVol[i] = new TernarySum(p, c1, c2, c3);
-
-    // Each tetra should have positive volume
-    /--*
-    p->AddConstraint(c1, 0.1, 40);
-    p->AddConstraint(c2, 0.1, 40);
-    p->AddConstraint(c3, 0.1, 40);
-    *--/
-
-    // Total volume integral
-    objVolume->AddSummand(wedgeVol[i]);
-    }
-    */
-
-
-  // ------------------------------------------------------------------------
-  // Create the medial/boundary Jacobian constraint (normals point in same direction)
-  // ------------------------------------------------------------------------
-  /*
-  double constJacFact = 0.1;
-  for(int i = 0; i < bmesh->triangles.size(); i++)
-    {
-    // For this constraint, we just want the medial triangle normal and
-    // the boundary triangle normal to point in the same direction!
-    Expression *dp = DotProduct(p, NT_X[i], NT_M[i]);
-
-    // Depending on the side, constrain up or down
-    if(dp->Evaluate() < constJacFact)
-      std::cout << "Bad Jacobian constraint: " << dp->Evaluate()
-                << " in triangle " << i << std::endl;
-
-    // Add the constraint
-    p->AddConstraint(dp, "Jac", constJacFact, ConstrainedNonLinearProblem::UBINF);
-    }
-    */
-
-
-#ifdef OLD_CODE
-  // Lower bound for Nm . Nx / (Nm . Nm)
-  double constJacFact = 0.1;
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Get the boundary vertices
-    VarVec x[] = { X[trit.GetBoundaryIndex(0)],
-                   X[trit.GetBoundaryIndex(1)],
-                   X[trit.GetBoundaryIndex(2)] };
-
-    // And the medial vertices
-    VarVec m[] = { M[trit.GetAtomIndex(0)],
-                   M[trit.GetAtomIndex(1)],
-                   M[trit.GetAtomIndex(2)] };
-
-    // Get the expression for the triangle normal
-    VarVec xu = VectorApplyPairwise<BinaryDifference>(p, x[1], x[0]);
-    VarVec xv = VectorApplyPairwise<BinaryDifference>(p, x[2], x[0]);
-    VarVec Nx = CrossProduct(p, xu, xv);
-
-    VarVec mu = VectorApplyPairwise<BinaryDifference>(p, m[1], m[0]);
-    VarVec mv = VectorApplyPairwise<BinaryDifference>(p, m[2], m[0]);
-    VarVec Nm = CrossProduct(p, mu, mv);
-
-    // Get the dot products
-    Expression *NmNx = DotProduct(p, Nx, Nm);
-    Expression *NmNm = DotProduct(p, Nm, Nm);
-
-    // Get the Jacobian constraint expression
-    Expression *con = new BinaryDifference(p, NmNx,
-                                           new ScalarProduct(p, NmNm, constJacFact));
-
-    // Set the constraint
-    p->AddConstraint(con, 0.0, ConstrainedNonLinearProblem::UBINF);
-
-    // We can also constrain the size of the medial triangle from below
-    p->AddConstraint(NmNm, 0.1, ConstrainedNonLinearProblem::UBINF);
-
-    // Print the ratio
-    // printf("JACCON: %f %f \n", NmNm->Evaluate(), NmNx->Evaluate() / NmNm->Evaluate());
-
-    } 
-#endif
 
   // ------------------------------------------------------------------------
   // Create the MIB constraint
@@ -4018,273 +4200,6 @@ int main(int argc, char *argv[])
       }
     }
 
-  // ------------------------------------------------------------------------
-  // Create the QCQP MIB constraint (NEW Code)
-  // ------------------------------------------------------------------------
-  for(int iBnd = 0; iBnd < nb; iBnd++)
-    {
-    int iAtom = mIndex[iBnd];
-
-    for(EdgeWalkAroundVertex walk(bmesh, iBnd); !walk.IsAtEnd(); ++walk)
-      {
-      int k = walk.MovingVertexId();
-
-      // Constraint is in the form |X[k] - M|^2 - R^2 > 0
-      auto &con_mib = qp.AddConstraint("MIB", 0, qcqp::UBINF);
-      for(int j = 0; j < 3; j++)
-        {
-        con_mib.A(qX(k,j), qX(k,j)) = 1.0;
-        con_mib.A(qX(k,j), qM(iAtom,j)) = -2.0;
-        con_mib.A(qM(iAtom,j), qM(iAtom,j)) = 1.0;
-        con_mib.A(qR(iAtom), qR(iAtom)) = -1.0;
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Construct the total surface area objective
-  // ------------------------------------------------------------------------
-  /*
-  BigSum *objSurfArea = new BigSum(p);
-  for(int i = 0; i < bmesh->triangles.size(); i++)
-    {
-    // Add the area to the objective
-    objSurfArea->AddSummand(taX[i]);
-    }
-    */
-
-  // ------------------------------------------------------------------------
-  // Solve for the circumcenter and circumradius of each boundary triangle
-  // ------------------------------------------------------------------------
-
-#ifdef CIRCUMCENTER
-
-  // Define arrays for circumcenter, circumradius, barycentric coords of the c.c.
-  VarVecArray CC(model->GetNumberOfBoundaryTriangles(), VarVec(3, NULL));
-  VarVecArray CCBC(model->GetNumberOfBoundaryTriangles(), VarVec(3, NULL));
-  VarVec CR(model->GetNumberOfBoundaryTriangles(), NULL);
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-
-    // Get the corners of the triangle
-    VarVec XT[3] = {
-      X[trit.GetBoundaryIndex(0)],
-      X[trit.GetBoundaryIndex(1)],
-      X[trit.GetBoundaryIndex(2)]
-    };
-
-
-
-    // We define the barycentric coordinates of the circumcenter, the circum
-    // center itself and the circumradius using implicit equations, arising
-    // from solving the constrained problem R=argmin(R^2) subj to. |X-C|^2 = R,
-    // |Y-C|^2 = R, |Z-C|^2 = R, using Lagrange multipliers
-    VarVec &lambda = CCBC[trit.GetIndex()];
-    VarVec &C = CC[trit.GetIndex()];
-
-    // Expressions for squared edge lengths
-    VarVec elen2(3, NULL);
-    elen2[0] = DistanceSqr(p, XT[1], XT[2]);
-    elen2[1] = DistanceSqr(p, XT[2], XT[0]);
-    elen2[2] = DistanceSqr(p, XT[0], XT[1]);
-
-    // Sum of the edge lengths squared
-    double elen2sum = elen2[0]->Evaluate() + elen2[1]->Evaluate() + elen2[2]->Evaluate();
-
-    // Compute what the barycenter coordinates should be (Wikipedia)
-    vnl_vector_fixed<double, 3> lambdaVal;
-    for(int j = 0; j < 3; j++)
-      lambdaVal[j] = elen2[j]->Evaluate() * (elen2sum - 2 * elen2[j]->Evaluate());
-    lambdaVal /= lambdaVal.sum();
-
-    // We constrain lambdas to be positive - forces acute triangles! And
-    // probably setting an upper limit would work to constrain the minimal
-    // angle of the triangle
-    for(int j = 0; j < 3; j++)
-      {
-      // Wikipedia expression for the lambdas
-      lambda[j] = p->AddVariable("l", lambdaVal[j], 0);
-      }
-
-    // Now we define the seven constraints that tie these variables.
-
-    // L1 + L2 + L3 = 1
-    p->AddConstraint(new TernarySum(p, lambda[0], lambda[1], lambda[2]), 1.0, 1.0);
-
-    // C = L1 X + L2 Y + L3 Z
-    for(int j = 0; j < 3; j++)
-      {
-      // What C should equal
-      Expression *rhs = new TernarySum(p,
-                                       new BinaryProduct(p, lambda[0], XT[0][j]),
-                                       new BinaryProduct(p, lambda[1], XT[1][j]),
-                                       new BinaryProduct(p, lambda[2], XT[2][j]));
-      // Add the variable and the constraint
-      C[j] = p->AddExpressionAsConstrainedVariable(rhs);
-      }
-
-    // Compute squared distances from the vertices to the center
-    VarVec XCd2(3, NULL);
-    XCd2[0] = DistanceSqr(p, XT[0], C);
-    XCd2[1] = DistanceSqr(p, XT[1], C);
-    XCd2[2] = DistanceSqr(p, XT[2], C);
-
-    // Create radius variable
-    Expression *Rc = CR[trit.GetIndex()] = p->AddVariable("Rc", sqrt(XCd2[0]->Evaluate()), 0);
-
-    // |C-X|^2 = R^2
-    for(int j = 0; j < 3; j++)
-      {
-      p->AddConstraint(new BinaryDifference(p, XCd2[j], new Square(p,Rc)), 0.0, 0.0);
-      }
-
-    /*
-
-    // Add variables for cotan alpha
-    for(int j = 0; j < 3; j++)
-      {
-      // Edge length opposite vertex j
-      Expression *elen = p->AddVariable("len", sqrt(elen2[j]->Evaluate()), 0);
-
-      // Make it equal its square!
-      Expression *conEdge = new BinaryDifference(p, new Square(p, elen), elen2[j]);
-      p->AddConstraint(conEdge, 0, 0);
-
-      // The distance from circumcenter to edge
-      Expression *height = p->AddVariable("hgt", sqrt(Rc->Evaluate()*Rc->Evaluate() - 0.25 * elen->Evaluate() * elen->Evaluate()), 0);
-
-      // Simple linking expressions: 0.25 * elen^2 + h^2 = r^2
-
-      Expression *conPytha = new TernarySum(p,
-                                            new ScalarProduct(p, new Square(p, elen), 0.25),
-                                            new Square(p, height),
-                                            new Negation(p, new Square(p, Rc)));
-
-      p->AddConstraint(conPytha, 0, 0);
-
-      // The cotan we care about!
-      Expression *cotA = p->AddVariable("cotA", height->Evaluate() / elen->Evaluate(), 0);
-
-      // cot-alpha * elen = height
-      p->AddConstraint(new BinaryDifference(p,
-                                            new BinaryProduct(p, cotA, elen),
-                                            height), 0, 0);
-
-      printf("CotA[%d] : %f\n", j, cotA->Evaluate());
-      }
-      */
-
-    }
-
-#endif
-
-#define ASPECTRATIO 1
-
-#ifdef ASPECTRATIO_OLD
-
-  // ------------------------------------------------------------------------
-  // Add a constraint on triangle aspect ratios
-  // ------------------------------------------------------------------------
-
-  // To create this constraint, we need to first create a variable for the
-  // length of every edge in the mesh.
-  typedef std::pair<int, int> EdgeType;
-  typedef std::map<EdgeType, Expression *> EdgeLenMap;
-  EdgeLenMap edgeLenMap, edgeLenMapSqr;
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Look across from each vertex in the triangle
-    VarVec edge(3, NULL);
-    VarVec edgesq(3, NULL);
-
-    for(int j = 0; j < 3; j++)
-      {
-      int k1 = trit.GetBoundaryIndex((j + 1) % 3);
-      int k2 = trit.GetBoundaryIndex((j + 2) % 3);
-      EdgeType e = std::make_pair(std::min(k1, k2), std::max(k1, k2));
-
-      EdgeLenMap::const_iterator eit = edgeLenMap.find(e);
-      if(eit == edgeLenMap.end())
-        {
-        // Compute the squared length of the egde
-        Expression *len2 = new TernaryGradientMagnitudeSqr(
-              p,
-              new BinaryDifference(p, X[k1][0],X[k2][0]),
-              new BinaryDifference(p, X[k1][1],X[k2][1]),
-              new BinaryDifference(p, X[k1][2],X[k2][2]));
-
-        // Create the variable for this edge
-        edge[j] = p->AddVariable("len", sqrt(len2->Evaluate()), 0);
-        edgesq[j] = new Square(p, edge[j]);
-
-        // Constrain the variable to the actual length
-        p->AddConstraint(new BinaryDifference(p, len2, edgesq[j]), 0, 0);
-
-        // Store the edge length variable
-        edgeLenMap[e] = edge[j];
-        edgeLenMapSqr[e] = edgesq[j];
-        }
-      else
-        {
-        edge[j] = eit->second;
-        edgesq[j] = edgeLenMapSqr[e];
-        }
-      }
-
-/*
-    // Create a variable for the cosine of each angle in the triangle
-    for(int j = 0; j < 3; j++)
-      {
-      int k0 = trit.GetBoundaryIndex(j);
-      int k1 = trit.GetBoundaryIndex((j + 1) % 3);
-      int k2 = trit.GetBoundaryIndex((j + 2) % 3);
-
-      // cos(theta) = dot(u,v) / (|u| * |v|)
-      Expression *UdotV = DotProduct(
-            p,
-            VectorApplyPairwise<BinaryDifference>(p, X[k1], X[k0]),
-            VectorApplyPairwise<BinaryDifference>(p, X[k2], X[k0]));
-
-      Expression *lenU = edge[(j+1) % 3];
-      Expression *lenV = edge[(j+2) % 3];
-
-      // Add the cosine of alpha with constraints on range
-      Expression *cosAlpha = p->AddVariable(
-            "cos", UdotV->Evaluate() / (lenU->Evaluate() * lenV->Evaluate()),
-            0, acos(vnl_math::pi * 15 / 180));
-
-      // Create a constraint linking the cosine
-      Expression *constr = new BinaryDifference(
-            p, new TernaryProduct(p, lenU, lenV, cosAlpha), UdotV);
-
-      p->AddConstraint(constr, 0, 0);
-      }
-*/
-
-    // Create constraints based on the cosine rule
-    double min_angle = vnl_math::pi * 20 / 180;
-    double max_cos = cos(min_angle);
-
-    for(int j = 0; j < 3; j++)
-      {
-      Expression *c = edge[j], *a = edge[(j+1) % 3], *b = edge[(j+2) % 3];
-      Expression *c2 = edgesq[j], *a2 = edgesq[(j+1) % 3], *b2 = edgesq[(j+2) % 3];
-
-      // (c^2 - 2 * a * b * cosTheta) - (a^2 + b^2)
-      Expression *constr = new BinaryDifference(
-            p,
-            new BinarySum(
-              p, c2, new ScalarProduct(p, new BinaryProduct(p, a, b), 2 * max_cos)),
-            new BinarySum(p, a2, b2));
-      p->AddConstraint(constr, 0.0, ConstrainedNonLinearProblem::UBINF);
-      }
-    }
-
-#endif
 
   // ------------------------------------------------------------------------
   // Add a constraint on minimal angle of boundary triangles
@@ -4492,249 +4407,11 @@ int main(int argc, char *argv[])
     vmb_temp.Save("/tmp/medial_debug.vtk");
     }
 
-  /*
-  double constEdgeRatio = 0.1;
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Compute the squared edge length opposite each vertex
-    Expression *edge[3];
-    for(int j = 0; j < 3; j++)
-      {
-      int k1 = trit.GetBoundaryIndex((j + 1) % 3);
-      int k2 = trit.GetBoundaryIndex((j + 2) % 3);
-      edge[j] = new TernaryGradientMagnitudeSqr(p,
-                                                new BinaryDifference(p, X[k1][0],X[k2][0]),
-                                                new BinaryDifference(p, X[k1][1],X[k2][1]),
-                                                new BinaryDifference(p, X[k1][2],X[k2][2]));
-      }
-
-    // Create the constraint for each edge
-    for(int j = 0; j < 3; j++)
-      {
-      p->AddConstraint(
-            new BinaryDifference(p, edge[j],
-                                 new ScalarProduct(p, edge[(j+1) % 3], constEdgeRatio)),
-            0.0, ConstrainedNonLinearProblem::UBINF);
-      }
-    }
-  */
-
-  // ------------------------------------------------------------------------
-  // Boundary QCQP Triangle and Edge Geometry Constraints (NEW CODE)
-  // ------------------------------------------------------------------------
-  TriangleProperties tp_bnd;
-  if(tc_bnd.min_dih_angle > 0 || tc_bnd.min_tri_angle > 0 || tc_bnd.min_tri_area > 0)
-    tp_bnd = ComputeTriangleProperties(qp, bmesh, qX, "bnd_", tc_bnd.min_tri_area);
-
-  EdgeProperties ep_bnd;
-  if(tc_bnd.min_tri_angle > 0 || regOpts.EdgeLengthWeight > 0.0)
-    ep_bnd = ComputeEdgeProperties(qp, bmesh, qX, "bnd_", 0.0);
-
-  // Boundary minimal angle constraint
-  if(tc_bnd.min_tri_angle > 0)
-    CreateTriangleMinAngleConstraints(
-          qp, bmesh, tp_bnd, ep_bnd, tc_bnd.min_tri_angle, "bnd_");
-
-  // Boundary minimal dihedral angle constraint
-  if(tc_bnd.min_dih_angle > 0)
-    {
-    // First we need to find the minimal angle for each edge, since crest edges
-    // should be allowed a larger dihedral angle than plain edges
-    vnl_matrix<double> edgewise_min_angle(bmesh->triangles.size(), 3);
-    for(unsigned int k = 0; k < bmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int v1 = bmesh->triangles[k].vertices[(d+1)%3];
-        int v2 = bmesh->triangles[k].vertices[(d+2)%3];
-        bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
-
-        // TODO: why this hard-coded value?
-        edgewise_min_angle(k, d) = isBnd ? 25.84 : tc_bnd.min_dih_angle;
-        }
-      }
-
-    // Create the actual constraints
-    CreateTriangleDihedralAngleConstraints(
-          qp, bmesh, tp_bnd, edgewise_min_angle, "bnd_");
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Medial QCQP Triangle and Edge Geometry Constraints (NEW CODE)
-  // ------------------------------------------------------------------------
-  // TODO: this is redundant, as it computes two sets of equal normals and
-  // areas for each medial triangle, one facing each boundary triangle. We
-  // could avoid this by checking for opposite triangles.
-  TriangleProperties tp_med;
-  if(tc_med.min_dih_angle > 0 || tc_med.min_tri_angle > 0 || tc_med.min_tri_area > 0)
-    tp_med = ComputeTriangleProperties(qp, mmesh, qX, "med_", tc_med.min_tri_area);
-
-  EdgeProperties ep_med;
-  if(tc_med.min_tri_angle > 0)
-    ep_med = ComputeEdgeProperties(qp, mmesh, qX, "med_", 0.0);
-
-  // Boundary dihedral angle constraint
-  if(tc_med.min_tri_angle > 0)
-    CreateTriangleMinAngleConstraints(
-          qp, mmesh, tp_med, ep_med, tc_med.min_tri_angle, "med_");
-
-  if(tc_med.min_dih_angle > 0)
-    {
-    // We first need to compute the multiplicity of each edge in the medial mesh so that we
-    // can exclude the edges that are on seam and edge curves of the medial model. Those edges
-    // are shared by a number of triangles other than two.
-    typedef std::pair<size_t, size_t> Edge;
-    std::map<Edge, unsigned int> edge_mult;
-
-    // First pass computes the edge multiplicities, visiting each edge twice
-    for(unsigned int k = 0; k < mmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        unsigned int kopp = mmesh->triangles[k].neighbors[d];
-        if(kopp != NOID && k < kopp)
-          {
-          // Is this a boundary edge?
-          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-          Edge edge(std::min(v1,v2), std::max(v1,v2));
-          auto it = edge_mult.find(edge);
-          if(it == edge_mult.end())
-            edge_mult.insert(make_pair(edge, 1));
-          else
-            it->second++;
-          }
-        }
-      }
-
-    // Minimum dihedral angle for each edge (represented by triangle/vertex)
-    vnl_matrix<double> edgewise_min_angle(bmesh->triangles.size(), 3);
-
-    // Second pass assigns minimum DA to the edges
-    for(unsigned int k = 0; k < mmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        unsigned int kopp = mmesh->triangles[k].neighbors[d];
-        if(kopp != NOID && k < kopp)
-          {
-          // Is this a boundary edge?
-          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-          Edge edge(std::min(v1,v2), std::max(v1,v2));
-          edgewise_min_angle(k,d) = (edge_mult[edge] == 2) ? tc_med.min_dih_angle : 0;
-          }
-        }
-      }
-
-    // Finally, create the constraints
-    CreateTriangleDihedralAngleConstraints(
-          qp, mmesh, tp_med, edgewise_min_angle, "med_");
-    }
-
-  // ------------------------------------------------------------------------
-  // QCQP Boundary Total Edge Length Loss (NEW CODE)
-  // ------------------------------------------------------------------------
-  // TODO: add a constraint on the angle between adjacent boundary edges, b/c
-  // that seems to become quite small sometimes and setting a minimum on it might
-  // work better than penalizing the total length
-  if(regOpts.EdgeLengthWeight > 0.0)
-    {
-    auto &loss_el = qp.AddLoss("edge_length", regOpts.EdgeLengthWeight);
-
-    // Add all the crest edges
-    for(unsigned int k = 0; k < bmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int v1 = bmesh->triangles[k].vertices[(d + 1) % 3];
-        int v2 = bmesh->triangles[k].vertices[(d + 2) % 3];
-        if(v1 < v2)
-          {
-          // Are these edge vertices?
-          if(mtbIndex[mIndex[v1]].size() == 1 && mtbIndex[mIndex[v2]].size() == 1)
-            {
-            int i_edge = ep_bnd.tri_edges(k,d);
-            loss_el.b(ep_bnd.edge_lengths(i_edge)) = 1.0;
-            }
-          }
-        }
-      }
-    }
 
 
   // ------------------------------------------------------------------------
   // Derive an image match objective
   // ------------------------------------------------------------------------
-
-#ifdef USE_DICE
-  VarVecArray sampleX;
-  VarVec sampleF;
-  Expression *objObjectIntegral, *objVolumeIntegral;
-
-  CreateOverlapObjective(p, model, &interp_new, X, M, U,
-                         &objObjectIntegral, &objVolumeIntegral,
-                         sampleX, sampleF);
-
-  /*
-  CreateAreaElementScaledOverlapObjective(p, model, &interp_new, X, M, R,
-                                          AeltX, AeltM,
-                                          &objObjectIntegral, &objVolumeIntegral,
-                                          sampleX, sampleF);
-  */
-
-
-  /*
-  VolumeOverlapEnergyTerm compterm(model, image, 3);
-  SolutionData sd(model->GetIterationContext(), model->GetAtomArray());
-  sd.ComputeIntegrationWeights();
-  compterm.ComputeEnergy(&sd);
-
-  printf("*** Overlap term report ***\n");
-  printf("ObjInt = %f, VolInt = %f, Samples = %d\n",
-         objObjectIntegral->Evaluate(),
-         objVolumeIntegral->Evaluate(),
-         sampleF.size());
-  compterm.PrintReport(std::cout);
-  */
-
-
-
-
-  /*
-
-  // Integrate match over wedges. The factor of 18 here accounts for the
-  // fact that wedgeVol is scaled by six
-  Expression *sampleScaleFactor = new Constant(
-        p, model->GetNumberOfBoundaryPoints() * 1.0 / (18 * sampleF.size()));
-
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    Expression *meanWedgeMatch = new BinaryProduct(
-          p,
-          sampleScaleFactor,
-          new TernarySum(
-            p,
-            spokeMatch[trit.GetBoundaryIndex(0)],
-            spokeMatch[trit.GetBoundaryIndex(1)],
-            spokeMatch[trit.GetBoundaryIndex(2)]));
-
-    objImageMatch->AddSummand(
-          new BinaryProduct(p, meanWedgeMatch, wedgeVol[trit.GetIndex()]));
-    }
-    */
-
-
-  // Compute a Dice-like objective value
-  double volTarget = image->ComputeObjectVolume();
-  Expression *objDice = new BinaryDifference(
-        p, new Constant(p, 1.0),
-        new ScalarProduct(p, objObjectIntegral, 1.0 / volTarget));
-
-#endif // USE_DICE
 
   // This simple objective is the displacement from the input boundary points.
   // It allows us to resolve all the constraints without fitting to new data.
@@ -4750,121 +4427,18 @@ int main(int argc, char *argv[])
             new BinaryDifference(p, X[i][2], new Constant(p, xLSQTarget[i][2]))));
     }
 
-  // ------------------------------------------------------------------------
-  // QCQP displacement objective (NEW CODE)
-  // ------------------------------------------------------------------------
-  auto &loss_disp = qp.AddLoss("disp", 1.0);
-  for(int i = 0; i < nb; i++)
-    {
-    for(unsigned int j = 0; j < 3; j++)
-      {
-      // Loss is in the form sum [ |X_i - xtarg_i|^2 ]
-      double xtarg = xLSQTarget[i][j];
-      loss_disp.A(qX(i,j), qX(i,j)) = 1.0;
-      loss_disp.b(qX(i,j)) = -2.0 * xtarg;
-      loss_disp.c() += xtarg * xtarg;
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Derive the final objective
-  // ------------------------------------------------------------------------
-
-  // obj->AddSummand(objSqDist);
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, scaleRecip), objRecipSqDist));
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 20), objImageMatch));
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.01), objSurfArea));
-
-
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.5), objSimpleBending));
-
-  // Set of objectives for fitting the model to itself
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 1), objDisplacement));
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.1), objSimpleBending));
-  // obj->AddSummand(new BinaryProduct(p, new Constant(p, 0.02), objSurfArea));
-
-  // Dice!
-  /*
-  obj->AddSummand(new ScalarProduct(p, objDice, 4 * (nb + nm)));
-  obj->AddSummand(new ScalarProduct(p, objBasisResidual, 1));
-  */
-
-
-  // ------------------------------------------------------------------------
-  // Create diffeomorphic constraints for the mesh
-  // ------------------------------------------------------------------------
-  // CreateTetgenMesh(model, image, X, p);
-
-  // ------------------------------------------------------------------------
-  // Create a kernel for smoothing the gradient
-  // ------------------------------------------------------------------------
-  /*
-  typedef ImmutableSparseMatrix<double> SparseMatrix;
-  SparseMatrix::STLSourceType kSource(p->GetNumberOfVariables());
-
-  double alpha = 0.2;
-  for(MedialBoundaryPointIterator it = model->GetBoundaryPointIterator();
-      !it.IsAtEnd(); ++it)
-    {
-    int iBnd = it.GetIndex();
-    int iAtom = it.GetAtomIndex();
-
-    for(int j = 0; j < 3; j++)
-      {
-      int idx_i = static_cast<Variable *>(X[iBnd][j])->GetIndex();
-      for(EdgeWalkAroundVertex walk(mesh, iBnd); !walk.IsAtEnd(); ++walk)
-        {
-        int k = walk.MovingVertexId();
-        int idx_j = static_cast<Variable *>(X[k][j])->GetIndex();
-        SparseMatrix::STLEntryType entry;
-        entry.first = idx_j;
-        entry.second = alpha / walk.Valence();
-        kSource[idx_i].push_back(entry);
-        }
-      kSource[idx_i].push_back(make_pair(idx_i, 1.0 - alpha));
-      }
-    }
-
-  // Initialize the rest of the matrix to identity
-  for(int i = 0; i < kSource.size(); i++)
-    {
-    if(kSource[i].size() == 0)
-      kSource[i].push_back(make_pair(i, 1.0));
-    }
-
-  // Create a sparse matrix and multiply by itself a couple times
-  SparseMatrix K;
-  K.SetFromSTL(kSource, kSource.size());
-  for(int q = 0; q < 2; q++)
-    SparseMatrix::Multiply(K, K, K);
-  p->SetGradientSmoothingKernel(K);
-  */
-
-  // Save the true objective
-  // SaveGradient(p, model, X, obj, "grad_obj_before.vtk");
-
-
-
-#ifdef USE_DICE
-  std::cout << "Dice objective: " << 1- objDice->Evaluate() << std::endl;
-  std::cout << "Image match: " << objObjectIntegral->Evaluate() << std::endl;
-  std::cout << "Volume integral: " << objVolumeIntegral->Evaluate() << std::endl;
-  std::cout << "Target volume: " << volTarget << std::endl;
-
-  // Save the sample and image values at samples
-  SaveSamples(sampleX, sampleF, "samples_before.vtk");
-
-  // Plot the gradient of the problem
-  SaveGradient(p, model, X, objDice, "grad_obj_dice_before.vtk");
-  SaveGradient(p, model, X, objSimpleBending, "grad_obj_bend_before.vtk");
-#endif
-
-
   // Test some derivatives;
   // DerivativeTest(p, 1000);
 
   // Solve the problem
   SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(p);
+
+  // Build the new efficient quadratic problem
+  BCMRepQuadraticProblemBuilder qp_builder(tmpl, regOpts, tc_bnd, tc_med);
+  qp_builder.BuildGeometry();
+  qp_builder.BuildRegularization();
+  qp_builder.BuildLeastSquaresObjective(xLSQTarget);
+  qcqp::Problem &qp = qp_builder.GetProblem();
   SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
 
   // Create a file for dumping the constraint info
@@ -4916,23 +4490,6 @@ int main(int argc, char *argv[])
   // Print a message describing IpOpt
   app->PrintCopyrightMessage();
 
-  // Apply some random noise to X and N for better comparison
-  vnl_random rndl;
-  for(unsigned int i = 0; i < nb; i++)
-    {
-    for(unsigned int j = 0; j < 3; j++)
-      {
-      auto *x = dynamic_cast<Variable *>(X[i][j]);
-      x->SetValue(x->Evaluate() + rndl.normal() * 0.1);
-      qX(i,j) = x->Evaluate();
-
-      auto *n = dynamic_cast<Variable *>(N[i][j]);
-      n->SetValue(n->Evaluate() + rndl.normal() * 0.1);
-      qN(i,j) = n->Evaluate();
-      }
-    }
-  p->MakeChildrenDirty();
-
   // Combine the regularization objectives
   WeightedSumGenerator wsgObj(p);
   wsgObj.AddTerm(objBasisResidual, regOpts.Weight);
@@ -4949,6 +4506,23 @@ int main(int argc, char *argv[])
   // Configure the problem
   p->SetObjective(obj);
   p->SetupProblem(true);
+
+  // Apply some random noise to X and N for better comparison
+  vnl_random rndl;
+  for(unsigned int i = 0; i < nb; i++)
+    {
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      auto *x = dynamic_cast<Variable *>(X[i][j]);
+      x->SetValue(x->Evaluate() + rndl.normal() * 0.1);
+      qp_builder.qX(i,j) = x->Evaluate();
+
+      auto *n = dynamic_cast<Variable *>(N[i][j]);
+      n->SetValue(n->Evaluate() + rndl.normal() * 0.1);
+      qp_builder.qN(i,j) = n->Evaluate();
+      }
+    }
+  p->MakeChildrenDirty();
 
   // Evaluate the objective
   ocfit.PrintReport();

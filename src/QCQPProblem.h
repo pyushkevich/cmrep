@@ -320,7 +320,7 @@ protected:
   // Sparse storage for the components a_ij
   std::map< std::tuple<int,int>, double> m_Aij;
   std::map< int, double> m_bi;
-  double m_c;
+  double m_c = 0.0;
 
   // Set of all variables that we depend on
   std::unordered_set<int> m_Dependencies;
@@ -503,7 +503,10 @@ public:
     // efficient data structures for these constraints
     double total_loss = 0;
     for(auto *l : m_Losses)
-      total_loss += l->Evaluate(x) * l->weight;
+      {
+      double value = l->Evaluate(x);
+      total_loss += value * l->weight;
+      }
 
     return total_loss;
   }
