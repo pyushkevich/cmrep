@@ -99,9 +99,20 @@ public:
 
   ClosestPointMatcher(vtkPolyData *target, int nClusterDivisions = 32);
 
+  SMLVec3d FindClosestToTarget(const SMLVec3d &x);
+
   std::vector<SMLVec3d> FindClosestToTarget(VarVecArray &X);
 
-  std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, VarVecArray &X);
+  std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, std::vector<SMLVec3d> &X);
+  std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
+    {
+    std::vector<SMLVec3d> X_flat(X.size());
+    for(unsigned int i = 0; i < X.size(); i++)
+      for(unsigned int j = 0; j < 3; j++)
+        X_flat[i][j] = X[i][j]->Evaluate();
+
+    return FindClosestToSource(mesh, X_flat);
+    }
 
   int GetNumberOfTargetPointsUsed()
   { return m_ReducedTarget->GetNumberOfPoints(); }
@@ -147,6 +158,17 @@ ClosestPointMatcher
   wr->SetInputConnection(clu->GetOutputPort());
   wr->SetFileName("clusty.vtk");
   wr->Update();
+  }
+
+SMLVec3d ClosestPointMatcher::FindClosestToTarget(const SMLVec3d &x)
+{
+  double xs[3], d2, d;
+  int subid;
+  vtkIdType cellid;
+
+  m_TargetLocator->FindClosestPoint(x.data_block(), xs, cellid, subid, d2);
+
+  return SMLVec3d(xs);
 }
 
 std::vector<SMLVec3d>
@@ -159,21 +181,14 @@ ClosestPointMatcher::FindClosestToTarget(VarVecArray &X)
   for(int i = 0; i < X.size(); i++)
     {
     SMLVec3d xi = gnlp::VectorEvaluate(X[i]);
-
-    double xs[3], d2, d;
-    int subid;
-    vtkIdType cellid;
-
-    m_TargetLocator->FindClosestPoint(xi.data_block(), xs, cellid, subid, d2);
-
-    cp[i] = SMLVec3d(xs);
+    cp[i] = FindClosestToTarget(xi);
     }
 
   return cp;
 }
 
 std::vector<ClosestPointMatcher::MatchLocation>
-ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
+ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, std::vector<SMLVec3d> &X)
 {
   // Create a VTK points object
   vtkSmartPointer<vtkPoints> out_pts = vtkSmartPointer<vtkPoints>::New();
@@ -181,8 +196,7 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
 
   for(int i = 0; i < X.size(); i++)
     {
-    out_pts->InsertNextPoint(
-          X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
+    out_pts->InsertNextPoint(X[i][0], X[i][1], X[i][2]);
     }
 
   // Create the polydata
@@ -227,13 +241,14 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
 
     // Solve a system for the barycentric coordinates
     Triangle &T = mesh->triangles[cellid];
-    SMLVec3d A = VectorEvaluate(X[T.vertices[0]]);
-    SMLVec3d B = VectorEvaluate(X[T.vertices[1]]);
-    SMLVec3d C = VectorEvaluate(X[T.vertices[2]]);
+    SMLVec3d A = X[T.vertices[0]];
+    SMLVec3d B = X[T.vertices[1]];
+    SMLVec3d C = X[T.vertices[2]];
 
     vnl_matrix<double> W(3, 2);
-    W.set_column(0, B-A);
-    W.set_column(1, C-A);
+    SMLVec3d delBA = B - A, delCA = C - A;
+    W.set_column(0, delBA.as_ref());
+    W.set_column(1, delCA.as_ref());
     SMLVec3d v = SMLVec3d(xs) - A;
 
     vnl_matrix<double> WtW = W.transpose() * W;
@@ -2758,16 +2773,20 @@ public:
     }
 
   // Build the geometry without attachment terms
-  void BuildGeometry();
+  void BuildGeometry(const std::vector<SMLVec3d> &x);
 
   // Build the regularization terms
-  void BuildRegularization();
+  void BuildRegularization(const std::vector<SMLVec3d> &x = std::vector<SMLVec3d>());
 
   // Build the least squares objective
   void BuildLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget);
 
+  // Build the ICP objective
+  void BuildICPObjective(ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model);
+
   // Get the wrapped problem
   qcqp::Problem &GetProblem() { return qp; }
+
 
 public:
   // Parameters
@@ -2838,7 +2857,7 @@ BCMRepQuadraticProblemBuilder::BCMRepQuadraticProblemBuilder(
     mtbIndex[mIndex[i]].push_back(i);
 }
 
-void BCMRepQuadraticProblemBuilder::BuildGeometry()
+void BCMRepQuadraticProblemBuilder::BuildGeometry(const std::vector<SMLVec3d> &x)
 {
   // The boundary positions
   qX = qp.AddVariableTensor<2>("X", {nb, 3});
@@ -2861,7 +2880,7 @@ void BCMRepQuadraticProblemBuilder::BuildGeometry()
   // Assign the X variables
   for(int i = 0; i < nb; i++)
     for(int j = 0; j < 3; j++)
-      qX(i,j) = tmpl.x[i][j];
+      qX(i,j) = x[i][j];
 
   // Compute crest indices
   for(int i = 0; i < nb; i++)
@@ -3268,7 +3287,7 @@ void BCMRepQuadraticProblemBuilder::BuildGeometry()
     }
 }
 
-void BCMRepQuadraticProblemBuilder::BuildRegularization()
+void BCMRepQuadraticProblemBuilder::BuildRegularization(const std::vector<SMLVec3d> &x)
 {
   // ------------------------------------------------------------------------
   // Define the QCQP regularization objective (NEW)
@@ -3293,7 +3312,7 @@ void BCMRepQuadraticProblemBuilder::BuildRegularization()
 
     // Assign the control point initial values
     for(int i = 0; i <  pmesh.nVertices; i++)
-      qXC(i).from_vector(tmplParent.x[i]);
+      qXC(i).from_vector<3>(x.size() ? x[i] : tmplParent.x[i]);
 
     // Apply the weight matrix to compute the residual
     ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
@@ -3330,7 +3349,7 @@ void BCMRepQuadraticProblemBuilder::BuildRegularization()
     qXC = qp.AddVariableTensor<2>("XC", { (int) regOpts.BasisSize, 3});
     for(int i = 0; i < regOpts.BasisSize; i++)
       for(int j = 0; j < 3; j++)
-        qXC(i,j) = 0.0;
+        qXC(i,j) = x.size() ? x[i][j] : 0.0;
 
     // Define the objective on the basis
     for(int iBnd = 0; iBnd < nb; iBnd++)
@@ -3400,6 +3419,76 @@ void BCMRepQuadraticProblemBuilder::BuildLeastSquaresObjective(const std::vector
       loss_disp.c() += xtarg * xtarg;
       }
     }
+  }
+
+void BCMRepQuadraticProblemBuilder::BuildICPObjective(
+    ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model)
+{
+  // We need a vector with the X locations for later
+  std::vector<SMLVec3d> x(nb);
+
+  // Create the distance from model to target loss
+  auto &loss_to_target = qp.AddLoss("model_to_target", w_model_to_target);
+  for(int i = 0; i < nb; i++)
+    {
+    x[i] = qX(i).as_vector<3>();
+    SMLVec3d xtarg = cpm.FindClosestToTarget(x[i]);
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      // Loss is in the form sum [ |X_i - xtarg_i|^2 ]
+      loss_to_target.A(qX(i,j), qX(i,j)) = 1.0;
+      loss_to_target.b(qX(i,j)) = -2.0 * xtarg[j];
+      loss_to_target.c() += xtarg[j] * xtarg[j];
+      }
+    }
+
+  // Create the distance from target to model loss
+  auto &loss_to_model = qp.AddLoss("target_to_model", w_target_to_model);
+
+  // Compute the match points
+  auto x_match = cpm.FindClosestToSource(bmesh, x);
+
+  for(int i = 0; i < x_match.size(); i++)
+    {
+    // Get the match triangle and vertices
+    auto &loc = x_match[i];
+    size_t *v = bmesh->triangles[loc.iTriangle].vertices;
+
+    // Iterate over dimension
+    for(int d = 0; d < 3; d++)
+      {
+      // Use linear expression to describe the distance long dimension d
+      qcqp::LinearExpression delta;
+
+      // Use the barycentric coordinates to express match location as weighted sum
+      for(unsigned int j = 0; j < 3; j++)
+        delta.b(qX(v[j], d)) = loc.xBary[j];
+      delta.c() = -loc.xTarget[d];
+
+      // Add quadratic expression
+      loss_to_model.add_dotted(delta, delta);
+      }
+    }
+  }
+
+void PrintLossReport(qcqp::Problem::LossReport &l_init, qcqp::Problem::LossReport &l_curr)
+{
+  printf("%30s   %10s %10s   %10s   %10s\n", "TERM", "RawValue", "Weight", "WgtValue", "Delta");
+  double total = 0.0, total_init = 0.0;
+  for(auto it: l_curr)
+    {
+    double val = std::get<1>(it.second);
+    double weight = std::get<0>(it.second);
+    double val_init = std::get<1>(l_init[it.first]);
+
+    printf("%30s   %10.4f %10.4f   %10.4f   %10.4f\n",
+           it.first.c_str(), val, weight, val * weight, val * weight - val_init * weight);
+
+    total += val * weight;
+    total_init += val_init * weight;
+    }
+  printf("%30s   %10.4s %10.4s   %10.4f   %10.4f\n",
+         "TOTAL OBJECTIVE", "", "", total, total - total_init);
 }
 
 
@@ -4435,7 +4524,7 @@ int main(int argc, char *argv[])
 
   // Build the new efficient quadratic problem
   BCMRepQuadraticProblemBuilder qp_builder(tmpl, regOpts, tc_bnd, tc_med);
-  qp_builder.BuildGeometry();
+  qp_builder.BuildGeometry(tmpl.x);
   qp_builder.BuildRegularization();
   qp_builder.BuildLeastSquaresObjective(xLSQTarget);
   qcqp::Problem &qp = qp_builder.GetProblem();
@@ -4461,7 +4550,7 @@ int main(int argc, char *argv[])
   // Note: The following choices are only examples, they might not be
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
-  app->Options()->SetBoolValue("print_timing_statistics", true);
+  app->Options()->SetBoolValue("print_timing_statistics", false);
   app->Options()->SetStringValue("linear_solver", regOpts.Solver);
   if(regOpts.HSLDylibPath.size())
     app->Options()->SetStringValue("hsllib", regOpts.HSLDylibPath);
@@ -4526,6 +4615,11 @@ int main(int argc, char *argv[])
 
   // Evaluate the objective
   ocfit.PrintReport();
+
+  // Print the QP objective
+  vnl_vector<double> val_init = qp.GetVariableValues();
+  qcqp::Problem::LossReport lr_init = qp.GetLossReport(val_init.data_block());
+  PrintLossReport(lr_init, lr_init);
 
   // Now the QP
   qp.SetupProblem();
@@ -4768,7 +4862,6 @@ int main(int argc, char *argv[])
     }
   printf("Total: %d\n", p_count);
 
-
   // Ask Ipopt to solve the problem
   app->Options()->SetStringValue("derivative_test", "none");
   status = app->OptimizeTNLP(GetRawPtr(q_ip));
@@ -4777,6 +4870,13 @@ int main(int argc, char *argv[])
     printf("\n\n*** Error %d during optimization!\n", (int) status);
     return -1;
     }
+
+  // Get the current optimal X values
+  std::vector<SMLVec3d> x_opt(nb), xc_opt(qp_builder.qXC.GetFlatSize() / 3);
+  for(unsigned int i = 0; i < nb; i++)
+    x_opt[i] = qp_builder.qX(i).as_vector<3>();
+  for(unsigned int i = 0; i < xc_opt.size(); i++)
+    xc_opt[i] = qp_builder.qXC(i).as_vector<3>();
 
   // Ask Ipopt to solve the problem
   app->Options()->SetStringValue("derivative_test", "none");
@@ -4787,10 +4887,13 @@ int main(int argc, char *argv[])
     return -1;
     }
 
-  return -1;
-
   // Evaluate the objective
   ocfit.PrintReport();
+
+  // Print the QP objective
+  vnl_vector<double> val_final = qp.GetVariableValues();
+  qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
+  PrintLossReport(lr_init, lr_final);
 
   // Save the current state
   snprintf(buffer, 1024, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
@@ -4808,11 +4911,54 @@ int main(int argc, char *argv[])
     // The scale between the two distance functions
     double recip_scale = nb * 1.0 / cpmatcher.GetNumberOfTargetPointsUsed();
 
-
     // Repeat this several times
     Expression *objSqDist, *objRecipSqDist;
     for(int i = 0; i < regOpts.MaxICPIter; i++)
       {
+      // Create a new QP to solve
+      BCMRepQuadraticProblemBuilder qp_builder_icp(tmpl, regOpts, tc_bnd, tc_med);
+      qp_builder_icp.BuildGeometry(x_opt);
+      qp_builder_icp.BuildRegularization(xc_opt);
+      qp_builder_icp.BuildICPObjective(cpmatcher, 1.0, recip_scale);
+      qcqp::Problem &qp = qp_builder_icp.GetProblem();
+      SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
+
+      // Now the QP
+      qp.SetupProblem();
+      printf("QP Jacobian size (%zu, %zu), NNZ %zu\n",
+             qp.GetConstraintsJacobian().GetNumberOfRows(),
+             qp.GetConstraintsJacobian().GetNumberOfColumns(),
+             qp.GetConstraintsJacobian().GetNumberOfSparseValues());
+
+      printf("QP Hessian size (%zu, %zu), NNZ %zu\n",
+             qp.GetHessianOfLagrangean().GetNumberOfRows(),
+             qp.GetHessianOfLagrangean().GetNumberOfColumns(),
+             qp.GetHessianOfLagrangean().GetNumberOfSparseValues());
+
+      // Print the QP objective
+      vnl_vector<double> val_init = qp.GetVariableValues();
+      qcqp::Problem::LossReport lr_init = qp.GetLossReport(val_init.data_block());
+      PrintLossReport(lr_init, lr_init);
+
+      // Solve this qp
+      status = app->OptimizeTNLP(GetRawPtr(q_ip));
+      if(status < 0)
+        {
+        printf("\n\n*** Error %d during optimization!\n", (int) status);
+        return -1;
+        }
+
+      // Get the current optimal X values
+      for(unsigned int i = 0; i < nb; i++)
+        x_opt[i] = qp_builder_icp.qX(i).as_vector<3>();
+      for(unsigned int i = 0; i < xc_opt.size(); i++)
+        xc_opt[i] = qp_builder_icp.qXC(i).as_vector<3>();
+
+      // Print the QP objective
+      vnl_vector<double> val_final = qp.GetVariableValues();
+      qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
+      PrintLossReport(lr_init, lr_final);
+
       // ------------------------------------------------------------------------
       // Construct the first part of the objective function
       // ------------------------------------------------------------------------

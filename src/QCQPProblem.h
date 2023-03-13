@@ -118,7 +118,7 @@ public:
   ElementRef &operator = (double x) { v.data[offset] = x; return *this; }
 
   template <unsigned int N>
-  ElementRef &from_vector(vnl_vector_fixed<double, N> &x)
+  ElementRef &from_vector(const vnl_vector_fixed<double, N> &x)
     {
     for(unsigned int i = 0; i < N; i++)
       v.data[offset + i] = x[i];
@@ -462,6 +462,9 @@ public:
   /** Get number of registered constraints */
   unsigned int GetNumberOfConstraints() const { return m_Constraints.size(); }
 
+  /** Get number of registered constraints */
+  unsigned int GetNumberOfLosses() const { return m_Losses.size(); }
+
   /** Get the sparse array used to compute the Jacobian */
   SparseTensor &GetConstraintsJacobian() { return m_Jacobian; }
 
@@ -494,6 +497,18 @@ public:
     m_VariableValue[i] = x;
   }
 
+  /** Get all variables as a flat array */
+  vnl_vector<double> GetVariableValues()
+    {
+    vnl_vector<double> x(m_Size);
+    for(auto v : m_Variables)
+      {
+      for(int i = 0; i < v->flat_size; i++)
+        x[v->start_index+i] = v->data[i];
+      }
+    return x;
+    }
+
   /** Compute the objective function for given x */
   template <typename T>
   double EvaluateLoss(const T* x)
@@ -510,6 +525,19 @@ public:
 
     return total_loss;
   }
+
+  using LossReport = std::map< std::string, std::tuple<double, double> >;
+
+  /** Print the loss report */
+  template <typename T>
+  LossReport GetLossReport(const T* x)
+  {
+    LossReport report;
+    for(auto *l : m_Losses)
+      report[l->name] = { l->weight, l->Evaluate(x) };
+    return report;
+  }
+
 
   /** Compute the gradient of the objective function for given x */
   template <typename T>
