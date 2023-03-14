@@ -2784,6 +2784,12 @@ public:
   // Build the ICP objective
   void BuildICPObjective(ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model);
 
+  // Save the current medial mesh
+  void SaveBoundaryMesh(const char *fn);
+
+  // Save the current medial mesh
+  void SaveMedialMesh(const char *fn);
+
   // Get the wrapped problem
   qcqp::Problem &GetProblem() { return qp; }
 
@@ -3469,7 +3475,159 @@ void BCMRepQuadraticProblemBuilder::BuildICPObjective(
       loss_to_model.add_dotted(delta, delta);
       }
     }
-  }
+}
+
+void BCMRepQuadraticProblemBuilder::SaveBoundaryMesh(const char *fn)
+{
+  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+  pts->Allocate(nb);
+
+  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+  rad->SetNumberOfComponents(1);
+  rad->Allocate(nb);
+  rad->SetName("Radius");
+
+  vtkSmartPointer<vtkIntArray> mix = vtkSmartPointer<vtkIntArray>::New();
+  mix->SetNumberOfComponents(1);
+  mix->Allocate(nb);
+  mix->SetName("MedialIndex");
+
+  vtkSmartPointer<vtkIntArray> sdepth = vtkSmartPointer<vtkIntArray>::New();
+  sdepth->SetNumberOfComponents(1);
+  sdepth->Allocate(nb);
+  sdepth->SetName("SubdivisionDepth");
+
+  vtkSmartPointer<vtkIntArray> mult = vtkSmartPointer<vtkIntArray>::New();
+  mult->SetNumberOfComponents(1);
+  mult->Allocate(nb);
+  mult->SetName("Tangency");
+
+  vtkSmartPointer<vtkFloatArray> norm = vtkSmartPointer<vtkFloatArray>::New();
+  norm->SetNumberOfComponents(3);
+  norm->Allocate(nb);
+
+  for(int i = 0; i < nb; i++)
+    {
+    int j = mIndex[i];
+    pts->InsertNextPoint(qX(i,0), qX(i,1), qX(i,1));
+    norm->InsertNextTuple3(qN(i,0), qN(i,1), qN(i,1));
+    rad->InsertNextTuple1(qR(j));
+    mix->InsertNextTuple1(j);
+    mult->InsertNextTuple1(mtbIndex[j].size());
+    if(tmpl.subDepth.size())
+      sdepth->InsertNextTuple1(tmpl.subDepth[i]);
+    }
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->Allocate(bmesh->triangles.size());
+  pd->SetPoints(pts);
+  pd->GetPointData()->SetNormals(norm);
+  pd->GetPointData()->AddArray(mix);
+  pd->GetPointData()->AddArray(mult);
+  pd->GetPointData()->AddArray(rad);
+
+  if(tmpl.subDepth.size())
+    pd->GetPointData()->AddArray(sdepth);
+
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    vtkIdType vtx[3];
+    for(int j = 0; j < 3; j++)
+      vtx[j] = bmesh->triangles[i].vertices[j];
+    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+    }
+
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+  writer->SetInputData(pd);
+  writer->SetFileName(fn);
+  writer->Update();
+}
+
+void BCMRepQuadraticProblemBuilder::SaveMedialMesh(const char *fn)
+{
+  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+  pts->Allocate(nm);
+
+  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
+  rad->SetNumberOfComponents(1);
+  rad->Allocate(nm);
+  rad->SetName("Radius Function");
+
+  vtkSmartPointer<vtkFloatArray> spoke[3];
+
+  spoke[0] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[0]->SetNumberOfComponents(3);
+  spoke[0]->Allocate(nm);
+  spoke[0]->SetName("Spoke1");
+
+  spoke[1] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[1]->SetNumberOfComponents(3);
+  spoke[1]->Allocate(nm);
+  spoke[1]->SetName("Spoke2");
+
+  spoke[2] = vtkSmartPointer<vtkFloatArray>::New();
+  spoke[2]->SetNumberOfComponents(3);
+  spoke[2]->Allocate(nm);
+  spoke[2]->SetName("Spoke3");
+
+  for(int i = 0; i < nm; i++)
+    {
+    vnl_vector_fixed<double, 3> xm;
+    for(int j = 0; j < 3; j++)
+      xm[j] = qM(i,j);
+
+    pts->InsertNextPoint(xm[0], xm[1], xm[2]);
+    rad->InsertNextTuple1(qR(i));
+
+    std::vector<int> &ix = mtbIndex[i];
+
+    vnl_vector_fixed<double, 3> xs;
+    for(int k = 0; k < std::min((int) ix.size(), 3); k++)
+      {
+      for(int j = 0; j < 3; j++)
+        xs[j] = qX(ix[k],j) - xm[j];
+      spoke[k]->InsertNextTuple3(xs[0], xs[1], xs[2]);
+      }
+    for(int q = ix.size(); q < 3; q++)
+      {
+      spoke[q]->InsertNextTuple3(xs[0], xs[1], xs[2]);
+      }
+    }
+
+  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
+  pd->Allocate(bmesh->triangles.size());
+  pd->SetPoints(pts);
+  pd->GetPointData()->SetScalars(rad);
+  pd->GetPointData()->AddArray(spoke[0]);
+  pd->GetPointData()->AddArray(spoke[1]);
+  pd->GetPointData()->AddArray(spoke[2]);
+
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    vtkIdType vtx[3];
+    for(int j = 0; j < 3; j++)
+      vtx[j] = mIndex[bmesh->triangles[i].vertices[j]];
+    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
+    }
+
+  if(tp_med.triangle_areas.GetFlatSize())
+    {
+    vtkSmartPointer<vtkFloatArray> t_area = vtkSmartPointer<vtkFloatArray>::New();
+    t_area->SetNumberOfComponents(1);
+    t_area->Allocate(bmesh->triangles.size());
+    t_area->SetName("Triangle area");
+
+    for(int i = 0; i < bmesh->triangles.size(); i++)
+      t_area->InsertNextTuple1(tp_med.triangle_areas(i));
+
+    pd->GetCellData()->AddArray(t_area);
+    }
+
+  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+  writer->SetInputData(pd);
+  writer->SetFileName(fn);
+  writer->Update();
+}
 
 void PrintLossReport(qcqp::Problem::LossReport &l_init, qcqp::Problem::LossReport &l_curr)
 {
@@ -3661,20 +3819,11 @@ int main(int argc, char *argv[])
   BCMTemplate tmpl;
   tmpl.Load(fnTemplate.c_str());
 
-  // We will restrict our operations to a boundary triangle mesh and a set of medial
-  // atom indices for each point on the triangle mesh
-  TriangleMesh *bmesh = &tmpl.bmesh;
-
   // Get the number of boundary points
-  int nb = bmesh->nVertices;
-
-  // Initialize the data we are extracting from the boundary mesh
-  std::vector<int> &mIndex = tmpl.mIndex;
-  std::vector<int> &subDepth = tmpl.subDepth;
-  std::vector<SMLVec3d> &xInput = tmpl.x;
+  int nb = tmpl.bmesh.nVertices;
 
   // Load the target vertex coordintates if requesting LSQ fit
-  std::vector<SMLVec3d> xLSQTarget = xInput;
+  std::vector<SMLVec3d> xLSQTarget = tmpl.x;
   if(action == ACTION_FIT_SELF)
     {
     BCMTemplate lsq_target;
@@ -3682,845 +3831,11 @@ int main(int argc, char *argv[])
     xLSQTarget = lsq_target.x;
     }
 
-  // At this point, we are only working with bMesh and mIndex and xInput
-
-  // Get the number of medial points. TODO: we need to make sure that every
-  // index between 0 and nm is represented.
-  int nm = 1 + *std::max_element(mIndex.begin(), mIndex.end());
-
-  // Create a list of boundary atoms for each medial atom
-  typedef std::vector<std::vector<int> > MedialToBoundaryIndex;
-  MedialToBoundaryIndex mtbIndex(nm);
-  for(int i = 0; i < nb; i++)
-    {
-    mtbIndex[mIndex[i]].push_back(i);
-    }
-
-
   // Load the target mesh
   vtkPolyData *target = ReadVTKMesh(fnTarget.c_str());
 
-  // Load the target image
-  /*
-  BinaryImage imgBinary;
-  imgBinary.LoadFromFile(targetimage);
-
-  // Smooth and turn into floating point
-  FloatImage *image = new FloatImage();
-  image->SetToBlurredBinary(&imgBinary, 0.2);
-  image->SetOutsideValue(-1.0);
-
-  // The new jet interpolator
-  ImageJetInterpolator interp_new;
-  interp_new.SetInputImage(image->GetInternalImage()->GetInternalImage(), -1.0);
-
-  // Test the interpolator
-  SMLVec3d xProbe(-69.6316, -118.364, 56.4);
-
-  ImageJetInterpolator::Vec3 gNew;
-  ImageJetInterpolator::Mat3 hNew;
-  double newval;
-  interp_new.EvaluateAtPhysicalPoint(xProbe, newval, gNew, hNew);
-  printf("New value %f, gradient [%f %f %f]\n", newval, gNew[0], gNew[1], gNew[2]);
-
-  for(int i = 0; i < 3; i++)
-    {
-    SMLVec3d eps(0, 0, 0); eps[i] = 0.001;
-    ImageJetInterpolator::Vec3 g1, g2;
-    ImageJetInterpolator::Mat3 hDummy;
-    double f1, f2;
-    interp_new.EvaluateAtPhysicalPoint(xProbe+eps, f2, g2, hDummy);
-    interp_new.EvaluateAtPhysicalPoint(xProbe-eps, f1, g1, hDummy);
-    printf("Dx[%d]:   A = %f   N = %f\n", i, gNew[i], (f2-f1) / 0.002);
-
-    for(int j = 0; j < 3; j++)
-      printf("DDx[%d][%d]:   A = %f   N = %f\n", i, j, hNew[i][j], (g2[j]-g1[j]) / 0.002);
-    }
-    */
-
-  // Create the optimization problem
-  ConstrainedNonLinearProblem *p = new ConstrainedNonLinearProblem();
-
-  // The boundary positions
-  VarVecArray X(nb, VarVec(3, NULL));
-
-  // The medial positions
-  VarVecArray M(nm, VarVec(3, NULL));
-
-  // The radius values
-  VarVec R(nm, NULL);
-
-  // The boundary normal vectors
-  VarVecArray N(nb, VarVec(3, NULL));
-
-  // The vectors U from the medial axis to the boundary. They are the same
-  // as -R*N. They appear in multiple places though, so we should store them
-  VarVecArray U(nb, VarVec(3, NULL));
-
-  // The triangle areas, normals and edge lengths on the boundary surface
-  // and on the medial surface (to avoid square roots)
-  VarVec taX, taM;
-  VarVecArray NT_X, TEL_X, NT_M, TEL_M;
-
   // A buffer for making variable names
   char buffer[1024];
-
-  // ------------------------------------------------------------------------
-  // Configure the boundary point variables
-  // ------------------------------------------------------------------------
-
-  // Configure the medial point variables
-  for(int i = 0; i < nb; i++)
-    {
-    SMLVec3d x = xInput[i];
-
-    // Set up the medial coordinate and normal
-    for(int j = 0; j < 3; j++)
-      {
-      snprintf(buffer, 16, "X[%d,%d]", i, j);
-      X[i][j] = p->AddVariable(buffer, x[j]);
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Configure the constraints on the boundary normal
-  // ------------------------------------------------------------------------
-
-  // Create a LoopScheme for specifying normal vector constraints
-  LoopTangentScheme lts;
-  lts.SetMesh(bmesh);
-
-  // Expressions describing Xu, Xv, Nu, Nv at each point on the boundary
-  VarVecArray Xd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
-  VarVecArray Nd[] = { VarVecArray(nb, VarVec(3, NULL)), VarVecArray(nb, VarVec(3, NULL)) };
-
-  //
-
-  // Expression for the first fundamental and the shape operator
-  VarVec curv_mean(nb, NULL);
-  VarVec curv_gauss(nb, NULL);
-  VarVec curv_k1(nb, NULL);
-  VarVec curv_k2(nb, NULL);
-
-  // Add the constraints relating each normal to the neighboring vertices
-  for(int i = 0; i < nb; i++)
-    {
-    // Repeat for u and v directions
-    for(int d = 0; d < 2; d++)
-      {
-      BigSum *Xdi[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
-
-      double wi = lts.GetOwnWeight(d, i);
-      for(int j = 0; j < 3; j++)
-        {
-        Xdi[j]->AddSummand(new ScalarProduct(p, X[i][j], wi));
-        }
-
-      for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
-        {
-        double wij = lts.GetNeighborWeight(d, walk);
-        for(int j = 0; j < 3; j++)
-          {
-          Xdi[j]->AddSummand(new ScalarProduct(p, X[walk.MovingVertexId()][j], wij));
-          }
-        }
-
-      // Store these expressions
-      for(int j = 0; j < 3; j++)
-        {
-        Xd[d][i][j] = Xdi[j];
-        }
-      }
-
-    // Compute the initial value of the normal
-    SMLVec3d v_xu = VectorEvaluate(Xd[0][i]);
-    SMLVec3d v_xv = VectorEvaluate(Xd[1][i]);
-    SMLVec3d v_n = vnl_cross_3d(v_xu, v_xv).normalize();
-
-    // Create the variables for the normal
-    for(int j = 0; j < 3; j++)
-      {
-      snprintf(buffer, 16, "N[%d,%d]", i, j);
-      N[i][j] = p->AddVariable(buffer, v_n[j]);
-      }
-
-    // Create the constraints on the normal
-    for(int d = 0; d < 2; d++)
-      {
-      // Create the constrait Xu . N = 0
-      Expression *constrNormXu = DotProduct(p, Xd[d][i], N[i]);
-
-      // Add the constraint to the problem
-      p->AddConstraint(constrNormXu, "N.Xu", 0, 0);
-      }
-
-    // Add the constraint on the normal being norm 1
-    Expression *constrNormMag = MagnitudeSqr(p, N[i]);
-    p->AddConstraint(constrNormMag, "N.N", 1.0, 1.0);
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Configure the constraints relating boundary curvature to the radius fn
-  // ------------------------------------------------------------------------
-
-  for(int i = 0; i < nb; i++)
-    {
-
-    // For non-edge atoms, we are done, no need to compute the rest
-    if(mtbIndex[mIndex[i]].size() > 1)
-      {
-      curv_mean[i] = new Constant(p, 0);
-      curv_gauss[i] = new Constant(p, 0);
-      curv_k1[i] = new Constant(p, 0);
-      curv_k2[i] = new Constant(p, 0);
-      continue;
-      }
-
-    // Compute the expressions Nu, Nv
-    // Repeat for u and v directions
-    for(int d = 0; d < 2; d++)
-      {
-      BigSum *Ndi[] = { new BigSum(p), new BigSum(p), new BigSum(p) };
-
-      double wi = lts.GetOwnWeight(d, i);
-      for(int j = 0; j < 3; j++)
-        {
-        Ndi[j]->AddSummand(new ScalarProduct(p, N[i][j], wi));
-        }
-
-      for(EdgeWalkAroundVertex walk(bmesh, i); !walk.IsAtEnd(); ++walk)
-        {
-        double wij = lts.GetNeighborWeight(d, walk);
-        for(int j = 0; j < 3; j++)
-          {
-          Ndi[j]->AddSummand(new ScalarProduct(p, N[walk.MovingVertexId()][j], wij));
-          }
-        }
-
-      // Store these expressions
-      for(int j = 0; j < 3; j++)
-        {
-        Nd[d][i][j] = Ndi[j];
-        }
-      }
-
-    // Compute the first fundamental form at the point.
-    vnl_matrix_fixed<double, 2, 2> mFF1, mFF2, mSO;
-    Expression *FF1[2][2], *FF2_neg[2][2], *SO[2][2];
-    for(int q = 0; q < 2; q++)
-      {
-      for(int r = 0; r < 2; r++)
-        {
-        // Add the expression for the first f. f. as a constrained variable
-        FF1[q][r] = p->AddExpressionAsConstrainedVariable(DotProduct(p, Xd[q][i], Xd[r][i]), "FF1");
-        mFF1[q][r] = FF1[q][r]->Evaluate();
-
-        // Minus the second f.f.
-        FF2_neg[q][r] = DotProduct(p, Xd[q][i], Nd[r][i]);
-        mFF2[q][r] = FF2_neg[q][r]->Evaluate();
-        }
-      }
-
-    // Numerically solve for the shape operator
-    mSO = - vnl_inverse(mFF1) * mFF2;
-
-    // Add the expression for the shape operator
-    for(int q = 0; q < 2; q++)
-      {
-      for(int r = 0; r < 2; r++)
-        {
-        SO[q][r] = p->AddVariable("SO", mSO[q][r]);
-        }
-      }
-
-    // Solve for the shape operator
-    for(int q = 0; q < 2; q++)
-      {
-      for(int r = 0; r < 2; r++)
-        {
-        // Minus the second f.f.
-        Expression *sff = DotProduct(p, Xd[q][i], Nd[r][i]);
-
-        // Expression for FFF * S - SFF
-        Expression *con = new TernarySum(
-              p,
-              new BinaryProduct(p, FF1[q][0], SO[0][r]),
-              new BinaryProduct(p, FF1[q][1], SO[1][r]),
-              sff);
-
-        if(fabs(con->Evaluate()) > 1e-6)
-          std::cout << "Con_SO = " << con->Evaluate() << std::endl;
-
-        // Set as a hard constraint
-        p->AddConstraint(con, "SO", 0, 0);
-        }
-      }
-
-    // Numerically solve for k1
-    double mH = vnl_trace(mSO) / 2;
-    double mK = vnl_det(mSO);
-    double mk1 = mH - sqrt(mH*mH - mK);
-
-    // Solve the characteristic polynomial for kappa1
-    Expression *k1 = p->AddVariable("Kappa1", mk1);
-
-    // The constraint on kappa1
-    Expression * con = new BinaryDifference(p,
-                                            new BinaryProduct(p,
-                                                              new BinaryDifference(p, SO[0][0], k1),
-                                                              new BinaryDifference(p, SO[1][1], k1)),
-                                            new BinaryProduct(p, SO[0][1], SO[1][0]));
-
-    // Evaluate the constraint
-    p->AddConstraint(con, "Kappa1_eq", 0, 0);
-
-    if(fabs(con->Evaluate()) > 1e-6)
-      std::cout << "Con_K1 = " << con->Evaluate() << std::endl;
-
-    // We want kappa1 to be the larger in magnitude of the two curvatures. This is equivalent
-    // to having kappa1 > trace(SO)/2. K1 is negative.
-    Expression *H = new ScalarProduct(p, new BinarySum(p, SO[0][0], SO[1][1]), 0.5);
-    Expression *con2 = new BinaryDifference(p, k1, H);
-
-    p->AddConstraint(con2, "Kappa1_ineq", ConstrainedNonLinearProblem::LBINF, 0);
-
-    if(con2->Evaluate() > -1e-6)
-      std::cout << "Con_K1_sign = " << con2->Evaluate() << std::endl;
-
-    // Store these curvatures for future reference
-    curv_mean[i] = H;
-    curv_k1[i] = k1;
-    curv_k2[i] = new BinaryDifference(p, new ScalarProduct(p, H, 2), k1);
-    curv_gauss[i] = new BinaryProduct(p, k1, curv_k2[i]);
-
-    // Create the radius variable for this node
-    int iAtom = mIndex[i];
-    snprintf(buffer, 16, "R[%d]", iAtom);
-    R[iAtom] = p->AddVariable(buffer, -1.0 / k1->Evaluate(), 0.1);
-
-    // Now enforce the link between R and K1
-    Expression *conR = new BinaryProduct(p, R[iAtom], k1);
-    p->AddConstraint(conR, "R_Kappa1", -1.0, -1.0);
-
-    // Initialize the medial axis position
-    for(int j = 0; j < 3; j++)
-      {
-      snprintf(buffer, 16, "M[%d,%d]", iAtom, j);
-      double mval = X[i][j]->Evaluate() - R[iAtom]->Evaluate() * N[i][j]->Evaluate();
-      M[iAtom][j] = p->AddVariable(buffer, mval);
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Compute the initial medial atoms and radii for non-edge atoms
-  // ------------------------------------------------------------------------
-
-  for(int i = 0; i < nm; i++)
-    {
-    int k = mtbIndex[i].size();
-    if(k > 1)
-      {
-      // For atoms that are bi-tangent or greater, we find R and M that
-      // minimize the expression Sum_j ||Xj - r Nj - M)||^2, i.e, the radius
-      // such that the medial atoms computed for each boundary atom idependently
-      // are as close together as possible. The r is found as
-      // r = (Sum_{ij} (Xi-Xj)^t N_i) / (k^2 - Sum_{ij} Nj^t N_i)
-      double numerator = 0.0, denominator = k*k;
-      SMLVec3d sumX(0.0, 0.0, 0.0), sumN(0.0, 0.0, 0.0);
-      for(int q = 0; q < k; q++)
-        {
-        int iq = mtbIndex[i][q];
-        SMLVec3d Xq = VectorEvaluate(X[iq]), Nq = VectorEvaluate(N[iq]);
-        for(int p = 0; p < k; p++)
-          {
-          int ip = mtbIndex[i][p];
-          SMLVec3d Xp = VectorEvaluate(X[ip]), Np = VectorEvaluate(N[ip]);
-
-          numerator += dot_product(Xq - Xp, Nq);
-          denominator -= dot_product(Np, Nq);
-          }
-
-        sumX += Xq; sumN += Nq;
-        }
-
-      // Compute the best fit r and m
-      double v_r = numerator / denominator;
-      SMLVec3d v_m = (sumX - sumN * v_r) / ((double) k);
-
-      // Store those values
-      snprintf(buffer, 16, "R[%d]", i);
-      R[i] = p->AddVariable(buffer, v_r, 0.1);
-
-      // Initialize the medial axis position
-      for(int j = 0; j < 3; j++)
-        {
-        snprintf(buffer, 16, "M[%d,%d]", i, j);
-        M[i][j] = p->AddVariable(buffer, v_m[j]);
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Add the actual medial constraints
-  // ------------------------------------------------------------------------
-
-  for(int iBnd = 0; iBnd < nb; iBnd++)
-    {
-    int iAtom = mIndex[iBnd];
-
-    // Code up X - r * N - M = 0
-    for(int j = 0; j < 3; j++)
-      {
-      Expression *constMedial =
-          new BinaryDifference(p,
-                               X[iBnd][j],
-                               new BinarySum(p,
-                                             M[iAtom][j],
-                                             new BinaryProduct(p,
-                                                               R[iAtom],
-                                                               N[iBnd][j])));
-      p->AddConstraint(constMedial, "X-rNM", 0, 0);
-      }
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Configure the boundary and medial triangle area variables
-  // ------------------------------------------------------------------------
-
-  // Create a medial mesh that duplicates the boundary mesh
-  TriangleMesh* mmesh = new TriangleMesh(*bmesh);
-
-  // Change the triangle vertices to use m_index
-  for(int i = 0; i < mmesh->triangles.size(); i++)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      mmesh->triangles[i].vertices[j] = mIndex[bmesh->triangles[i].vertices[j]];
-      }
-    }
-
-  // Compute boundary triangle edges, normals, and areas
-  if(tc_bnd.min_dih_angle > 0 || tc_bnd.min_tri_angle > 0 || tc_bnd.min_tri_area > 0)
-    {
-    ComputeTriangleAndEdgeProperties(
-          p, bmesh,
-          X, NT_X, taX, tc_bnd.min_tri_area, tc_bnd.min_tri_angle > 0, TEL_X);
-    }
-
-  // Compute medial triangle edges, normals, and areas.
-  // TODO: this is redundant, as it computes two sets of equal normals and
-  // areas for each medial triangle, one facing each boundary triangle. We
-  // could avoid this by checking for opposite triangles.
-  if(tc_med.min_dih_angle > 0 || tc_med.min_tri_angle > 0 || tc_med.min_tri_area > 0)
-    {
-    ComputeTriangleAndEdgeProperties(
-          p, mmesh,
-          M, NT_M, taM, tc_med.min_tri_area, tc_med.min_tri_angle > 0, TEL_M);
-    }
-
-  // ------------------------------------------------------------------------
-  // Export the medial atom mesh for debugging purposes.
-  // ------------------------------------------------------------------------
-  SaveMedialMesh("medial_before.vtk", p, bmesh, mIndex, mtbIndex, M, R, X, taM);
-
-  // ------------------------------------------------------------------------
-  // Common code for the regularization terms
-  // ------------------------------------------------------------------------
-  BigSum *objBasisResidual = new BigSum(p);
-
-  // ------------------------------------------------------------------------
-  // Define the subdivision basis regularization objective
-  // ------------------------------------------------------------------------
-  if(regOpts.Mode == RegularizationOptions::SUBDIVISION)
-    {
-    // Try to obtain a parent mesh
-    BCMTemplate tmplParent;
-    if(!ReverseEngineerSubdivisionMesh(tmpl, tmplParent, regOpts.SubdivisionLevel))
-      {
-      cerr << "Unable to deduce coarse-level mesh by reversing subdivision!" << endl;
-      delete p;
-      return -1;
-      }
-
-    // Save the parent-level mesh
-    tmplParent.Save("reverse_eng.vtk");
-
-    // TODO - do we want to regularize R as well???
-
-    // Define the basis variables
-    SubdivisionSurface::MeshLevel &pmesh = tmplParent.bmesh;
-    VarVecArray XC(pmesh.nVertices, VarVec(3, NULL));
-    for(int i = 0; i <  pmesh.nVertices; i++)
-      {
-      for(int j = 0; j < 3; j++)
-        {
-        snprintf(buffer, 16, "XC[%d][%d]", i, j);
-        XC[i][j] = p->AddVariable(buffer, tmplParent.x[i][j]);
-        }
-      }
-
-    // Apply the weight matrix to compute the residual
-    ImmutableSparseMatrix<double> &W = tmpl.bmesh.weights;
-
-    // Define the residual objective
-    for(int i = 0; i < nb; i++)
-      {
-      for(int j = 0; j < 3; j++)
-        {
-        // Use the sum generator for each child vertex
-        WeightedSumGenerator wsg(p);
-        wsg.AddTerm(X[i][j], -1.0);
-
-        // Use the weighted matrix iterator
-        for(ImmutableSparseMatrix<double>::RowIterator it = W.Row(i);
-            !it.IsAtEnd(); ++it)
-          {
-          wsg.AddTerm(XC[it.Column()][j], it.Value());
-          }
-
-        // Add the square of this residual term to the residual objective
-        objBasisResidual->AddSummand(new Square(p, wsg.GenerateSum()));
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Define the Laplace basis regularization objective
-  // ------------------------------------------------------------------------
-  if(regOpts.Mode == RegularizationOptions::SPECTRAL)
-    {
-    // Define a basis for the surface
-    MeshBasisCoefficientMapping basismap_X(bmesh, regOpts.BasisSize, 3);
-
-    // Define a basis for the medial axis
-    // TODO: to what extent is this a valid basis - we need to visualize!
-    // MeshBasisCoefficientMapping basismap_M(bmesh, nBasis, 4);
-
-    // Create the coefficient variables
-    VarVecArray XC(regOpts.BasisSize, VarVec(3, NULL));
-    // VarVecArray MC(nBasis, VarVec(4, NULL));
-    for(int i = 0; i < regOpts.BasisSize; i++)
-      {
-      for(int j = 0; j < 3; j++)
-        {
-        XC[i][j] = p->AddVariable("XC", 0.0);
-        }
-      // for(int j = 0; j < 4; j++)
-      //   {
-      //   MC[i][j] = p->AddVariable("MC", 0.0);
-      //   }
-      }
-
-    // Define the objective on the basis
-    for(int iBnd = 0; iBnd < nb; iBnd++)
-      {
-      SMLVec3d Xfixed = xInput[iBnd];
-
-      for(int j = 0; j < 3; j++)
-        {
-        BigSum *xfit = new BigSum(p);
-
-        xfit->AddSummand(new Constant(p, Xfixed[j]));
-        for(int i = 0; i < regOpts.BasisSize; i++)
-          {
-          xfit->AddSummand(new ScalarProduct(p, XC[i][j],
-                                             basismap_X.GetBasisComponent(i, iBnd)));
-          }
-
-        // Xfit is the approximation of X using the basis
-        objBasisResidual->AddSummand(
-              new Square(p, new BinaryDifference(p, xfit, X[iBnd][j])));
-        }
-      }
-
-    // TODO: for the time being, I took out the medial residual computation,
-    // because it is unreasonable to compute it as a difference from the initial
-    // state, since the initial state is likely to be bogus. Need to revive this
-    // later
-    /*
-    for(MedialAtomIterator it = model->GetAtomIterator();
-        !it.IsAtEnd(); ++it)
-      {
-      int iatm = it.GetIndex();
-
-      MedialAtom &a = model->GetAtomArray()[iatm];
-
-      for(int j = 0; j < 4; j++)
-        {
-        double xfixed = (j < 3) ? a.X[j] : a.R;
-        Expression *xdata = (j < 3) ? M[iatm][j] : R[iatm];
-
-        BigSum *xfit = new BigSum(p);
-
-        xfit->AddSummand(new Constant(p, xfixed));
-        for(int i = 0; i < nBasis; i++)
-          {
-          xfit->AddSummand(new ScalarProduct(p, MC[i][j],
-                                             basismap_M.GetBasisComponent(i, iatm)));
-          }
-
-        // Xfit is the approximation of X using the basis
-        objBasisResidual->AddSummand(
-              new Square(p, new BinaryDifference(p, xfit, xdata)));
-        }
-      }
-    */
-    }
-
-
-
-
-  // ------------------------------------------------------------------------
-  // Create the MIB constraint
-  // ------------------------------------------------------------------------
-  for(int iBnd = 0; iBnd < nb; iBnd++)
-    {
-    int iAtom = mIndex[iBnd];
-
-    for(EdgeWalkAroundVertex walk(bmesh, iBnd); !walk.IsAtEnd(); ++walk)
-      {
-      int k = walk.MovingVertexId();
-      Expression *distsq = DistanceSqr(p, M[iAtom], X[k]);
-      p->AddConstraint(
-            new BinaryDifference(p, distsq, new Square(p, R[iAtom])),
-            "MIB", 0, ConstrainedNonLinearProblem::UBINF);
-      }
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Add a constraint on minimal angle of boundary triangles
-  // ------------------------------------------------------------------------
-  if(tc_bnd.min_tri_angle > 0)
-    {
-    double min_angle = vnl_math::pi * tc_bnd.min_tri_angle / 180;
-    double max_csc = 1.0 / sin(min_angle);
-
-    for(int k = 0; k < bmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        Expression *l1 = TEL_X[k][(d + 1) % 3];
-        Expression *l2 = TEL_X[k][(d + 2) % 3];
-        double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taX[k]->Evaluate());
-
-        // Create a constrainted variable for the angle
-        Expression *csc_alpha = p->AddVariable("bnd_csc_alpha", v_csc_alpha,
-                                               ConstrainedNonLinearProblem::LBINF,
-                                               max_csc);
-
-        // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
-        Expression *con = new BinaryDifference(
-              p,
-              new ScalarProduct(p, new BinaryProduct(p, taX[k], csc_alpha), 2.0),
-              new BinaryProduct(p, l1, l2));
-
-        if(fabs(con->Evaluate()) > 1e-6)
-          std::cout << "Con-CSC: " << con->Evaluate() << std::endl;
-
-        p->AddConstraint(con, "bnd_csc_alpha", 0, 0);
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Add a constraint on minimal angle of medial triangles
-  // ------------------------------------------------------------------------
-  if(tc_med.min_tri_angle > 0)
-    {
-    double min_angle_med = vnl_math::pi * tc_med.min_tri_angle / 180;
-    double max_csc_med = 1.0 / sin(min_angle_med);
-
-    for(int k = 0; k < mmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        Expression *l1 = TEL_M[k][(d + 1) % 3];
-        Expression *l2 = TEL_M[k][(d + 2) % 3];
-        double v_csc_alpha = (l1->Evaluate() * l2->Evaluate()) / (2 * taM[k]->Evaluate());
-
-        // Create a constrainted variable for the angle
-        Expression *csc_alpha = p->AddVariable("cscAlpha", v_csc_alpha,
-                                               ConstrainedNonLinearProblem::LBINF,
-                                               max_csc_med);
-
-        // Tie using the constraints, based on fmla 2*At*csc(alpha) = l1 * l2;
-        Expression *con = new BinaryDifference(
-              p,
-              new ScalarProduct(p, new BinaryProduct(p, taM[k], csc_alpha), 2.0),
-              new BinaryProduct(p, l1, l2));
-
-        if(fabs(con->Evaluate()) > 1e-6)
-          std::cout << "Con-Med-CSC: " << con->Evaluate() << std::endl;
-
-        p->AddConstraint(con, "Med-CSC", 0, 0);
-        }
-      }
-    }
-
-
-  // ------------------------------------------------------------------------
-  // Minimize the edge length
-  // ------------------------------------------------------------------------
-  // TODO: add a constraint on the angle between adjacent boundary edges, b/c
-  // that seems to become quite small sometimes and setting a minimum on it might
-  // work better than penalizing the total length
-  BigSum *objEdgeLength = new BigSum(p);
-  if(regOpts.EdgeLengthWeight > 0.0)
-    {
-    // Add all the crest edges
-    for(int k = 0; k < bmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int v1 = bmesh->triangles[k].vertices[(d + 1) % 3];
-        int v2 = bmesh->triangles[k].vertices[(d + 2) % 3];
-        if(v1 < v2)
-          {
-          // Are these edge vertices?
-          if(mtbIndex[mIndex[v1]].size() == 1 && mtbIndex[mIndex[v2]].size() == 1)
-            {
-            objEdgeLength->AddSummand(TEL_X[k][d]);
-            }
-          }
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Constrain the dihedral angle
-  // ------------------------------------------------------------------------
-  if(tc_bnd.min_dih_angle > 0)
-    {
-    double non_edge_thresh = cos(vnl_math::pi * (180. - tc_bnd.min_dih_angle) / 180.);
-    double edge_thresh = -0.9;
-
-    for(int k = 0; k < bmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int kopp = bmesh->triangles[k].neighbors[d];
-        // One side only!
-        if(kopp != NOID && k < kopp)
-          {
-          // Is this a boundary edge?
-          int v1 = bmesh->triangles[k].vertices[(d+1)%3];
-          int v2 = bmesh->triangles[k].vertices[(d+2)%3];
-          bool isBnd = (mtbIndex[mIndex[v1]].size() == 1) && (mtbIndex[mIndex[v2]].size() == 1);
-
-          Expression *da = DotProduct(p, NT_X[k], NT_X[kopp]);
-          p->AddConstraint(da, "bnd_DA", isBnd ? edge_thresh : non_edge_thresh, ConstrainedNonLinearProblem::UBINF);
-
-          }
-        }
-      }
-    }
-
-  // ------------------------------------------------------------------------
-  // Constrain the dihedral angle of the medial axis
-  // ------------------------------------------------------------------------
-  if(tc_med.min_dih_angle > 0)
-    {
-    // We first need to compute the multiplicity of each edge in the medial mesh so that we
-    // can exclude the edges that are on seam and edge curves of the medial model. Those edges
-    // are shared by a number of triangles other than two.
-    typedef std::pair<size_t, size_t> Edge;
-    std::map<Edge, unsigned int> edge_mult;
-
-    for(int k = 0; k < mmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int kopp = mmesh->triangles[k].neighbors[d];
-        if(kopp != NOID && k < kopp)
-          {
-          // Is this a boundary edge?
-          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-          Edge edge(std::min(v1,v2), std::max(v1,v2));
-          auto it = edge_mult.find(edge);
-          if(it == edge_mult.end())
-            edge_mult.insert(make_pair(edge, 1));
-          else
-            it->second++;
-          }
-        }
-      }
-
-
-    VTKMeshBuilder<vtkPolyData> vmb_temp;
-    vmb_temp.SetTriangles(*mmesh);
-
-    vnl_matrix<double> m_export(M.size(), 3);
-    vnl_vector<int> mtbi_export(M.size());
-    vnl_vector<int> da_flag(M.size(), 0);
-    for(unsigned int i = 0; i < M.size(); i++)
-      {
-      m_export.set_row(i, vnl_vector_fixed<double,3>(M[i][0]->Evaluate(), M[i][1]->Evaluate(), M[i][2]->Evaluate()));
-      mtbi_export[i] = mtbIndex[i].size();
-      }
-
-    vmb_temp.SetPoints(m_export);
-    vmb_temp.AddArray(mtbi_export, "mtbIndex");
-
-    double non_edge_thresh = cos(vnl_math::pi * (180. - tc_med.min_dih_angle) / 180.);
-    for(int k = 0; k < mmesh->triangles.size(); k++)
-      {
-      for(int d = 0; d < 3; d++)
-        {
-        int kopp = mmesh->triangles[k].neighbors[d];
-        // One side only!
-        if(kopp != NOID && k < kopp)
-          {
-          // Is this a boundary edge?
-          int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-          int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-          Edge edge(std::min(v1,v2), std::max(v1,v2));
-          if(edge_mult[edge] == 2)
-            {
-            Expression *da = DotProduct(p, NT_M[k], NT_M[kopp]);
-            if(da->Evaluate() < 0.9)
-              {
-              printf("MDA: (%d, %d) via edge (%d, %d): %f\n", k, kopp, v1, v2, da->Evaluate());
-              da_flag[v1] = da_flag[v2] = 1;
-              }
-            p->AddConstraint(da, "DA-Med", non_edge_thresh, ConstrainedNonLinearProblem::UBINF);
-            }
-          }
-        }
-      }
-
-    vmb_temp.AddArray(da_flag, "DAFlag");
-    vmb_temp.Save("/tmp/medial_debug.vtk");
-    }
-
-
-
-  // ------------------------------------------------------------------------
-  // Derive an image match objective
-  // ------------------------------------------------------------------------
-
-  // This simple objective is the displacement from the input boundary points.
-  // It allows us to resolve all the constraints without fitting to new data.
-  // It's a good sanity check to make sure the model is valid
-  BigSum *objDisplacement = new BigSum(p);
-  for(int i = 0; i < nb; i++)
-    {
-    objDisplacement->AddSummand(
-          new TernaryGradientMagnitudeSqr(
-            p,
-            new BinaryDifference(p, X[i][0], new Constant(p, xLSQTarget[i][0])),
-            new BinaryDifference(p, X[i][1], new Constant(p, xLSQTarget[i][1])),
-            new BinaryDifference(p, X[i][2], new Constant(p, xLSQTarget[i][2]))));
-    }
-
-  // Test some derivatives;
-  // DerivativeTest(p, 1000);
-
-  // Solve the problem
-  SmartPtr<IPOptProblemInterface> ip = new IPOptProblemInterface(p);
 
   // Build the new efficient quadratic problem
   BCMRepQuadraticProblemBuilder qp_builder(tmpl, regOpts, tc_bnd, tc_med);
@@ -4530,11 +3845,7 @@ int main(int argc, char *argv[])
   qcqp::Problem &qp = qp_builder.GetProblem();
   SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
 
-  // Create a file for dumping the constraint info
-  snprintf(buffer, 1024, "%s/%s_constraint_dump.txt", fnOutDir.c_str(), fnOutBase.c_str());
-  FILE *fnConstraintDump = fopen(buffer, "wt");
-  ip->log_constraints(fnConstraintDump);
-
+  // TODO: Create a file for dumping the constraint info
   snprintf(buffer, 1024, "%s/%s_qcqp_constraint_dump.txt", fnOutDir.c_str(), fnOutBase.c_str());
   FILE *fnQCQPConstraintDump = fopen(buffer, "wt");
   q_ip->log_constraints(fnQCQPConstraintDump);
@@ -4550,7 +3861,7 @@ int main(int argc, char *argv[])
   // Note: The following choices are only examples, they might not be
   //       suitable for your optimization problem.
   app->Options()->SetNumericValue("tol", 1e-8);
-  app->Options()->SetBoolValue("print_timing_statistics", false);
+  app->Options()->SetBoolValue("print_timing_statistics", true);
   app->Options()->SetStringValue("linear_solver", regOpts.Solver);
   if(regOpts.HSLDylibPath.size())
     app->Options()->SetStringValue("hsllib", regOpts.HSLDylibPath);
@@ -4579,43 +3890,6 @@ int main(int argc, char *argv[])
   // Print a message describing IpOpt
   app->PrintCopyrightMessage();
 
-  // Combine the regularization objectives
-  WeightedSumGenerator wsgObj(p);
-  wsgObj.AddTerm(objBasisResidual, regOpts.Weight);
-  wsgObj.AddTerm(objEdgeLength, regOpts.EdgeLengthWeight);
-  Expression *objRegCombined = wsgObj.GenerateSum();
-
-  // Try just fitting the boundary data
-  ObjectiveCombiner ocfit(p);
-  ocfit.AddObjectiveTerm(objBasisResidual, "Penalty (Basis Fit)", regOpts.Weight);
-  ocfit.AddObjectiveTerm(objEdgeLength, "Penalty (Edge Length)", regOpts.EdgeLengthWeight);
-  ocfit.AddObjectiveTerm(objDisplacement, "Displacement Objective", 1);
-  Expression *obj = ocfit.GetTotalObjective();
-
-  // Configure the problem
-  p->SetObjective(obj);
-  p->SetupProblem(true);
-
-  // Apply some random noise to X and N for better comparison
-  vnl_random rndl;
-  for(unsigned int i = 0; i < nb; i++)
-    {
-    for(unsigned int j = 0; j < 3; j++)
-      {
-      auto *x = dynamic_cast<Variable *>(X[i][j]);
-      x->SetValue(x->Evaluate() + rndl.normal() * 0.1);
-      qp_builder.qX(i,j) = x->Evaluate();
-
-      auto *n = dynamic_cast<Variable *>(N[i][j]);
-      n->SetValue(n->Evaluate() + rndl.normal() * 0.1);
-      qp_builder.qN(i,j) = n->Evaluate();
-      }
-    }
-  p->MakeChildrenDirty();
-
-  // Evaluate the objective
-  ocfit.PrintReport();
-
   // Print the QP objective
   vnl_vector<double> val_init = qp.GetVariableValues();
   qcqp::Problem::LossReport lr_init = qp.GetLossReport(val_init.data_block());
@@ -4633,26 +3907,10 @@ int main(int argc, char *argv[])
          qp.GetHessianOfLagrangean().GetNumberOfColumns(),
          qp.GetHessianOfLagrangean().GetNumberOfSparseValues());
 
-  // Report the different variables
-  std::map<std::string, Statistics> p_var_count;
-  for(unsigned int i = 0; i < p->GetNumberOfVariables(); i++)
-    {
-    std::string prefix = short_name(p, i);
-    p_var_count[prefix].add(p->GetVariable(i)->Evaluate());
-    }
-
-  printf("P varible stats\n");
-  int p_count = 0;
-  for(auto &it : p_var_count)
-    {
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
+ #ifdef __PRINT_STATS_
 
   printf("QP varible stats\n");
-  p_count = 0;
+  int p_count = 0;
   vnl_vector<double> x_qp(qp.GetNumberOfVariables());
   for(unsigned int i = 0; i < qp.GetNumberOfVariableTensors(); i++)
     {
@@ -4669,23 +3927,6 @@ int main(int argc, char *argv[])
     p_count += stat.n;
     }
   printf("Total: %d\n", p_count);
-
-  std::map<std::string, Statistics> p_con_count;
-  for(unsigned int i = 0; i < p->GetNumberOfConstraints(); i++)
-    {
-    p_con_count[p->GetConstraintCategory(i)].add(p->GetConstraint(i)->Evaluate());
-    }
-
-  printf("P constraint stats\n");
-  p_count = 0;
-  for(auto &it : p_con_count)
-    {
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
 
   std::map<std::string, Statistics> qp_con_count;
   for(unsigned int i = 0; i < qp.GetNumberOfConstraints(); i++)
@@ -4704,31 +3945,9 @@ int main(int argc, char *argv[])
     }
   printf("Total: %d\n", p_count);
 
-  printf("P objective: %12.8f\n", p->GetObjective()->Evaluate());
-
   printf("QP objective: %12.8f\n", qp.EvaluateLoss(x_qp.data_block()));
 
-  /* Compute the objective gradient */
-  std::map<std::string, Statistics> p_gradf_count;
-  for(int i = 0; i < p->GetNumberOfVariables(); i++)
-    {
-    auto *pd = p->GetObjectivePD(i);
-    double pdval = pd ? pd->Evaluate() : 0.0;
-    std::string nvar = short_name(p, i);
-    p_gradf_count[nvar].add(pdval);
-    }
-
-  printf("P Grad Objective Stats\n");
-  p_count = 0;
-  for(auto &it : p_gradf_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
-  /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
+  /* Compute the grad-f statistics, this has to be done by variable and constraint type */
   std::map<std::string, Statistics> qp_gradf_count;
   vnl_vector<double> gradf_qp(qp.GetNumberOfVariables());
   qp.EvaluateLossGradient(x_qp.data_block(), gradf_qp.data_block());
@@ -4741,32 +3960,6 @@ int main(int argc, char *argv[])
   printf("QP Grad Objective stats\n");
   p_count = 0;
   for(auto &it : qp_gradf_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
-
-
-  /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
-  auto &jp = p->GetConstraintsJacobian();
-  std::map<std::string, Statistics> p_cv_count;
-  for(int i = 0; i < jp.GetNumberOfRows(); i++)
-    {
-    std::string n_con = p->GetConstraintCategory(i);
-    for(auto ri = jp.Row(i); !ri.IsAtEnd(); ++ri)
-      {
-      std::string nvar = short_name(p, ri.Column());
-      std::string name = n_con + "/" + nvar;
-      p_cv_count[name].add(ri.Value()->Evaluate());
-      }
-    }
-
-  printf("P jacobian stats\n");
-  p_count = 0;
-  for(auto &it : p_cv_count)
     {
     printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
            it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
@@ -4803,37 +3996,6 @@ int main(int argc, char *argv[])
     }
   printf("Total: %d\n", p_count);
 
-
-  /* Compute the Hessian statistics, this has to be done by variable and constraint type */
-  std::map<std::string, Statistics> p_hess_count;
-
-  // Set all the lambdas to 1
-  vnl_vector<double> lambda_test(p->GetNumberOfConstraints());
-  lambda_test.fill(1.0);
-  p->SetLambdaValues(lambda_test.data_block());
-  p->SetSigma(1.0);
-  auto &p_hol = p->GetHessianOfLagrangean();
-
-  for(int i = 0; i < p_hol.GetNumberOfRows(); i++)
-    {
-    std::string nm_i = short_name(p, i);
-    for(auto it = p_hol.Row(i); !it.IsAtEnd(); ++it)
-      {
-      std::string nm_j = short_name(p, it.Column());
-      p_hess_count[nm_i+","+nm_j].add(it.Value()->Evaluate());
-      }
-    }
-
-  printf("P Hessian stats\n");
-  p_count = 0;
-  for(auto &it : p_hess_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
   // Compute qp hessian stats
   std::map<std::string, Statistics> qp_hess_count;
   auto &qp_hol = qp.GetHessianOfLagrangean();
@@ -4862,6 +4024,8 @@ int main(int argc, char *argv[])
     }
   printf("Total: %d\n", p_count);
 
+#endif // __PRINT_STATS
+
   // Ask Ipopt to solve the problem
   app->Options()->SetStringValue("derivative_test", "none");
   status = app->OptimizeTNLP(GetRawPtr(q_ip));
@@ -4878,18 +4042,6 @@ int main(int argc, char *argv[])
   for(unsigned int i = 0; i < xc_opt.size(); i++)
     xc_opt[i] = qp_builder.qXC(i).as_vector<3>();
 
-  // Ask Ipopt to solve the problem
-  app->Options()->SetStringValue("derivative_test", "none");
-  status = app->OptimizeTNLP(GetRawPtr(ip));
-  if(status < 0)
-    {
-    printf("\n\n*** Error %d during optimization!\n", (int) status);
-    return -1;
-    }
-
-  // Evaluate the objective
-  ocfit.PrintReport();
-
   // Print the QP objective
   vnl_vector<double> val_final = qp.GetVariableValues();
   qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
@@ -4897,10 +4049,10 @@ int main(int argc, char *argv[])
 
   // Save the current state
   snprintf(buffer, 1024, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
-  SaveBoundaryMesh(buffer, p, bmesh, mIndex, subDepth, mtbIndex, X, N, R);
+  qp_builder.SaveBoundaryMesh(buffer);
 
   snprintf(buffer, 1024, "%s/%s_fit2tmp_med.vtk", fnOutDir.c_str(), fnOutBase.c_str());
-  SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
+  qp_builder.SaveMedialMesh(buffer);
 
   // Continue if in ICP mode
   if(action == ACTION_FIT_TARGET)
@@ -4958,50 +4110,13 @@ int main(int argc, char *argv[])
       vnl_vector<double> val_final = qp.GetVariableValues();
       qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
       PrintLossReport(lr_init, lr_final);
-
-      // ------------------------------------------------------------------------
-      // Construct the first part of the objective function
-      // ------------------------------------------------------------------------
-      objSqDist = ComputeDistanceToMeshObjective(p, &cpmatcher, X);
-
-      // ------------------------------------------------------------------------
-      // Construct an opposite objective: distance from a selected set of points
-      // to the closest point on the medial mesh
-      // ------------------------------------------------------------------------
-      objRecipSqDist = ComputeDistanceToModelObjective(p, &cpmatcher, bmesh, X);
-
-      // ICP-style
-      ObjectiveCombiner ocicp(p);
-      ocicp.AddObjectiveTerm(objBasisResidual, "Penalty (Basis Fit)", regOpts.Weight);
-      ocicp.AddObjectiveTerm(objEdgeLength, "Penalty (Edge Length)", regOpts.EdgeLengthWeight);
-      ocicp.AddObjectiveTerm(objSqDist, "DistanceSqr to Target", 1);
-      ocicp.AddObjectiveTerm(objRecipSqDist, "DistanceSqr to Model", recip_scale);
-      obj = ocicp.GetTotalObjective();
-
-      // Configure the problem
-      p->SetObjective(obj);
-      p->SetupProblem(true);
-
-      // Evaluate the objective
-      ocicp.PrintReport();
-
-      // Ask Ipopt to solve the problem
-      status = app->OptimizeTNLP(GetRawPtr(ip));
-      if(status < 0)
-        {
-        printf("\n\n*** Error %d during optimization!\n", (int) status);
-        return -1;
-        }
-
-      // Evaluate the objective
-      ocicp.PrintReport();
       
       // Save the current state
       snprintf(buffer, 1024, "%s/%s_icp_%02d_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
-      SaveBoundaryMesh(buffer, p, bmesh, mIndex, subDepth, mtbIndex, X, N, R);
+      qp_builder.SaveBoundaryMesh(buffer);
 
       snprintf(buffer, 1024, "%s/%s_icp_%02d_med.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
-      SaveMedialMesh(buffer, p, bmesh, mIndex, mtbIndex, M, R, X, taM);
+      qp_builder.SaveMedialMesh(buffer);
       }
 
   #ifdef USE_DICE
@@ -5025,10 +4140,10 @@ int main(int argc, char *argv[])
     // SaveBoundaryMesh("result_bnd.vtk", p, bmesh, mIndex, mtbIndex, X, N, R);
     // SaveMedialMesh("result_med.vtk", p, bmesh, mIndex, M, R);
 
-    SaveGradient(p, X, obj, "grad_obj_after.vtk");
-    SaveGradient(p, X, objSqDist, "grad_obj_sqdist_after.vtk");
-    SaveGradient(p, X, new ScalarProduct(p, objRecipSqDist, recip_scale), "grad_obj_recipsqdist_after.vtk");
-    SaveGradient(p, X, new ScalarProduct(p, objBasisResidual, regOpts.Weight), "grad_obj_residual_after.vtk");
+    //SaveGradient(p, X, obj, "grad_obj_after.vtk");
+    //SaveGradient(p, X, objSqDist, "grad_obj_sqdist_after.vtk");
+    //SaveGradient(p, X, new ScalarProduct(p, objRecipSqDist, recip_scale), "grad_obj_recipsqdist_after.vtk");
+    //SaveGradient(p, X, new ScalarProduct(p, objBasisResidual, regOpts.Weight), "grad_obj_residual_after.vtk");
 
     }
 
@@ -5051,6 +4166,6 @@ int main(int argc, char *argv[])
   // be deleted.
   // delete p;
 
-  fclose(fnConstraintDump);
+  // fclose(fnConstraintDump);
   return (int) status;
 }
