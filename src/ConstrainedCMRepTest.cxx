@@ -2626,7 +2626,7 @@ struct RegularizationOptions
   int SubdivisionLevel, BasisSize;
   double Weight;
   RegularizationMode Mode;
-  std::string Solver, HSLDylibPath;
+  std::string Solver, HSLDylibPath, PardisoDylibPath;
   bool UseHessian;
 
   double EdgeLengthWeight;
@@ -3509,8 +3509,8 @@ void BCMRepQuadraticProblemBuilder::SaveBoundaryMesh(const char *fn)
   for(int i = 0; i < nb; i++)
     {
     int j = mIndex[i];
-    pts->InsertNextPoint(qX(i,0), qX(i,1), qX(i,1));
-    norm->InsertNextTuple3(qN(i,0), qN(i,1), qN(i,1));
+    pts->InsertNextPoint(qX(i,0), qX(i,1), qX(i,2));
+    norm->InsertNextTuple3(qN(i,0), qN(i,1), qN(i,2));
     rad->InsertNextTuple1(qR(j));
     mix->InsertNextTuple1(j);
     mult->InsertNextTuple1(mtbIndex[j].size());
@@ -3753,6 +3753,10 @@ int main(int argc, char *argv[])
       {
       regOpts.HSLDylibPath = argv[++p];
       }
+    else if(cmd == "-pardisolib")
+      {
+      regOpts.PardisoDylibPath = argv[++p];
+      }
     else if(cmd == "-solver")
       {
       regOpts.Solver = argv[++p];
@@ -3865,6 +3869,8 @@ int main(int argc, char *argv[])
   app->Options()->SetStringValue("linear_solver", regOpts.Solver);
   if(regOpts.HSLDylibPath.size())
     app->Options()->SetStringValue("hsllib", regOpts.HSLDylibPath);
+  if(regOpts.PardisoDylibPath.size())
+    app->Options()->SetStringValue("pardisolib", regOpts.PardisoDylibPath);
 
   // app->Options()->SetNumericValue("mu_init", 1e-3);
   // app->Options()->SetNumericValue("mu_target", 1e-5);
@@ -4113,10 +4119,10 @@ int main(int argc, char *argv[])
       
       // Save the current state
       snprintf(buffer, 1024, "%s/%s_icp_%02d_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
-      qp_builder.SaveBoundaryMesh(buffer);
+      qp_builder_icp.SaveBoundaryMesh(buffer);
 
       snprintf(buffer, 1024, "%s/%s_icp_%02d_med.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
-      qp_builder.SaveMedialMesh(buffer);
+      qp_builder_icp.SaveMedialMesh(buffer);
       }
 
   #ifdef USE_DICE
