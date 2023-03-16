@@ -1,6 +1,7 @@
 #include "IPOptProblemInterface.h"
 #include "ScriptInterface.h"
 #include "BasisFunctions2D.h"
+#include "BruteForceSubdivisionMedialModel.h"
 #include "MedialAtom.h"
 #include "CartesianMedialModel.h"
 #include "OptimizationTerms.h"
@@ -15,12 +16,23 @@
 #include "IpIpoptAlg.hpp"
 #include "MedialAtomGrid.h"
 #include "VTKMeshBuilder.h"
+#include "util/ReadWriteVTK.h"
 #include "vtkPolyDataWriter.h"
 #include "vtkPolyDataReader.h"
 #include "vtkFloatArray.h"
 #include "vtkPointData.h"
 #include "vtkCellData.h"
 
+#include "itkOrientedRASImage.h"
+#include "itk_to_nifti_xform.h"
+#include "vtkCubeSource.h"
+#include "vtkTransform.h"
+#include "vtkTransformFilter.h"
+#include "vtkCleanPolyData.h"
+#include "vtkCell.h"
+#include "vtkSmartPointer.h"
+#include "vtkTriangleFilter.h"
+#include "vtkLinearSubdivisionFilter.h"
 
 #include "tetgen.h"
 
@@ -33,8 +45,6 @@
 #include <map>
 #include <utility>
 #include "itk_to_nifti_xform.h"
-
-#include "ConstrainedCMRepObjectives.h"
 #include "itksys/SystemTools.hxx"
 
 #include "QCQPProblem.h"
@@ -73,8 +83,6 @@ void sumsl_(
 const int mxiter_ = 18, mxfcal_ = 17, solprt_ = 22;
 
 using namespace Ipopt;
-using namespace gnlp;
-
 
 typedef itk::Image<float, 3> ImageType;
 
@@ -101,18 +109,7 @@ public:
 
   SMLVec3d FindClosestToTarget(const SMLVec3d &x);
 
-  std::vector<SMLVec3d> FindClosestToTarget(VarVecArray &X);
-
   std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, std::vector<SMLVec3d> &X);
-  std::vector<MatchLocation> FindClosestToSource(TriangleMesh *mesh, VarVecArray &X)
-    {
-    std::vector<SMLVec3d> X_flat(X.size());
-    for(unsigned int i = 0; i < X.size(); i++)
-      for(unsigned int j = 0; j < 3; j++)
-        X_flat[i][j] = X[i][j]->Evaluate();
-
-    return FindClosestToSource(mesh, X_flat);
-    }
 
   int GetNumberOfTargetPointsUsed()
   { return m_ReducedTarget->GetNumberOfPoints(); }
@@ -169,22 +166,6 @@ SMLVec3d ClosestPointMatcher::FindClosestToTarget(const SMLVec3d &x)
   m_TargetLocator->FindClosestPoint(x.data_block(), xs, cellid, subid, d2);
 
   return SMLVec3d(xs);
-}
-
-std::vector<SMLVec3d>
-ClosestPointMatcher::FindClosestToTarget(VarVecArray &X)
-{
-  // Output vector
-  std::vector<SMLVec3d> cp(X.size());
-
-  // Compute thickness values
-  for(int i = 0; i < X.size(); i++)
-    {
-    SMLVec3d xi = gnlp::VectorEvaluate(X[i]);
-    cp[i] = FindClosestToTarget(xi);
-    }
-
-  return cp;
 }
 
 std::vector<ClosestPointMatcher::MatchLocation>
@@ -282,620 +263,233 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, std::vector<SMLVec3
   return result;
 }
 
-// Callback functions for TOMS
-IPOptProblemInterface *globopt;
-void toms_calcf(int &n, double *x, int &nf, double &f, int *dummy1, double *dummy2, void *info)
-{
-  globopt->eval_f(n, x, true, f);
-}
-
-void toms_calcg(int &n, double *x, int &nf, double *g, int *, double *, void *info)
-{
-  globopt->eval_grad_f(n, x, true, g);
-}
-
-
-void run_toms(IPOptProblemInterface *ip, ConstrainedNonLinearProblem *p)
-{
-  // SOLVE USING TOMS
-  globopt = ip;
-  int nCoeff = p->GetNumberOfVariables();
-  double *scaling = (double *) malloc(nCoeff * sizeof(double));
-  std::fill_n(scaling, nCoeff, 1.0);
-
-  double *x = (double *) malloc(nCoeff * sizeof(double));
-  for(int i = 0; i < nCoeff; i++)
-    x[i] = p->GetVariableValue(i);
-
-  // Specify the parameters to the sumsl_ routine
-  int liv = 60, lv = 71+ nCoeff * (nCoeff+15) / 2;
-  int *iv = (int *) malloc(liv * sizeof(int));
-  double *v = (double *) malloc(lv * sizeof(double));
-
-  std::fill_n(iv, liv, 0);
-  std::fill_n(v, lv, 0.0);
-
-  // Load the defaults
-  int xAlg = 2;
-
-  // Initialize the parameters of the method
-  deflt_(xAlg, iv, liv, lv, v);
-  iv[mxiter_ - 1] = 100;
-  iv[mxfcal_ - 1] = 10 * 100;
-  // iv[19 - 1] = 0;
-  // iv[22 - 1] = 0;
-  // iv[24 - 1] = 0;
-
-  sumsl_(
-        nCoeff, scaling, x,
-        &toms_calcf, &toms_calcg,
-        iv, liv, lv, v,
-        NULL, NULL, NULL);
-
-}
-
-Expression *TetraHedronVolume(
-    Problem *p,
-    std::vector<Expression *> a,
-    std::vector<Expression *> b,
-    std::vector<Expression *> c,
-    std::vector<Expression *> d)
-{
-  // Compute the three edge vectors
-  std::vector<Expression *> Q(3, NULL), R(3, NULL), S(3, NULL);
-  for(int j = 0; j < 3; j++)
-    {
-    Q[j] = new BinaryDifference(p, b[j], a[j]);
-    R[j] = new BinaryDifference(p, c[j], a[j]);
-    S[j] = new BinaryDifference(p, d[j], a[j]);
-    }
-
-  // Compute the vector triple product
-  Expression *vol =
-      new TernarySum(
-        p,
-        new BinaryProduct(
-          p, Q[0], new BinaryDifference(
-            p,
-            new BinaryProduct(p, R[1], S[2]),
-            new BinaryProduct(p, R[2], S[1]))),
-        new BinaryProduct(
-          p, Q[1], new BinaryDifference(
-            p,
-            new BinaryProduct(p, R[2], S[0]),
-            new BinaryProduct(p, R[0], S[2]))),
-        new BinaryProduct(
-          p, Q[2], new BinaryDifference(
-            p,
-            new BinaryProduct(p, R[0], S[1]),
-            new BinaryProduct(p, R[1], S[0]))));
-
-  return vol;
-}
-
-
-double GetCentralDifference(Problem *p, Expression *ex, Variable *v, double delta=1e-5)
-{
-  double val = v->Evaluate();
-
-  // Do the perturbation
-  ex->MakeTreeDirty();
-  v->SetValue(val + delta);
-    double f2 = ex->Evaluate();
-
-  ex->MakeTreeDirty();
-  v->SetValue(val - delta);
-  double f1 = ex->Evaluate();
-
-  v->SetValue(val);
-
-  return (f2 - f1) / (2 * delta);
-}
-
-void TestExpressionRandomDerivative(
-    Problem *p,
-    Expression *ex,
-    const char *nickname,
-    int order)
-{
-  // Check order
-  if(order == 0)
-    return;
-
-  // Get the list of dependent variables
-  const Problem::Dependency &depvar = p->GetDependentVariables(ex);
-  if(depvar.size() == 0)
-    return;
-
-  // Pick a random dependent variable to test
-  int q = rand() % depvar.size();
-  Problem::Dependency::const_iterator it = depvar.begin();
-  for(int p = 0; p < q; p++) ++it;
-  Variable *v = *it;
-
-  // Test with respect to this variable
-  Expression *pd = p->GetPartialDerivative(ex, v);
-  if(!pd)
-    return;
-
-  double dAnalytic = pd ? pd->Evaluate() : 0.0;
-  double dCentralDiff = GetCentralDifference(p, ex, v);
-
-  printf("D[%10s,%10s,%d]: %12.8f  %12.8f  %12.8f\n",
-         nickname, v->GetName().c_str(), order,
-         dAnalytic, dCentralDiff, std::fabs(dAnalytic-dCentralDiff));
-
-  // Test higher order derivatives
-  TestExpressionRandomDerivative(p, pd, nickname, order-1);
-}
-
-void DerivativeTest(ConstrainedNonLinearProblem *p, int nTests)
-{
-  p->MakeChildrenDirty();
-  printf("TEST [%12s]: %12s  %12s  %12s\n",
-         "Variable", "Analytic", "CentralDiff", "Delta");
-
-  // The derivatives of the objective function
-  for(int i = 0; i < nTests; i++)
-    {
-    TestExpressionRandomDerivative(p, p->GetObjective(), "obj", 2);
-    }
-
-  // Test th derivatives of the constraints
-  for(int i = 0; i < nTests; i++)
-    {
-    // Pick a random constraint
-    int iCon = rand() % p->GetNumberOfConstraints();
-    Expression *con = p->GetConstraint(iCon);
-
-    char buffer[16];
-    snprintf(buffer, 16, "Con_%d", iCon);
-
-    TestExpressionRandomDerivative(p, con, buffer, 2);
-    }
-
-  p->MakeChildrenDirty();
-}
-
-
-
-
-void SaveSamples(std::vector<std::vector<Expression *> > sampleX,
-                  std::vector<Expression *> sampleF,
-                  const char *filename)
-{
-  vtkPoints *pts = vtkPoints::New();
-  pts->Allocate(sampleX.size());
-
-  vtkFloatArray *arr = vtkFloatArray::New();
-  arr->SetNumberOfComponents(1);
-  arr->Allocate(sampleX.size());
-
-  for(int i = 0; i < sampleX.size(); i++)
-    {
-    pts->InsertNextPoint(sampleX[i][0]->Evaluate(),
-                         sampleX[i][1]->Evaluate(),
-                         sampleX[i][2]->Evaluate());
-    arr->InsertNextTuple1(sampleF[i]->Evaluate());
-    }
-
-  vtkPolyData *poly = vtkPolyData::New();
-  poly->SetPoints(pts);
-  poly->GetPointData()->SetScalars(arr);
-
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInputData(poly);
-  writer->SetFileName(filename);
-  writer->Update();
-
-}
-
-void SaveGradient(
-    ConstrainedNonLinearProblem *p,
-    std::vector<std::vector<Expression *> > X,
-    Expression *f,
-    const char *filename)
-{
-  vtkPoints *pts = vtkPoints::New();
-  pts->Allocate(X.size());
-
-  vtkFloatArray *arr = vtkFloatArray::New();
-  arr->SetNumberOfComponents(3);
-  arr->Allocate(X.size());
-  arr->SetName("Gradient");
-
-  for(int i = 0; i < X.size(); i++)
-    {
-    pts->InsertNextPoint(X[i][0]->Evaluate(),
-                         X[i][1]->Evaluate(),
-                         X[i][2]->Evaluate());
-    Expression *dx = p->GetPartialDerivative(f, (Variable *)X[i][0]);
-    Expression *dy = p->GetPartialDerivative(f, (Variable *)X[i][1]);
-    Expression *dz = p->GetPartialDerivative(f, (Variable *)X[i][2]);
-    arr->InsertNextTuple3(dx ? dx->Evaluate() : 0,
-                          dy ? dy->Evaluate() : 0,
-                          dz ? dz->Evaluate() : 0);
-    }
-
-  vtkPolyData *poly = vtkPolyData::New();
-  poly->SetPoints(pts);
-  poly->GetPointData()->SetScalars(arr);
-
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInputData(poly);
-  writer->SetFileName(filename);
-  writer->Update();
-}
-
-#include "itkOrientedRASImage.h"
-#include "itk_to_nifti_xform.h"
-#include "vtkCubeSource.h"
-#include "vtkTransform.h"
-#include "vtkTransformFilter.h"
-#include "vtkCleanPolyData.h"
-#include "vtkCell.h"
-#include "vtkSmartPointer.h"
-#include "vtkTriangleFilter.h"
-#include "vtkLinearSubdivisionFilter.h"
 
 /**
-  Generate a tetrahedral mesh for the model exerior using TetGen.
-  */
-void CreateTetgenMesh(GenericMedialModel *model,
-                      FloatImage *image,
-                      VarVecArray &X,
-                      ConstrainedNonLinearProblem *problem)
-{
-  // Create a mesh object to populate
-  tetgenio in;
-  in.initialize();
-
-  // Create the cube
-  vtkSmartPointer<vtkCubeSource> cube = vtkCubeSource::New();
-  cube->SetBounds(-0.5, 0.5 + image->GetInternalImage()->GetImageSize(0),
-                  -0.5, 0.5 + image->GetInternalImage()->GetImageSize(1),
-                  -0.5, 0.5 + image->GetInternalImage()->GetImageSize(2));
-
-  // Subdivide the cube
-  vtkSmartPointer<vtkTriangleFilter> fltTri = vtkTriangleFilter::New();
-  fltTri->SetInputConnection(cube->GetOutputPort());
-
-  vtkSmartPointer<vtkLinearSubdivisionFilter> fltSub = vtkLinearSubdivisionFilter::New();
-  fltSub->SetInputConnection(fltTri->GetOutputPort());
-  fltSub->SetNumberOfSubdivisions(2);
-
-  // Get the transform matrix
-  vnl_matrix_fixed<double, 4, 4> TS = ConstructNiftiSform(
-        image->GetInternalImage()->GetInternalImage()->GetDirection().GetVnlMatrix(),
-        image->GetInternalImage()->GetInternalImage()->GetOrigin().GetVnlVector(),
-        image->GetInternalImage()->GetInternalImage()->GetSpacing().GetVnlVector());
-
-  vtkSmartPointer<vtkCleanPolyData> clean = vtkCleanPolyData::New();
-  clean->SetInputConnection(fltSub->GetOutputPort());
-
-  vtkSmartPointer<vtkTransform> tran = vtkTransform::New();
-  tran->SetMatrix(TS.data_block());
-
-  // Create the transform filter
-  vtkSmartPointer<vtkTransformFilter> tf = vtkTransformFilter::New();
-  tf->SetInputConnection(clean  ->GetOutputPort());
-  tf->SetTransform(tran);
-  tf->Update();
-
-  // Get the transformed cube
-  vtkSmartPointer<vtkPolyData> tcube = dynamic_cast<vtkPolyData *>(tf->GetOutput());
-
-  // Initialize all the points (number of points, plus six cube vertices)
-  in.numberofpoints = model->GetNumberOfBoundaryPoints() + tcube->GetNumberOfPoints();
-  in.pointlist = new REAL[in.numberofpoints * 3];
-
-  in.pointmarkerlist = new int[in.numberofpoints];
-
-  std::fill(in.pointmarkerlist,
-            in.pointmarkerlist + model->GetNumberOfBoundaryPoints(), 1);
-  std::fill(in.pointmarkerlist + model->GetNumberOfBoundaryPoints(),
-            in.pointmarkerlist + in.numberofpoints, 2);
-
-  /*
-  in.numberofpointattributes = 1;
-  in.pointattributelist = new REAL[in.numberofpoints];
-  std::fill(in.pointattributelist,
-            in.pointattributelist + model->GetNumberOfBoundaryPoints(), 1.0);
-  std::fill(in.pointattributelist + model->GetNumberOfBoundaryPoints(),
-            in.pointattributelist + in.numberofpoints, 2.0);
-            */
-
-  // Fill out the point array
-  for(MedialBoundaryPointIterator bit = model->GetBoundaryPointIterator();
-      !bit.IsAtEnd(); ++bit)
-    {
-    REAL *p = in.pointlist + 3 * bit.GetIndex();
-    SMLVec3d X = GetBoundaryPoint(bit, model->GetAtomArray()).X;
-    p[0] = X[0]; p[1] = X[1]; p[2] = X[2];
-    }
-
-  // Pass in the cube vertices
-  REAL *p = in.pointlist + model->GetNumberOfBoundaryPoints() * 3;
-  for(int i = 0; i < tcube->GetNumberOfPoints(); i++)
-    {
-    for(int j = 0; j < 3; j++)
-      *(p++) = tcube->GetPoint(i)[j];
-    }
-
-  // Create the faces in the mesh
-  in.numberoffacets = model->GetNumberOfBoundaryTriangles() + tcube->GetNumberOfCells();
-  in.facetlist = new tetgenio::facet[in.numberoffacets];
-  in.facetmarkerlist = new int[in.numberoffacets];
-
-  const int TRIMARK = 100000;
-  const int CUBMARK = 200000;
-
-  // Initialize all of the facets
-  for(MedialBoundaryTriangleIterator trit = model->GetBoundaryTriangleIterator();
-      !trit.IsAtEnd(); ++trit)
-    {
-    // Set up the facet
-    tetgenio::facet &f = in.facetlist[trit.GetIndex()];
-    f.numberofpolygons = 1;
-    f.numberofholes = 0;
-    f.holelist = NULL;
-    f.polygonlist = new tetgenio::polygon[1];
-    f.polygonlist[0].numberofvertices = 3;
-    f.polygonlist[0].vertexlist = new int[3];
-    f.polygonlist[0].vertexlist[0] = trit.GetBoundaryIndex(0);
-    f.polygonlist[0].vertexlist[1] = trit.GetBoundaryIndex(1);
-    f.polygonlist[0].vertexlist[2] = trit.GetBoundaryIndex(2);
-
-    // Pass the facet into list
-    in.facetmarkerlist[trit.GetIndex()] = TRIMARK + trit.GetIndex();
-    }
-
-  // Initialize the cube's facets
-  tetgenio::facet *fp = in.facetlist + model->GetNumberOfBoundaryTriangles();
-  int *fmp = in.facetmarkerlist + model->GetNumberOfBoundaryTriangles();
-  for(int i = 0; i < tcube->GetNumberOfCells(); i++)
-    {
-    vtkCell *cell = tcube->GetCell(i);
-    fp->numberofpolygons = 1;
-    fp->numberofholes = 0;
-    fp->holelist = NULL;
-    fp->polygonlist = new tetgenio::polygon[1];
-    fp->polygonlist[0].numberofvertices = cell->GetNumberOfPoints();
-    fp->polygonlist[0].vertexlist = new int[cell->GetNumberOfPoints()];
-    for(int j = 0; j < cell->GetNumberOfPoints(); j++)
-      {
-      fp->polygonlist[0].vertexlist[j] =
-          cell->GetPointId(j) + model->GetNumberOfBoundaryPoints();
-      }
-    *fmp++ = CUBMARK + i;
-    ++fp;
-    }
-
-  // Add a hole for the volume
-  /*
-  in.numberofholes = 1;
-  in.holelist = new double[3];
-  in.holelist[0] = model->GetAtomArray()[0].X[0];
-  in.holelist[1] = model->GetAtomArray()[0].X[1];
-  in.holelist[2] = model->GetAtomArray()[0].X[2];
-  */
-
-  // Save the mesh
-  in.save_nodes(const_cast<char *>("mytest"));
-  in.save_poly(const_cast<char *>("mytest"));
-
-  // Create an output mesh object
-  tetgenio out;
-  out.initialize();
-
-  // Create the options
-  tetgenbehavior tb;
-  tb.parse_commandline(const_cast<char *>("-p -q3.2 -YY"));
-
-  // Perform tetrahedralization
-  tetrahedralize(&tb, &in, &out);
-
-  // Now let's see what we got out
-  printf("TETGEN result: %d tets, %d points\n",
-         out.numberoftetrahedra,
-         out.numberofpoints);
-
-  // We need to convert the tetrahedralization into a set of variables and
-  // constraints. There are three types of nodes, with attributes as follows:
-  //   0  -  nodes inserted by tetgen on the interior.
-  //   1  -  nodes in the model
-  //   2  -  nodes in the cube
-
-  // We want to create new variables for the 0-nodes. We create constants for
-  // the coordinates of the 1-nodes.
-  VarVecArray Y(out.numberofpoints, VarVec(3, NULL));
-  for(int i = 0; i < out.numberofpoints; i++)
-    {
-    int type = out.pointmarkerlist[i];
-    for(int j = 0; j < 3; j++)
-      {
-      if(type == 1)
-        {
-        // Medial mesh point - copy from X
-        Y[i][j] = X[i][j];
-        }
-      else if(type == 2)
-        {
-        // Cube mesh point - create a new constant
-        Y[i][j] = new Constant(problem, out.pointlist[i*3+j]);
-        }
-      else if(type == 0)
-        {
-        // Point created by tetgen
-        Y[i][j] = problem->AddVariable("Yij", out.pointlist[i*3+j]);
-        }
-      }
-    }
-
-  // Finally, we create volume constraints for all the tetrahedra
-  for(int i = 0; i < out.numberoftetrahedra; i++)
-    {
-    int *tet = out.tetrahedronlist + i * 4;
-
-    Expression *vol =
-        TetraHedronVolume(problem, Y[tet[0]], Y[tet[1]], Y[tet[2]], Y[tet[3]]);
-
-    double tv = vol->Evaluate();
-
-    problem->AddConstraint(vol, "TETVOL", 0.1 * tv, 100 * tv);
-    }
-}
-
-
-
-
-
-
-
-void SaveCircumcenterMesh(VarVecArray &CC, VarVec &CR, VarVecArray &CCBC)
-{
-
-  vtkPoints *out_pts = vtkPoints::New();
-  out_pts->Allocate(CC.size());
-
-  vtkPolyData *out_poly = vtkPolyData::New();
-  out_poly->SetPoints(out_pts);
-
-  vtkFloatArray *arrRad = vtkFloatArray::New();
-  arrRad->SetNumberOfComponents(1);
-  arrRad->Allocate(CC.size());
-  arrRad->SetName("Radius");
-
-  vtkFloatArray *arrBC = vtkFloatArray::New();
-  arrBC->SetNumberOfComponents(3);
-  arrBC->Allocate(CC.size());
-  arrBC->SetName("BC");
-
-  for(int i = 0; i < CC.size(); i++)
-    {
-    out_pts->InsertNextPoint(
-          CC[i][0]->Evaluate(), CC[i][1]->Evaluate(), CC[i][2]->Evaluate());
-
-    arrRad->InsertNextTuple1(CR[i]->Evaluate());
-    arrBC->InsertNextTuple3(
-          CCBC[i][0]->Evaluate(),
-          CCBC[i][1]->Evaluate(),
-          CCBC[i][2]->Evaluate());
-    }
-
-  out_poly->GetPointData()->SetScalars(arrRad);
-  out_poly->GetPointData()->AddArray(arrBC);
-
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetInputData(out_poly);
-  writer->SetFileName("circumcenter.vtk");
-  writer->Update();
-}
-
-
-
-
-/**
- * Compute edge and triangle properties (areas, normals, lengths) using
- * only quadratic expressions and constraints
+ * Optimal Mass Transport using Generalized Sinkhorn Iteration
+ * Code based on Karlsson and Ringh paper (https://arxiv.org/pdf/1612.02273.pdf)
+ *
+ * This class is meant to be reused for multiple runs of Sinkhorn iteration
+ * with the same target mesh but different starting points.
  */
-VarVecArray dummyArray;
-
-void ComputeTriangleAndEdgeProperties(
-    ConstrainedNonLinearProblem *p,
-    TriangleMesh *mesh,
-    const VarVecArray &X,   // Vertices
-    VarVecArray &NT,        // Triangle normals
-    VarVec &AT,             // Triangle areas
-    double minArea,         // Smallest area allowed
-    bool doEdges = false,   // Triangle edge lengths (opposite each vertex)
-    VarVecArray &TEL = dummyArray)
+class SinkhornIteration
 {
-  // Initialize to arrays of NULLS
-  std::fill(AT.begin(), AT.end(), (Expression *) NULL);
-  std::fill(NT.begin(), NT.end(), VarVec(3, NULL));
-  AT.resize(mesh->triangles.size(), NULL);
-  NT.resize(mesh->triangles.size(), VarVec(3, NULL));
-
-  if(doEdges)
+public:
+  /**
+   * The constructor takes a source mesh, a target mesh, and a set of parameters
+   */
+  SinkhornIteration(TriangleMesh *source, TriangleMesh *target, const std::vector<SMLVec3d> &Xtarget)
+    : m_Source(source), m_Target(target)
     {
-    std::fill(TEL.begin(), TEL.end(), VarVec(3, NULL));
-    TEL.resize(mesh->triangles.size(), VarVec(3, NULL));
-    }
+    unsigned int n0 = m_Source->triangles.size(), n1 = m_Target->triangles.size();
 
-  // Iterate over all the triangles in this mesh
-  for(int it = 0; it < mesh->triangles.size(); it++)
-    {
-    // Here is a triangle
-    Triangle &t = mesh->triangles[it];
-    size_t *v = t.vertices;
-
-    // The un-normalized normal of the triangle
-    VarVec Xu = VectorApplyPairwise<BinaryDifference>(p, X[v[1]], X[v[0]]);
-    VarVec Xv = VectorApplyPairwise<BinaryDifference>(p, X[v[2]], X[v[0]]);
-    VarVec Xu_cross_Xv = CrossProduct(p, Xu, Xv);
-
-    // The area is half the norm of this cross product
-    vnl_vector_fixed<double, 3> v_Xu_cross_Xv = VectorEvaluate(Xu_cross_Xv);
-    double v_area = 0.5 * v_Xu_cross_Xv.magnitude();
-    vnl_vector_fixed<double, 3> v_normal = 0.5 * v_Xu_cross_Xv / v_area;
-
-    // Create the variables for the triangle area and normal
-    AT[it] = p->AddVariable("bnd_AT", v_area, minArea);
-    for(int d = 0; d < 3; d++)
-      NT[it][d] = p->AddVariable("bnd_NT", v_normal[d]);
-
-    // Create the constraint relating the area and the normal
-    for(int d = 0; d < 3; d++)
+    // First, compute the z-transform parameters, so that the target shape is
+    // centered on the origin and has radius 1
+    SMLVec3d trg_sum(0.0), trg_sum_sq(0.0);
+    for(auto xt : Xtarget)
       {
-      Expression *con = new BinaryDifference(
-            p,
-            new ScalarProduct(p, new BinaryProduct(p, AT[it], NT[it][d]), 2.0),
-            Xu_cross_Xv[d]);
+      trg_sum += xt;
+      trg_sum_sq += element_product(xt, xt);
+      }
+    m_TrgCenter = trg_sum * (1.0 / Xtarget.size());
+    SMLVec3d trg_var = trg_sum_sq * (1.0 / Xtarget.size()) - element_product(m_TrgCenter, m_TrgCenter);
+    m_TrgScale = sqrt((trg_var[0]+trg_var[1]+trg_var[2]) / 3.0);
 
-      if(fabs(con->Evaluate()) > 1e-6)
-        std::cout << "Con_TA-TN: " << con->Evaluate() << std::endl;
+    // From the target mesh, extract triangle centers, normals, and areas
+    m_ZTrgCenters.resize(n1);
+    m_ZTrgNormals.resize(n1);
+    m_ZTrgAreas.set_size(n1);
+    m_Mu1.set_size(n1);
+    m_U1.set_size(n1); m_U1.fill(1.0);
+    m_ZTrgTotalArea = 0;
+    for(int kt = 0; kt < n1; kt++)
+      {
+      Triangle &t = m_Target->triangles[kt];
+      size_t *v = t.vertices;
+      SMLVec3d X0 = (Xtarget[v[0]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d X1 = (Xtarget[v[1]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d X2 = (Xtarget[v[2]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d Xu_cross_Xv = vnl_cross_3d(X1-X0, X2-X0);
+      double mag_Xu_cross_Xv = Xu_cross_Xv.magnitude();
 
-      p->AddConstraint(con, "bnd_NTNA", 0, 0);
+      m_ZTrgCenters[kt] = (X0 + X1 + X2) / 3.0;
+      m_ZTrgNormals[kt] = Xu_cross_Xv / mag_Xu_cross_Xv;
+      m_ZTrgAreas[kt] = 0.5 * mag_Xu_cross_Xv;
+      m_ZTrgTotalArea += m_ZTrgAreas[kt];
       }
 
-    // Normal is length one
-    Expression *normlen = DotProduct(p, NT[it], NT[it]);
-    p->AddConstraint(normlen, "bnd_NTNT", 1.0, 1.0);
+    // Target mass vector
+    m_Mu1 = m_ZTrgAreas / m_ZTrgTotalArea;
 
-    // Compute the edges
-    if(doEdges)
+    // Initialize the source arrays but without assignment
+    m_ZSrcCenters.resize(n0);
+    m_ZSrcNormals.resize(n0);
+    m_ZSrcAreas.set_size(n0);
+    m_Mu0.set_size(n0);
+    m_U0.set_size(n0); m_U0.fill(1.0);
+
+    // Initialize the matrix K
+    m_C.set_size(n0, n1);
+    m_K.set_size(n0, n1);
+    }
+
+  void PrintLoss(int iter)
+    {
+    unsigned int n0 = m_Source->triangles.size(), n1 = m_Target->triangles.size();
+
+    // Check if the iterations are correct
+    double loss = 0.0, entropy = 0.0;
+    vnl_vector<double> mu0_test = m_Mu0, mu1_test = m_Mu1;
+    for(unsigned int i = 0; i < n0; i++)
       {
-      for(int d = 0; d < 3; d++)
+      for(unsigned int j = 0; j < n1; j++)
         {
-        // The edge may have been set up by the opposite triangle
-        if(TEL[it][d] != NULL)
-          continue;
-
-        // The opposite vertices
-        size_t v1 = v[(d + 1) % 3], v2 = v[(d + 2) % 3];
-
-        // Set up the egde length expression
-        Expression *edgeLenSq = DistanceSqr(p, X[v1], X[v2]);
-
-        // Create a variable for the edge length
-        Expression *edgeLen = p->AddVariable("bnd_EL", sqrt(edgeLenSq->Evaluate()), 0);
-
-        // Create the constraint linking the two
-        Expression *con = new BinaryDifference(
-              p, new Square(p, edgeLen), edgeLenSq);
-        p->AddConstraint(con, "bnd_EL", 0, 0);
-
-        // Assign the edge length variable to the current and opposite triangle
-        TEL[it][d] = edgeLen;
-        if(t.neighbors[d] != NOID)
-          {
-          TEL[t.neighbors[d]][t.nedges[d]] = edgeLen;
-          }
+        // Compute the actual joint probability value for i,j
+        double m_ij = m_U0(i) * m_K(i, j) * m_U1(j);
+        loss += m_C(i,j) * m_ij;
+        entropy -= m_ij < 1.e-15 ? 0.0 : m_ij * log(m_ij);
+        mu0_test[i] -= m_ij;
+        mu1_test[j] -= m_ij;
         }
       }
+
+    printf("Sinkhorn Iter %03d   MC: %8g   Entropy: %8g   Err0: %8g   Err1: %8g\n",
+           iter, loss, entropy, mu0_test.inf_norm(), mu1_test.inf_norm());
     }
-}
+
+  /**
+   * Perform Sinkhorn iteration
+   */
+  void PerformIteration(const std::vector<SMLVec3d> &XSource,
+                        double alpha = 1.0, double eps = 0.01, int niter = 100,
+                        bool reset_starting_point = true)
+    {
+    unsigned int n0 = m_Source->triangles.size(), n1 = m_Target->triangles.size();
+
+    // Compute the source properties
+    m_ZSrcTotalArea = 0;
+    for(int kt = 0; kt < n0; kt++)
+      {
+      Triangle &t = m_Source->triangles[kt];
+      size_t *v = t.vertices;
+      SMLVec3d X0 = (XSource[v[0]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d X1 = (XSource[v[1]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d X2 = (XSource[v[2]] - m_TrgCenter) / m_TrgScale;
+      SMLVec3d Xu_cross_Xv = vnl_cross_3d(X1-X0, X2-X0);
+      double mag_Xu_cross_Xv = Xu_cross_Xv.magnitude();
+
+      m_ZSrcCenters[kt] = (X0 + X1 + X2) / 3.0;
+      m_ZSrcNormals[kt] = Xu_cross_Xv / mag_Xu_cross_Xv;
+      m_ZSrcAreas[kt] = 0.5 * mag_Xu_cross_Xv;
+      m_ZSrcTotalArea += m_ZSrcAreas[kt];
+      }
+
+    // Compute the mass vectors mu and the initial scaling vectors u
+    m_Mu0 = m_ZSrcAreas / m_ZSrcTotalArea;
+
+    // Compute the matrix K. TODO: this can be threaded
+    for(int i = 0; i < n0; i++)
+      {
+      for(int j = 0; j < n1; j++)
+        {
+        double dist = 0.0;
+        double cos_theta = 0.0;
+        for(unsigned int d = 0; d < 3; d++)
+          {
+          double del = m_ZSrcCenters[i][d] - m_ZTrgCenters[j][d];
+          dist += del * del;
+          cos_theta += m_ZSrcNormals[i][d] * m_ZTrgNormals[j][d];
+          }
+        m_C(i,j) = dist * (1.0 + alpha * (1.0 - cos_theta));
+        m_K(i,j) = exp(-m_C(i,j) / eps);
+        }
+      }
+
+    // Not clear if we should reset the u vectors or reuse them
+    if(reset_starting_point)
+      {
+      m_U0.fill(1.0);
+      m_U1.fill(1.0);
+      }
+
+    // Perform the actual Sinkhorn iteration
+    for(unsigned int iter = 0; iter < niter; iter++)
+      {
+      // Print the current loss
+      if(iter % 20 == 0)
+        PrintLoss(iter);
+
+      // Compute u0 <- mu0 ./ K * u1
+      for(unsigned int i = 0; i < n0; i++)
+        {
+        double f = 0;
+        for(unsigned int j = 0; j < n1; j++)
+          f += m_K.get(i,j) * m_U1[j];
+        m_U0[i] = m_Mu0[i] / f;
+        }
+
+      // Compute u1 <- mu1 ./ K' * u0
+      for(unsigned int j = 0; j < n1; j++)
+        {
+        double f = 0;
+        for(unsigned int i = 0; i < n0; i++)
+          {
+          f += m_K.get(i,j) * m_U0[i];
+          }
+        m_U1[j] = m_Mu1[j] / f;
+        }
+      }
+
+    PrintLoss(niter);
+    }
+
+  /** Compute the matched target locations for source faces */
+  void ComputeTriangleCenterMatches(std::vector<SMLVec3d> &XMatches)
+    {
+    unsigned int n0 = m_Source->triangles.size(), n1 = m_Target->triangles.size();
+    XMatches.resize(n0);
+    for(unsigned int i = 0; i < n0; i++)
+      {
+      SMLVec3d match(0.0);
+      double mass = 0.0;
+      for(unsigned int j = 0; j < n1; j++)
+        {
+        // Compute the actual joint probability value for i,j
+        double m_ij = m_U0(i) * m_K(i, j) * m_U1(j);
+
+        // Use as weight against target centers
+        match += m_ij * m_ZTrgCenters[j];
+        mass += m_ij;
+        }
+
+      XMatches[i] = match * (m_TrgScale / mass) + m_TrgCenter;
+      }
+    }
+
+protected:
+  TriangleMesh *m_Source, *m_Target;
+
+  // Target center and scale, used for z-transforming data
+  SMLVec3d m_TrgCenter;
+  double m_TrgScale;
+
+  // Source and target triangle centers and normals, z-transformed
+  std::vector<SMLVec3d> m_ZTrgCenters, m_ZTrgNormals, m_ZSrcCenters, m_ZSrcNormals;
+
+  // Source and target triangle areas, z-transformed
+  vnl_vector<double> m_ZTrgAreas, m_ZSrcAreas;
+
+  // Total surface area
+  double m_ZTrgTotalArea, m_ZSrcTotalArea;
+
+  // The matrix K
+  vnl_matrix<double> m_C, m_K;
+
+  // The mass vectors and the scaling vectors
+  vnl_vector<double> m_Mu0, m_Mu1, m_U0, m_U1;
+};
+
+
+
 
 struct TriangleProperties
 {
@@ -1118,333 +712,6 @@ void CreateTriangleDihedralAngleConstraints(
     }
 }
 
-/*
-
-// ------------------------------------------------------------------------
-// Constrain the dihedral angle of the medial axis
-// ------------------------------------------------------------------------
-if(tc_med.min_dih_angle > 0)
-  {
-  // We first need to compute the multiplicity of each edge in the medial mesh so that we
-  // can exclude the edges that are on seam and edge curves of the medial model. Those edges
-  // are shared by a number of triangles other than two.
-  typedef std::pair<size_t, size_t> Edge;
-  std::map<Edge, unsigned int> edge_mult;
-
-  for(int k = 0; k < mmesh->triangles.size(); k++)
-    {
-    for(int d = 0; d < 3; d++)
-      {
-      int kopp = mmesh->triangles[k].neighbors[d];
-      if(kopp != NOID && k < kopp)
-        {
-        // Is this a boundary edge?
-        int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-        int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-        Edge edge(std::min(v1,v2), std::max(v1,v2));
-        auto it = edge_mult.find(edge);
-        if(it == edge_mult.end())
-          edge_mult.insert(make_pair(edge, 1));
-        else
-          it->second++;
-        }
-      }
-    }
-
-
-  VTKMeshBuilder<vtkPolyData> vmb_temp;
-  vmb_temp.SetTriangles(*mmesh);
-
-  vnl_matrix<double> m_export(M.size(), 3);
-  vnl_vector<int> mtbi_export(M.size());
-  vnl_vector<int> da_flag(M.size(), 0);
-  for(unsigned int i = 0; i < M.size(); i++)
-    {
-    m_export.set_row(i, vnl_vector_fixed<double,3>(M[i][0]->Evaluate(), M[i][1]->Evaluate(), M[i][2]->Evaluate()));
-    mtbi_export[i] = mtbIndex[i].size();
-    }
-
-  vmb_temp.SetPoints(m_export);
-  vmb_temp.AddArray(mtbi_export, "mtbIndex");
-
-  double non_edge_thresh = cos(vnl_math::pi * (180. - tc_med.min_dih_angle) / 180.);
-  for(int k = 0; k < mmesh->triangles.size(); k++)
-    {
-    for(int d = 0; d < 3; d++)
-      {
-      int kopp = mmesh->triangles[k].neighbors[d];
-      // One side only!
-      if(kopp != NOID && k < kopp)
-        {
-        // Is this a boundary edge?
-        int v1 = mmesh->triangles[k].vertices[(d+1)%3];
-        int v2 = mmesh->triangles[k].vertices[(d+2)%3];
-        Edge edge(std::min(v1,v2), std::max(v1,v2));
-        if(edge_mult[edge] == 2)
-          {
-          Expression *da = DotProduct(p, NT_M[k], NT_M[kopp]);
-          if(da->Evaluate() < 0.9)
-            {
-            printf("MDA: (%d, %d) via edge (%d, %d): %f\n", k, kopp, v1, v2, da->Evaluate());
-            da_flag[v1] = da_flag[v2] = 1;
-            }
-          p->AddConstraint(da, "DA-Med", non_edge_thresh, ConstrainedNonLinearProblem::UBINF);
-          }
-        }
-      }
-    }
-
-  vmb_temp.AddArray(da_flag, "DAFlag");
-  vmb_temp.Save("/tmp/medial_debug.vtk");
-  }
-
-*/
-
-#include "BruteForceSubdivisionMedialModel.h"
-
-Expression *ComputeDistanceToCorrespondingMeshObjective(
-  ConstrainedNonLinearProblem *p,
-  VarVecArray &X,
-  std::vector<SMLVec3d> &targetPoint)
-{
-  BigSum *objSqDist = new BigSum(p);
-  for(int i = 0; i < X.size(); i++)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      objSqDist->AddSummand(
-            new Square(p,
-                       new BinaryDifference(p, X[i][j],
-                                            new Constant(p, targetPoint[i][j]))));
-      }
-    }
-
-  return objSqDist;
-}
-
-Expression *ComputeDistanceToMeshObjective(
-    ConstrainedNonLinearProblem *p,
-    ClosestPointMatcher *cpm,
-    VarVecArray &X)
-{
-  // For each point on the model, find the closest target point
-  std::vector<SMLVec3d> targetPoint = cpm->FindClosestToTarget(X);
-
-  BigSum *objSqDist = new BigSum(p);
-  for(int i = 0; i < X.size(); i++)
-    {
-    for(int j = 0; j < 3; j++)
-      {
-      objSqDist->AddSummand(
-            new Square(p,
-                       new BinaryDifference(p, X[i][j],
-                                            new Constant(p, targetPoint[i][j]))));
-      }
-    }
-
-  return objSqDist;
-}
-
-Expression *ComputeDistanceToModelObjective(
-    ConstrainedNonLinearProblem *p,
-    ClosestPointMatcher *cpm,
-    TriangleMesh *mesh,
-    VarVecArray &X)
-{
-  std::vector<ClosestPointMatcher::MatchLocation> meshToModel
-      = cpm->FindClosestToSource(mesh, X);
-
-  BigSum *objRecipSqDist = new BigSum(p);
-  for(int i = 0; i < meshToModel.size(); i++)
-    {
-    ClosestPointMatcher::MatchLocation loc = meshToModel[i];
-    size_t *v = mesh->triangles[loc.iTriangle].vertices;
-
-    // The closest point based on the current barycentric coordinates
-    for(int d = 0; d < 3; d++)
-      {
-      WeightedSumGenerator wsg(p);
-      for(int j = 0; j < 3; j++)
-        wsg.AddTerm(X[v[j]][d], loc.xBary[j]);
-
-      wsg.AddConstant(-loc.xTarget[d]);
-      objRecipSqDist->AddSummand(new Square(p, wsg.GenerateSum()));
-      }
-
-    }
-
-  return objRecipSqDist;
-}
-
-void SaveBoundaryMesh(const char *file,
-                      ConstrainedNonLinearProblem *p,
-                      TriangleMesh *bmesh,
-                      std::vector<int> &mIndex,
-                      std::vector<int> &subDepth,
-                      std::vector<std::vector<int> > &mtbIndex,
-                      VarVecArray &X,
-                      VarVecArray &N,
-                      const VarVec &R)
-{
-  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
-  pts->Allocate(X.size());
-
-  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
-  rad->SetNumberOfComponents(1);
-  rad->Allocate(X.size());
-  rad->SetName("Radius");
-
-  vtkSmartPointer<vtkIntArray> mix = vtkSmartPointer<vtkIntArray>::New();
-  mix->SetNumberOfComponents(1);
-  mix->Allocate(X.size());
-  mix->SetName("MedialIndex");
-
-  vtkSmartPointer<vtkIntArray> sdepth = vtkSmartPointer<vtkIntArray>::New();
-  sdepth->SetNumberOfComponents(1);
-  sdepth->Allocate(X.size());
-  sdepth->SetName("SubdivisionDepth");
-
-  vtkSmartPointer<vtkIntArray> mult = vtkSmartPointer<vtkIntArray>::New();
-  mult->SetNumberOfComponents(1);
-  mult->Allocate(X.size());
-  mult->SetName("Tangency");
-
-  vtkSmartPointer<vtkFloatArray> norm = vtkSmartPointer<vtkFloatArray>::New();
-  norm->SetNumberOfComponents(3);
-  norm->Allocate(X.size());
-
-  for(int i = 0; i < X.size(); i++)
-    {
-    int j = mIndex[i];
-    pts->InsertNextPoint(X[i][0]->Evaluate(), X[i][1]->Evaluate(), X[i][2]->Evaluate());
-    norm->InsertNextTuple3(N[i][0]->Evaluate(), N[i][1]->Evaluate(), N[i][2]->Evaluate());
-    rad->InsertNextTuple1(R[j]->Evaluate());
-    mix->InsertNextTuple1(j);
-    mult->InsertNextTuple1(mtbIndex[j].size());
-    if(subDepth.size())
-      sdepth->InsertNextTuple1(subDepth[i]);
-    }
-
-  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
-  pd->Allocate(bmesh->triangles.size());
-  pd->SetPoints(pts);
-  pd->GetPointData()->SetNormals(norm);
-  pd->GetPointData()->AddArray(mix);
-  pd->GetPointData()->AddArray(mult);
-  pd->GetPointData()->AddArray(rad);
-
-  if(subDepth.size())
-    pd->GetPointData()->AddArray(sdepth);
-
-  for(int i = 0; i < bmesh->triangles.size(); i++)
-    {
-    vtkIdType vtx[3];
-    for(int j = 0; j < 3; j++)
-      vtx[j] = bmesh->triangles[i].vertices[j];
-    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
-    }
-
-  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
-  writer->SetInputData(pd);
-  writer->SetFileName(file);
-  writer->Update();
-}
-
-
-
-void SaveMedialMesh(const char *file,
-                    ConstrainedNonLinearProblem *p,
-                    TriangleMesh *bmesh,
-                    std::vector<int> &mIndex,
-                    std::vector<std::vector<int> > &mtbIndex,
-                    const VarVecArray &M,
-                    const VarVec &R,
-                    const VarVecArray &X,
-                    const VarVec &TA)
-{
-  vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
-  pts->Allocate(M.size());
-
-  vtkSmartPointer<vtkFloatArray> rad = vtkSmartPointer<vtkFloatArray>::New();
-  rad->SetNumberOfComponents(1);
-  rad->Allocate(M.size());
-  rad->SetName("Radius Function");
-
-  vtkSmartPointer<vtkFloatArray> spoke[3];
- 
-  spoke[0] = vtkSmartPointer<vtkFloatArray>::New();
-  spoke[0]->SetNumberOfComponents(3);
-  spoke[0]->Allocate(M.size());
-  spoke[0]->SetName("Spoke1");
-
-  spoke[1] = vtkSmartPointer<vtkFloatArray>::New();
-  spoke[1]->SetNumberOfComponents(3);
-  spoke[1]->Allocate(M.size());
-  spoke[1]->SetName("Spoke2");
-
-  spoke[2] = vtkSmartPointer<vtkFloatArray>::New();
-  spoke[2]->SetNumberOfComponents(3);
-  spoke[2]->Allocate(M.size());
-  spoke[2]->SetName("Spoke3");
-
-  for(int i = 0; i < M.size(); i++)
-    {
-    vnl_vector_fixed<double, 3> xm;
-    for(int j = 0; j < 3; j++)
-      xm[j] = M[i][j]->Evaluate();
-
-    pts->InsertNextPoint(xm[0], xm[1], xm[2]);
-    rad->InsertNextTuple1(R[i]->Evaluate());
-    
-    std::vector<int> &ix = mtbIndex[i];
-
-    vnl_vector_fixed<double, 3> xs;
-    for(int k = 0; k < std::min((int) ix.size(), 3); k++)
-      {
-      for(int j = 0; j < 3; j++)
-        xs[j] = X[ix[k]][j]->Evaluate() - xm[j];
-      spoke[k]->InsertNextTuple3(xs[0], xs[1], xs[2]);
-      }
-    for(int q = ix.size(); q < 3; q++)
-      {
-      spoke[q]->InsertNextTuple3(xs[0], xs[1], xs[2]);
-      }
-    }
-
-  vtkSmartPointer<vtkPolyData> pd = vtkSmartPointer<vtkPolyData>::New();
-  pd->Allocate(bmesh->triangles.size());
-  pd->SetPoints(pts);
-  pd->GetPointData()->SetScalars(rad);
-  pd->GetPointData()->AddArray(spoke[0]);
-  pd->GetPointData()->AddArray(spoke[1]);
-  pd->GetPointData()->AddArray(spoke[2]);
-
-  for(int i = 0; i < bmesh->triangles.size(); i++)
-    {
-    vtkIdType vtx[3];
-    for(int j = 0; j < 3; j++)
-      vtx[j] = mIndex[bmesh->triangles[i].vertices[j]];
-    pd->InsertNextCell(VTK_TRIANGLE, 3, vtx);
-    }
-
-  if(TA.size())
-    {
-    vtkSmartPointer<vtkFloatArray> t_area = vtkSmartPointer<vtkFloatArray>::New();
-    t_area->SetNumberOfComponents(1);
-    t_area->Allocate(bmesh->triangles.size());
-    t_area->SetName("Triangle area");
-
-    for(int i = 0; i < bmesh->triangles.size(); i++)
-      t_area->InsertNextTuple1(TA[i]->Evaluate());
-
-    pd->GetCellData()->AddArray(t_area);
-    }
-
-  vtkSmartPointer<vtkPolyDataWriter> writer = vtkSmartPointer<vtkPolyDataWriter>::New();
-  writer->SetInputData(pd);
-  writer->SetFileName(file);
-  writer->Update();
-}
 
 
 /**
@@ -2563,6 +1830,7 @@ void SaveConstraint()
 
 enum ProgramAction {
   ACTION_FIT_TARGET,
+  ACTION_FIT_TARGET_OMT,
   ACTION_FIT_SELF,
   ACTION_SUBDIVIDE,
   ACTION_SUBDIVIDE_EDGE,
@@ -2579,6 +1847,7 @@ int usage()
       "usage:\n"
       "  bcmrep_main [options]\n"
       "options that select an action (use one):\n"
+      "  -omt template.vtk target.vtk   : fit template to target with optimal mass transport\n"
       "  -icp template.vtk target.vtk   : fit template to target with iterative closest point loss\n"
       "  -lsq template.vtk target.vtk   : fit template to target least squares loss (matching vertices)\n"
       "  -sub template.vtk factor       : subdivide template by a factor\n"
@@ -2601,6 +1870,7 @@ int usage()
       "                                           curve with weight specified\n"
       "  -max-iter N                    : maximum iterations for IpOpt (200)\n"
       "  -icp-iter N                    : Number of ICP iterations (5)\n"
+      "  -no-fit-self                   : For ICP/OMT, skip the fit-to-self step\n"
       "triangle shape constraints:\n"
       "  -bc alpha beta min_area        : Set boundary triangle constraints \n"
       "                                     alpha:    minimum triangle angle (def: 12)\n"
@@ -2633,74 +1903,13 @@ struct RegularizationOptions
   unsigned int MaxIpOptIter, MaxICPIter;
 
   bool SubdivisionFlat, SubdivisionEdgeOnly;
+  bool SkipSelfFit;
 
   RegularizationOptions()
     : SubdivisionLevel(0), BasisSize(20),
       Weight(4.0), Mode(SPECTRAL), Solver("ma86"),
       EdgeLengthWeight(0.0), UseHessian(true), MaxIpOptIter(200), MaxICPIter(5),
-      SubdivisionFlat(false), SubdivisionEdgeOnly(false) {}
-};
-
-class ObjectiveCombiner
-{
-public:
-  struct Entry {
-    Expression *exp;
-    double weight;
-    double initValue;
-  };
-
-  void AddObjectiveTerm(Expression *obj, std::string name, double weight)
-  {
-    Entry ent;
-    ent.exp = obj;
-    ent.weight = weight;
-    ent.initValue = obj->Evaluate();
-    m_Generator.AddTerm(obj, weight);
-    m_ObjectiveInfo[name] = ent;
-  }
-
-  Expression *GetTotalObjective()
-  {
-    if(m_TotalObjective == NULL)
-      {
-      m_TotalObjective = m_Generator.GenerateSum();
-      m_InitTotalValue = m_TotalObjective->Evaluate();
-      }
-    return m_TotalObjective;
-  }
-
-  void PrintReport()
-  {
-    printf("%30s   %10s %10s   %10s   %10s\n", "TERM", "RawValue", "Weight", "WgtValue", "Delta");
-    for(InfoMap::iterator it = m_ObjectiveInfo.begin(); it != m_ObjectiveInfo.end(); ++it)
-      {
-      double val = it->second.exp->Evaluate();
-      printf("%30s   %10.4f %10.4f   %10.4f   %10.4f\n",
-             it->first.c_str(),
-             val, it->second.weight,
-             val * it->second.weight,
-             val * it->second.weight - it->second.initValue * it->second.weight);
-      }
-    double totVal = m_TotalObjective->Evaluate();
-    printf("%30s   %10.4s %10.4s   %10.4f   %10.4f\n",
-           "TOTAL OBJECTIVE", "", "", totVal, totVal - m_InitTotalValue);
-  }
-
-  ObjectiveCombiner(ConstrainedNonLinearProblem *p)
-    : m_Generator(p)
-  {
-    m_Problem = p;
-    m_TotalObjective = NULL;
-  }
-
-protected:
-  WeightedSumGenerator m_Generator;
-  ConstrainedNonLinearProblem *m_Problem;
-  Expression *m_TotalObjective;
-  double m_InitTotalValue;
-  typedef std::map<std::string, Entry> InfoMap;
-  InfoMap m_ObjectiveInfo;
+      SubdivisionFlat(false), SubdivisionEdgeOnly(false), SkipSelfFit(false) {}
 };
 
 struct TriangleConstraint
@@ -2739,12 +1948,6 @@ struct Statistics
   double max() { return maxx; }
 };
 
-std::string short_name(ConstrainedNonLinearProblem *p, int i)
-{
-  std::string n_varfull = p->GetVariable(i)->GetName();
-  return n_varfull.substr(0, n_varfull.find_first_of('['));
-}
-
 std::string qp_var_name(qcqp::Problem &qp, int i)
 {
   for(int q = 0; q < qp.GetNumberOfVariableTensors(); q++)
@@ -2780,6 +1983,9 @@ public:
 
   // Build the least squares objective
   void BuildLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget);
+
+  // Build the least squares objective for triangle face centers
+  void BuildFacesLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget);
 
   // Build the ICP objective
   void BuildICPObjective(ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model);
@@ -3427,6 +2633,47 @@ void BCMRepQuadraticProblemBuilder::BuildLeastSquaresObjective(const std::vector
     }
   }
 
+void BCMRepQuadraticProblemBuilder::BuildFacesLeastSquaresObjective(const std::vector<SMLVec3d> &xFacesLSQTarget)
+{
+  // ------------------------------------------------------------------------
+  // QCQP displacement objective (NEW CODE)
+  // ------------------------------------------------------------------------
+  auto &loss_disp = qp.AddLoss("disp_faces", 1.0);
+  for(int i = 0; i < bmesh->triangles.size(); i++)
+    {
+    auto &t = bmesh->triangles[i];
+
+    for(unsigned int j = 0; j < 3; j++)
+      {
+      // Loss is in the form sum [ |X_i - xtarg_i|^2 ]
+      qcqp::ElementRef a = qX(t.vertices[0],j);
+      qcqp::ElementRef b = qX(t.vertices[1],j);
+      qcqp::ElementRef c = qX(t.vertices[2],j);
+      double z = xFacesLSQTarget[i][j];
+
+      /*
+      qcqp::LinearExpression delta;
+      delta.b(qX(t.vertices[0],j)) = 1.0 / 3.0;
+      delta.b(qX(t.vertices[1],j)) = 1.0 / 3.0;
+      delta.b(qX(t.vertices[2],j)) = 1.0 / 3.0;
+      loss_disp.c() = -xtarg;
+      loss_disp.add_dotted(delta, delta);
+      */
+      loss_disp.A(a,a) += 1. / 9.;
+      loss_disp.A(b,b) += 1. / 9.;
+      loss_disp.A(c,c) += 1. / 9.;
+      loss_disp.A(a,b) += 2. / 9.;
+      loss_disp.A(b,c) += 2. / 9.;
+      loss_disp.A(c,a) += 2. / 9.;
+      loss_disp.b(a) += -2. * z / 3.;
+      loss_disp.b(b) += -2. * z / 3.;
+      loss_disp.b(c) += -2. * z / 3.;
+      loss_disp.c() += z * z;
+      }
+
+    }
+}
+
 void BCMRepQuadraticProblemBuilder::BuildICPObjective(
     ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model)
 {
@@ -3678,6 +2925,12 @@ int main(int argc, char *argv[])
       fnTemplate = argv[++p];
       fnTarget = argv[++p];
       }
+    if(cmd == "-omt")
+      {
+      action = ACTION_FIT_TARGET_OMT;
+      fnTemplate = argv[++p];
+      fnTarget = argv[++p];
+      }
     else if(cmd == "-lsq")
       {
       action = ACTION_FIT_SELF;
@@ -3777,6 +3030,10 @@ int main(int argc, char *argv[])
       tc_med.min_dih_angle = atof(argv[++p]);
       tc_med.min_tri_area = atof(argv[++p]);
       }
+    else if(cmd == "-no-fit-self")
+      {
+      regOpts.SkipSelfFit = true;
+      }
     else
       {
       std::cerr << "Unknown command " << cmd << std::endl;
@@ -3836,23 +3093,10 @@ int main(int argc, char *argv[])
     }
 
   // Load the target mesh
-  vtkPolyData *target = ReadVTKMesh(fnTarget.c_str());
+  vtkSmartPointer<vtkPolyData> target = ReadVTKMesh(fnTarget.c_str());
 
   // A buffer for making variable names
   char buffer[1024];
-
-  // Build the new efficient quadratic problem
-  BCMRepQuadraticProblemBuilder qp_builder(tmpl, regOpts, tc_bnd, tc_med);
-  qp_builder.BuildGeometry(tmpl.x);
-  qp_builder.BuildRegularization();
-  qp_builder.BuildLeastSquaresObjective(xLSQTarget);
-  qcqp::Problem &qp = qp_builder.GetProblem();
-  SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
-
-  // TODO: Create a file for dumping the constraint info
-  snprintf(buffer, 1024, "%s/%s_qcqp_constraint_dump.txt", fnOutDir.c_str(), fnOutBase.c_str());
-  FILE *fnQCQPConstraintDump = fopen(buffer, "wt");
-  q_ip->log_constraints(fnQCQPConstraintDump);
 
   // Set up the IPopt problem
   // Create a new instance of IpoptApplication
@@ -3888,7 +3132,8 @@ int main(int argc, char *argv[])
   // Intialize the IpoptApplication and process the options
   ApplicationReturnStatus status;
   status = app->Initialize();
-  if (status != Solve_Succeeded) {
+  if (status != Solve_Succeeded)
+    {
     printf("\n\n*** Error during initialization!\n");
     return (int) status;
     }
@@ -3896,188 +3141,271 @@ int main(int argc, char *argv[])
   // Print a message describing IpOpt
   app->PrintCopyrightMessage();
 
-  // Print the QP objective
-  vnl_vector<double> val_init = qp.GetVariableValues();
-  qcqp::Problem::LossReport lr_init = qp.GetLossReport(val_init.data_block());
-  PrintLossReport(lr_init, lr_init);
+  // Keep track of the running optimal values and optimal absis coefficients
+  std::vector<SMLVec3d> x_opt = tmpl.x, xc_opt;
 
-  // Now the QP
-  qp.SetupProblem();
-  printf("QP Jacobian size (%zu, %zu), NNZ %zu\n",
-         qp.GetConstraintsJacobian().GetNumberOfRows(),
-         qp.GetConstraintsJacobian().GetNumberOfColumns(),
-         qp.GetConstraintsJacobian().GetNumberOfSparseValues());
+  // Do we need to perform the initial self-fit?
+  if(regOpts.SkipSelfFit == false || action == ACTION_FIT_TARGET)
+    {
+    // Build the new efficient quadratic problem
+    BCMRepQuadraticProblemBuilder qp_builder(tmpl, regOpts, tc_bnd, tc_med);
+    qp_builder.BuildGeometry(tmpl.x);
+    qp_builder.BuildRegularization();
+    qp_builder.BuildLeastSquaresObjective(xLSQTarget);
+    qcqp::Problem &qp = qp_builder.GetProblem();
+    SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
 
-  printf("QP Hessian size (%zu, %zu), NNZ %zu\n",
-         qp.GetHessianOfLagrangean().GetNumberOfRows(),
-         qp.GetHessianOfLagrangean().GetNumberOfColumns(),
-         qp.GetHessianOfLagrangean().GetNumberOfSparseValues());
+    // TODO: Create a file for dumping the constraint info
+    snprintf(buffer, 1024, "%s/%s_qcqp_constraint_dump.txt", fnOutDir.c_str(), fnOutBase.c_str());
+    FILE *fnQCQPConstraintDump = fopen(buffer, "wt");
+    q_ip->log_constraints(fnQCQPConstraintDump);
+
+    // Print the QP objective
+    vnl_vector<double> val_init = qp.GetVariableValues();
+    qcqp::Problem::LossReport lr_init = qp.GetLossReport(val_init.data_block());
+    PrintLossReport(lr_init, lr_init);
+
+    // Now the QP
+    qp.SetupProblem();
+    printf("QP Jacobian size (%zu, %zu), NNZ %zu\n",
+           qp.GetConstraintsJacobian().GetNumberOfRows(),
+           qp.GetConstraintsJacobian().GetNumberOfColumns(),
+           qp.GetConstraintsJacobian().GetNumberOfSparseValues());
+
+    printf("QP Hessian size (%zu, %zu), NNZ %zu\n",
+           qp.GetHessianOfLagrangean().GetNumberOfRows(),
+           qp.GetHessianOfLagrangean().GetNumberOfColumns(),
+           qp.GetHessianOfLagrangean().GetNumberOfSparseValues());
 
  #ifdef __PRINT_STATS_
 
-  printf("QP varible stats\n");
-  int p_count = 0;
-  vnl_vector<double> x_qp(qp.GetNumberOfVariables());
-  for(unsigned int i = 0; i < qp.GetNumberOfVariableTensors(); i++)
-    {
-    auto *v = qp.GetVariableTensor(i);
-    Statistics stat;
-    for(int j = v->GetStartIndex(); j < v->GetStartIndex() + v->GetFlatSize(); j++)
+    printf("QP varible stats\n");
+    int p_count = 0;
+    vnl_vector<double> x_qp(qp.GetNumberOfVariables());
+    for(unsigned int i = 0; i < qp.GetNumberOfVariableTensors(); i++)
       {
-      x_qp[j] = qp.GetVariableValue(j);
-      stat.add(x_qp[j]);
+      auto *v = qp.GetVariableTensor(i);
+      Statistics stat;
+      for(int j = v->GetStartIndex(); j < v->GetStartIndex() + v->GetFlatSize(); j++)
+        {
+        x_qp[j] = qp.GetVariableValue(j);
+        stat.add(x_qp[j]);
+        }
+
+      printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", v->GetName(),
+             stat.n, stat.mean(), stat.sd(), stat.min(), stat.max());
+      p_count += stat.n;
+      }
+    printf("Total: %d\n", p_count);
+
+    std::map<std::string, Statistics> qp_con_count;
+    for(unsigned int i = 0; i < qp.GetNumberOfConstraints(); i++)
+      {
+      qp_con_count[qp.GetConstraintName(i)].add(
+            qp.EvaluateConstraint(x_qp.data_block(), i));
       }
 
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", v->GetName(),
-           stat.n, stat.mean(), stat.sd(), stat.min(), stat.max());
-    p_count += stat.n;
-    }
-  printf("Total: %d\n", p_count);
-
-  std::map<std::string, Statistics> qp_con_count;
-  for(unsigned int i = 0; i < qp.GetNumberOfConstraints(); i++)
-    {
-    qp_con_count[qp.GetConstraintName(i)].add(
-          qp.EvaluateConstraint(x_qp.data_block(), i));
-    }
-
-  printf("QP varible stats\n");
-  p_count = 0;
-  for(auto &it : qp_con_count)
-    {
-    printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
-  printf("QP objective: %12.8f\n", qp.EvaluateLoss(x_qp.data_block()));
-
-  /* Compute the grad-f statistics, this has to be done by variable and constraint type */
-  std::map<std::string, Statistics> qp_gradf_count;
-  vnl_vector<double> gradf_qp(qp.GetNumberOfVariables());
-  qp.EvaluateLossGradient(x_qp.data_block(), gradf_qp.data_block());
-  for(int i = 0; i < qp.GetNumberOfVariables(); i++)
-    {
-    std::string n_var = qp_var_name(qp, i);
-    qp_gradf_count[n_var].add(gradf_qp[i]);
-    }
-
-  printf("QP Grad Objective stats\n");
-  p_count = 0;
-  for(auto &it : qp_gradf_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
-
-  /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
-  auto &jqp = qp.GetConstraintsJacobian();
-  std::map<std::string, Statistics> qp_cv_count;
-  for(int i = 0; i < jqp.GetNumberOfRows(); i++)
-    {
-    std::string n_con = qp.GetConstraintName(i);
-    for(auto ri = jqp.Row(i); !ri.IsAtEnd(); ++ri)
+    printf("QP varible stats\n");
+    p_count = 0;
+    for(auto &it : qp_con_count)
       {
-      std::string n_var = qp_var_name(qp, ri.Column());
-      std::string name = n_con + "/" + n_var;
-      auto &wz = ri.Value();
-      double val = wz.z;
-      for(auto it_w : wz.w)
-        val += qp.GetVariableValue(std::get<0>(it_w)) * std::get<1>(it_w);
-
-      qp_cv_count[name].add(val);
+      printf("%16s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+             it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+      p_count += it.second.n;
       }
-    }
+    printf("Total: %d\n", p_count);
 
-  printf("QP jacobian stats\n");
-  p_count = 0;
-  for(auto &it : qp_cv_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
+    printf("QP objective: %12.8f\n", qp.EvaluateLoss(x_qp.data_block()));
 
-  // Compute qp hessian stats
-  std::map<std::string, Statistics> qp_hess_count;
-  auto &qp_hol = qp.GetHessianOfLagrangean();
-
-  for(int i = 0; i < qp_hol.GetNumberOfRows(); i++)
-    {
-    std::string nm_i = qp_var_name(qp, i);
-    for(auto it = qp_hol.Row(i); !it.IsAtEnd(); ++it)
+    /* Compute the grad-f statistics, this has to be done by variable and constraint type */
+    std::map<std::string, Statistics> qp_gradf_count;
+    vnl_vector<double> gradf_qp(qp.GetNumberOfVariables());
+    qp.EvaluateLossGradient(x_qp.data_block(), gradf_qp.data_block());
+    for(int i = 0; i < qp.GetNumberOfVariables(); i++)
       {
-      std::string nm_j = qp_var_name(qp, it.Column());
-      auto &wz = it.Value();
-      double hval = wz.z;
-      for(auto qtw : wz.w)
-        hval += std::get<1>(qtw);
-      qp_hess_count[nm_i+","+nm_j].add(hval);
+      std::string n_var = qp_var_name(qp, i);
+      qp_gradf_count[n_var].add(gradf_qp[i]);
       }
-    }
 
-  printf("QP Hessian stats\n");
-  p_count = 0;
-  for(auto &it : qp_hess_count)
-    {
-    printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
-           it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
-    p_count += it.second.n;
-    }
-  printf("Total: %d\n", p_count);
+    printf("QP Grad Objective stats\n");
+    p_count = 0;
+    for(auto &it : qp_gradf_count)
+      {
+      printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+             it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+      p_count += it.second.n;
+      }
+    printf("Total: %d\n", p_count);
+
+    /* Compute the Jacobian statistics, this has to be done by variable and constraint type */
+    auto &jqp = qp.GetConstraintsJacobian();
+    std::map<std::string, Statistics> qp_cv_count;
+    for(int i = 0; i < jqp.GetNumberOfRows(); i++)
+      {
+      std::string n_con = qp.GetConstraintName(i);
+      for(auto ri = jqp.Row(i); !ri.IsAtEnd(); ++ri)
+        {
+        std::string n_var = qp_var_name(qp, ri.Column());
+        std::string name = n_con + "/" + n_var;
+        auto &wz = ri.Value();
+        double val = wz.z;
+        for(auto it_w : wz.w)
+          val += qp.GetVariableValue(std::get<0>(it_w)) * std::get<1>(it_w);
+
+        qp_cv_count[name].add(val);
+        }
+      }
+
+    printf("QP jacobian stats\n");
+    p_count = 0;
+    for(auto &it : qp_cv_count)
+      {
+      printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+             it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+      p_count += it.second.n;
+      }
+    printf("Total: %d\n", p_count);
+
+    // Compute qp hessian stats
+    std::map<std::string, Statistics> qp_hess_count;
+    auto &qp_hol = qp.GetHessianOfLagrangean();
+
+    for(int i = 0; i < qp_hol.GetNumberOfRows(); i++)
+      {
+      std::string nm_i = qp_var_name(qp, i);
+      for(auto it = qp_hol.Row(i); !it.IsAtEnd(); ++it)
+        {
+        std::string nm_j = qp_var_name(qp, it.Column());
+        auto &wz = it.Value();
+        double hval = wz.z;
+        for(auto qtw : wz.w)
+          hval += std::get<1>(qtw);
+        qp_hess_count[nm_i+","+nm_j].add(hval);
+        }
+      }
+
+    printf("QP Hessian stats\n");
+    p_count = 0;
+    for(auto &it : qp_hess_count)
+      {
+      printf("%22s: %-4d \t %8.4f ± %8.4f \t [ %8.4f, %8.4f ]\n", it.first.c_str(),
+             it.second.n, it.second.mean(), it.second.sd(), it.second.min(), it.second.max());
+      p_count += it.second.n;
+      }
+    printf("Total: %d\n", p_count);
 
 #endif // __PRINT_STATS
 
-  // Ask Ipopt to solve the problem
-  app->Options()->SetStringValue("derivative_test", "none");
-  status = app->OptimizeTNLP(GetRawPtr(q_ip));
-  if(status < 0)
-    {
-    printf("\n\n*** Error %d during optimization!\n", (int) status);
-    return -1;
+    // Ask Ipopt to solve the problem
+    app->Options()->SetStringValue("derivative_test", "none");
+    status = app->OptimizeTNLP(GetRawPtr(q_ip));
+    if(status < 0)
+      {
+      printf("\n\n*** Error %d during optimization!\n", (int) status);
+      return -1;
+      }
+
+    // Get the current optimal X values
+    for(unsigned int i = 0; i < nb; i++)
+      x_opt[i] = qp_builder.qX(i).as_vector<3>();
+
+    xc_opt.resize(qp_builder.qXC.GetFlatSize() / 3);
+    for(unsigned int i = 0; i < xc_opt.size(); i++)
+      xc_opt[i] = qp_builder.qXC(i).as_vector<3>();
+
+    // Print the QP objective
+    vnl_vector<double> val_final = qp.GetVariableValues();
+    qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
+    PrintLossReport(lr_init, lr_final);
+
+    // Save the current state
+    snprintf(buffer, 1024, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
+    qp_builder.SaveBoundaryMesh(buffer);
+
+    snprintf(buffer, 1024, "%s/%s_fit2tmp_med.vtk", fnOutDir.c_str(), fnOutBase.c_str());
+    qp_builder.SaveMedialMesh(buffer);
     }
 
-  // Get the current optimal X values
-  std::vector<SMLVec3d> x_opt(nb), xc_opt(qp_builder.qXC.GetFlatSize() / 3);
-  for(unsigned int i = 0; i < nb; i++)
-    x_opt[i] = qp_builder.qX(i).as_vector<3>();
-  for(unsigned int i = 0; i < xc_opt.size(); i++)
-    xc_opt[i] = qp_builder.qXC(i).as_vector<3>();
-
-  // Print the QP objective
-  vnl_vector<double> val_final = qp.GetVariableValues();
-  qcqp::Problem::LossReport lr_final = qp.GetLossReport(val_final.data_block());
-  PrintLossReport(lr_init, lr_final);
-
-  // Save the current state
-  snprintf(buffer, 1024, "%s/%s_fit2tmp_bnd.vtk", fnOutDir.c_str(), fnOutBase.c_str());
-  qp_builder.SaveBoundaryMesh(buffer);
-
-  snprintf(buffer, 1024, "%s/%s_fit2tmp_med.vtk", fnOutDir.c_str(), fnOutBase.c_str());
-  qp_builder.SaveMedialMesh(buffer);
-
-  // Continue if in ICP mode
-  if(action == ACTION_FIT_TARGET)
+  // Continue if in ICP or OMT mode
+  if(action == ACTION_FIT_TARGET || action == ACTION_FIT_TARGET_OMT)
     {
     // Create the closest point finder
-    ClosestPointMatcher cpmatcher(target, 32);
+    std::shared_ptr<ClosestPointMatcher> cpmatcher;
+    if(ACTION_FIT_TARGET)
+      {
+      cpmatcher = std::shared_ptr<ClosestPointMatcher>(new ClosestPointMatcher(target, 32));
+      }
 
-    // The scale between the two distance functions
-    double recip_scale = nb * 1.0 / cpmatcher.GetNumberOfTargetPointsUsed();
+    std::shared_ptr<SinkhornIteration> sinkhorn;
+    std::shared_ptr<TriangleMesh> target_mesh;
+    if(ACTION_FIT_TARGET_OMT)
+      {
+      // Generate the target mesh
+      target_mesh = std::shared_ptr<TriangleMesh>(new TriangleMesh());
+      TriangleMeshGenerator m_target_gen(target_mesh.get(), target->GetNumberOfPoints());
+      for(int i = 0; i < target->GetNumberOfCells(); i++)
+        {
+        vtkCell *c = target->GetCell(i);
+        if(c->GetNumberOfPoints() != 3)
+          throw MedialModelException("Non-triangle cell in OMT target mesh");
+        m_target_gen.AddTriangle(c->GetPointId(0), c->GetPointId(1), c->GetPointId(2));
+        }
+      m_target_gen.GenerateMesh();
+
+      // Get the target coordinates
+      std::vector<SMLVec3d> x_target(target->GetNumberOfPoints());
+      for(int i = 0; i < target->GetNumberOfPoints(); i++)
+        x_target[i].set(target->GetPoint(i));
+
+      // Generate the Sinkhorn object
+      sinkhorn = std::shared_ptr<SinkhornIteration>(
+            new SinkhornIteration(&tmpl.bmesh, target_mesh.get(), x_target));
+      }
 
     // Repeat this several times
-    Expression *objSqDist, *objRecipSqDist;
     for(int i = 0; i < regOpts.MaxICPIter; i++)
       {
       // Create a new QP to solve
       BCMRepQuadraticProblemBuilder qp_builder_icp(tmpl, regOpts, tc_bnd, tc_med);
       qp_builder_icp.BuildGeometry(x_opt);
       qp_builder_icp.BuildRegularization(xc_opt);
-      qp_builder_icp.BuildICPObjective(cpmatcher, 1.0, recip_scale);
+
+      if(ACTION_FIT_TARGET)
+        {
+        // The scale between the two distance functions
+        double recip_scale = nb * 1.0 / cpmatcher->GetNumberOfTargetPointsUsed();
+        qp_builder_icp.BuildICPObjective(*cpmatcher, 1.0, recip_scale);
+        }
+      else
+        {
+        // Perform Sinkhorn iterations
+        printf("Performing Sinkhorn iterations\n");
+        sinkhorn->PerformIteration(x_opt, 1.0, 0.04, 100, true);
+        printf("done\n");
+
+        // Get the target locations
+        std::vector<SMLVec3d> xTriangleCenterTargets(tmpl.bmesh.triangles.size());
+        sinkhorn->ComputeTriangleCenterMatches(xTriangleCenterTargets);
+
+        qp_builder_icp.BuildFacesLeastSquaresObjective(xTriangleCenterTargets);
+
+        // Write target locations
+        vtkSmartPointer<vtkPolyData> pd = ReadVTKMesh(fnTemplate.c_str());
+        vtkSmartPointer<vtkFloatArray> vMatch = vtkSmartPointer<vtkFloatArray>::New();
+        vMatch->SetNumberOfComponents(3);
+        vMatch->Allocate(3 * pd->GetNumberOfPoints());
+        vMatch->SetName("ClosestPoint");
+        for(unsigned int i = 0; i < xTriangleCenterTargets.size(); i++)
+          vMatch->InsertNextTuple3(xTriangleCenterTargets[i][0],xTriangleCenterTargets[i][1],xTriangleCenterTargets[i][2]);
+        pd->GetCellData()->AddArray(vMatch);
+        vtkSmartPointer<vtkPolyDataWriter> wr =
+            vtkSmartPointer<vtkPolyDataWriter>::New();
+        wr->SetInputData(pd);
+        snprintf(buffer, 1024, "%s/%s_omt_%02d_facetarget.vtk", fnOutDir.c_str(), fnOutBase.c_str(), i);
+        wr->SetFileName(buffer);
+        wr->Update();
+        }
+
       qcqp::Problem &qp = qp_builder_icp.GetProblem();
       SmartPtr<IPOptQCQPProblemInterface> q_ip = new IPOptQCQPProblemInterface(qp);
 
@@ -4109,6 +3437,8 @@ int main(int argc, char *argv[])
       // Get the current optimal X values
       for(unsigned int i = 0; i < nb; i++)
         x_opt[i] = qp_builder_icp.qX(i).as_vector<3>();
+
+      xc_opt.resize(qp_builder_icp.qXC.GetFlatSize() / 3);
       for(unsigned int i = 0; i < xc_opt.size(); i++)
         xc_opt[i] = qp_builder_icp.qXC(i).as_vector<3>();
 
