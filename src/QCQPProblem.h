@@ -276,6 +276,15 @@ public:
     m_c += l1.m_c * l2.m_c;
     }
 
+  void add(const QuadraticExpression &qe)
+    {
+    for(auto a : qe.m_Aij)
+      m_Aij[a.first] += a.second;
+    for(auto b : qe.m_bi)
+      m_bi[b.first] += b.second;
+    m_c += qe.m_c;
+    }
+
   template <typename T>
   double Evaluate(const T* x)
   {

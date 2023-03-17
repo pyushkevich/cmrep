@@ -274,6 +274,8 @@ ClosestPointMatcher::FindClosestToSource(TriangleMesh *mesh, std::vector<SMLVec3
 class SinkhornIteration
 {
 public:
+  friend class BCMRepQuadraticProblemBuilder;
+
   /**
    * The constructor takes a source mesh, a target mesh, and a set of parameters
    */
@@ -363,6 +365,8 @@ public:
                         double alpha = 1.0, double eps = 0.01, int niter = 100,
                         bool reset_starting_point = true)
     {
+    // Store alpha
+    m_Alpha = alpha;
     unsigned int n0 = m_Source->triangles.size(), n1 = m_Target->triangles.size();
 
     // Compute the source properties
@@ -486,6 +490,9 @@ protected:
 
   // The mass vectors and the scaling vectors
   vnl_vector<double> m_Mu0, m_Mu1, m_U0, m_U1;
+
+  // The alpha used for the cost computation
+  double m_Alpha = 1.0;
 };
 
 
@@ -1987,6 +1994,9 @@ public:
   // Build the least squares objective for triangle face centers
   void BuildFacesLeastSquaresObjective(const std::vector<SMLVec3d> &xLSQTarget);
 
+  // Build an optimal mass transport objective
+  void BuildOMTObjective(SinkhornIteration &si);
+
   // Build the ICP objective
   void BuildICPObjective(ClosestPointMatcher &cpm, double w_model_to_target, double w_target_to_model);
 
@@ -2670,7 +2680,156 @@ void BCMRepQuadraticProblemBuilder::BuildFacesLeastSquaresObjective(const std::v
       loss_disp.b(c) += -2. * z / 3.;
       loss_disp.c() += z * z;
       }
+    }
+}
 
+void BCMRepQuadraticProblemBuilder::BuildOMTObjective(SinkhornIteration &si)
+{
+  int n0 = bmesh->triangles.size();
+  int n1 = si.m_U1.size();
+
+  // The objective is of the form |X_i - Y_j|^2 * (1 + alpha - alpha <N_i,M_j>)
+  // where X,N are the model triangle centers and normals, and Y,M are the target
+  // triangle centers and normals. To make this quadratic requires the introduction
+  // of a new variable X_i * N_i
+  auto &loss = qp.AddLoss("omp_loss", 1.0);
+
+  // Add the variable representing the center of the triangle times the normal of
+  // the triangle. We could also add the variable for the vertices instead, but I
+  // am not sure that will make any difference in problem size or efficiency
+  qcqp::VariableRef<3> qTXN = qp.AddVariableTensor<3>("TXN", {n0, 3, 3});
+
+  // Iterate over the model mesh triangles
+  for(int i = 0; i < n0; i++)
+    {
+    auto &t = bmesh->triangles[i];
+    int a = t.vertices[0], b = t.vertices[1], c = t.vertices[2];
+
+    // Initialize qTXN variable and set its constraint
+    for(unsigned int d = 0; d < 3; d++)
+      {
+      for(unsigned int q = 0; q < 3; q++)
+        {
+        // Initialize the qTXN variable
+        qTXN(i,d,q) = tp_bnd.triangle_normals(i,q) * (qX(a,d) + qX(b,d) + qX(c,d)) / 3.0;
+
+        // Create a constraint for the qTXN variable
+        auto &con_txn = qp.AddConstraint("TXN", 0.0, 0.0);
+        con_txn.A(tp_bnd.triangle_normals(i,q), qX(a,d)) = 1./3.;
+        con_txn.A(tp_bnd.triangle_normals(i,q), qX(b,d)) = 1./3.;
+        con_txn.A(tp_bnd.triangle_normals(i,q), qX(c,d)) = 1./3.;
+        con_txn.b(qTXN(i,d,q)) = -1.0;
+        }
+      }
+    }
+
+  // TODO: this is just for checking the computation
+  auto x_curr = qp.GetVariableValues();
+
+  // Iterate over the model mesh triangles
+  for(int i = 0; i < n0; i++)
+    {
+    auto &t = bmesh->triangles[i];
+    int a = t.vertices[0], b = t.vertices[1], c = t.vertices[2];
+
+    // Create a temporary quadratic expression for this triangle
+    qcqp::QuadraticExpression loss_i;
+
+    // Expected value of the loss - obtained by adding up C * gamma in sinkhorn
+    double loss_exp_value = 0.0;
+    double loss_exp_value_2 = 0.0;
+
+    // Running sums of coefficients to compute
+    double w_1 = 0.0;
+    vnl_vector_fixed<double, 3> w_Xd(0.0), w_XXd(0.0), w_Nq(0.0);
+    vnl_matrix_fixed<double, 3, 3> w_XXd_Nq(0.0), w_Xd_Nq(0.0);
+
+    // Compute these sums going over the target triangles
+    double mass_i = 0.0;
+    for(unsigned int j = 0; j < n1; j++)
+      {
+      // Get the transport probability between i and j
+      double gamma_ij = si.m_U0(i) * si.m_K(i, j) * si.m_U1(j);
+      mass_i += gamma_ij;
+
+      // Get the target triangle center in native coordinates
+      SMLVec3d Yj = si.m_ZTrgCenters[j] * si.m_TrgScale + si.m_TrgCenter;
+      SMLVec3d Mj = si.m_ZTrgNormals[j];
+
+      // Add up the weights
+      for(unsigned int d = 0; d < 3; d++)
+        {
+        w_1       += Yj[d] * Yj[d] * (1+si.m_Alpha) * gamma_ij;
+        w_XXd[d]  += (1+si.m_Alpha) * gamma_ij;
+        w_Xd[d]   += -2 * Yj[d] * (1+si.m_Alpha) * gamma_ij;
+        for(unsigned int q = 0; q < 3; q++)
+          {
+          w_XXd_Nq(d,q) += -si.m_Alpha * Mj[q] * gamma_ij;
+          w_Xd_Nq(d,q)  += 2 * si.m_Alpha * Yj[d] * Mj[q] * gamma_ij;
+          w_Nq[q]       += -si.m_Alpha * Yj[d] * Yj[d] * Mj[q] * gamma_ij;
+          }
+        }
+
+      // Add the expected value
+      loss_exp_value += gamma_ij * si.m_C(i,j) * si.m_TrgScale * si.m_TrgScale;
+
+      for(unsigned int d = 0; d < 3; d++)
+        {
+        double xi = (qX(a,d) + qX(b,d) + qX(c,d))/3;
+        double ca = dot_product(tp_bnd.triangle_normals(i).as_vector<3>(), Mj);
+        loss_exp_value_2 += gamma_ij * (xi - Yj[d]) * (xi - Yj[d]) * (1 + si.m_Alpha - si.m_Alpha * ca);
+        }
+      }
+
+    // Time to assign weights to all the variables. However, since the weights for the X's above
+    // refer to the triangle centers, each weight has to be distributed among the vertices
+    const double w19 = 1.0/9.0, w29 = 2.0/9.0, w13 = 1.0/3.0;
+    for(unsigned int d = 0; d < 3; d++)
+      {
+      // All the elements involved
+      auto Xa = qX(a,d), Xb = qX(b,d), Xc = qX(c,d), N = tp_bnd.triangle_normals(i,d);
+
+      // Assign the weight for X^2 term
+      loss_i.A(Xa, Xa) += w19 * w_XXd[d];
+      loss_i.A(Xb, Xb) += w19 * w_XXd[d];
+      loss_i.A(Xc, Xc) += w19 * w_XXd[d];
+      loss_i.A(Xa, Xb) += w29 * w_XXd[d];
+      loss_i.A(Xb, Xc) += w29 * w_XXd[d];
+      loss_i.A(Xc, Xa) += w29 * w_XXd[d];
+
+      // Assign the weight for X term
+      loss_i.b(Xa) += w13 * w_Xd[d];
+      loss_i.b(Xb) += w13 * w_Xd[d];
+      loss_i.b(Xc) += w13 * w_Xd[d];
+
+      for(unsigned int q = 0; q < 3; q++)
+        {
+        auto  XN = qTXN(i,d,q);
+
+        // Assign weights for the term X * N
+        loss_i.A(Xa, N) += w13 * w_Xd_Nq(d,q);
+        loss_i.A(Xb, N) += w13 * w_Xd_Nq(d,q);
+        loss_i.A(Xc, N) += w13 * w_Xd_Nq(d,q);
+
+        // Assign weights for the term X * X * N
+        loss_i.A(Xa, XN) += w13 * w_XXd_Nq(d,q);
+        loss_i.A(Xb, XN) += w13 * w_XXd_Nq(d,q);
+        loss_i.A(Xc, XN) += w13 * w_XXd_Nq(d,q);
+        }
+
+      // Assign weights for the term N (d here refers to q)
+      loss_i.b(N) += w_Nq[d];
+      }
+
+    // Add constant term
+    loss_i.c() += w_1;
+
+    // Compare the loss with expected value
+    double loss_value = loss_i.Evaluate(x_curr.data_block());
+    printf("Triangle %5d:  OMT Loss expected: %12.8f  %12.8f    actual: %12.8f\n", i, loss_exp_value, loss_exp_value_2, loss_value);
+
+    // Add the loss
+    loss.add(loss_i);
     }
 }
 
@@ -3387,7 +3546,7 @@ int main(int argc, char *argv[])
         std::vector<SMLVec3d> xTriangleCenterTargets(tmpl.bmesh.triangles.size());
         sinkhorn->ComputeTriangleCenterMatches(xTriangleCenterTargets);
 
-        qp_builder_icp.BuildFacesLeastSquaresObjective(xTriangleCenterTargets);
+        qp_builder_icp.BuildOMTObjective(*sinkhorn);
 
         // Write target locations
         vtkSmartPointer<vtkPolyData> pd = ReadVTKMesh(fnTemplate.c_str());
