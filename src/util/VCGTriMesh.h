@@ -37,6 +37,9 @@ public:
   // Clean the mesh and compute internal quantities
   void CleanMesh();
 
+  // Recompute normals
+  void RecomputeNormals();
+
   // Access the  mesh
   Mesh &GetMesh() { return m_Mesh; }
 

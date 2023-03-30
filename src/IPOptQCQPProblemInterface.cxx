@@ -47,9 +47,35 @@ bool IPOptQCQPProblemInterface::get_starting_point(
     Index n, bool init_x, Number *x, bool init_z,
     Number *z_L, Number *z_U, Index m, bool init_lambda, Number *lambda)
 {
-  assert(init_z == false && init_lambda == false);
+  // Set the primal variables
   for(int i = 0; i < n; i++)
     x[i] = m_Problem.GetVariableValue(i);
+
+  // Set the warm start data
+  if(init_z)
+    {
+    if(m_Problem.GetWarmStartZL().size() && m_Problem.GetWarmStartZU().size())
+      {
+      for(int i = 0; i < n; i++)
+        {
+        z_L[i] = m_Problem.GetWarmStartZL()[i];
+        z_U[i] = m_Problem.GetWarmStartZU()[i];
+        }
+      }
+    else
+      return false;
+    }
+
+  if(init_lambda)
+    {
+    if(m_Problem.GetWarmStartLambda().size())
+      {
+      for(int i = 0; i < m; i++)
+        lambda[i] = m_Problem.GetWarmStartLambda()[i];
+      }
+    else
+      return false;
+    }
 
   return true;
 }
@@ -73,56 +99,49 @@ bool IPOptQCQPProblemInterface::eval_grad_f(
 bool IPOptQCQPProblemInterface::eval_g(
     Index n, const Number *x, bool new_x, Index m, Number *g)
 {
-  for(unsigned int i = 0; i < m; i++)
-    g[i] = m_Problem.EvaluateConstraint(x, i);
-
-  return true;
-
-  /*
-  // Slow code
-  // Keep track of categories
-  typedef std::map<std::string, double> CatMap;
-  CatMap cmap;
-
-  // Get the partial derivatives of the objective function
-  for(unsigned int i = 0; i < m; i++)
-    {
-    g[i] = m_Problem.EvaluateConstraint(x, i);
-    std::string cat = m_Problem.GetConstraintName(i);
-    std::pair<CatMap::iterator, bool> ret = cmap.insert(std::make_pair(cat, 0.0));
-
-    double lb, ub;
-    m_Problem.GetConstraintBounds(i, lb, ub);
-    double viol_lb = std::max(0.0, lb - g[i]);
-    double viol_ub = std::max(0.0, g[i] - ub);
-    double viol = std::max(viol_lb, viol_ub);
-
-    ret.first->second = std::max(ret.first->second, viol);
-    }
-
-  // Print the categories
   if(m_ConstraintLogFile)
     {
-    static int iter = 0;
-    if(iter % 10 == 0)
+    // Keep track of the constraints
+    std::map<std::string, double> catmap;
+    std::string lastcat;
+
+    for(unsigned int i = 0; i < m; i++)
       {
-      for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
-        {
-        fprintf(m_ConstraintLogFile, "%12s ", it->first.c_str());
-        }
+      // Evaluate the constraint
+      g[i] = m_Problem.EvaluateConstraint(x, i);
+
+      // Get the lower and upper bounds
+      double lb, ub;
+      m_Problem.GetConstraintBounds(i, lb, ub);
+
+      // Compute violation
+      double viol = g[i] > ub ? (g[i] - ub) : (g[i] < lb ? lb - g[i] : 0.0);
+      double &max_viol = catmap[m_Problem.GetConstraintName(i)];
+      max_viol = std::max(max_viol, viol);
+      }
+
+    // Print log
+    if(m_ConstraintLogIter % 10 == 0)
+      {
+      for(auto it : catmap)
+        fprintf(m_ConstraintLogFile, "%12s ", it.first.c_str());
       fprintf(m_ConstraintLogFile, "\n");
       }
-    for(CatMap::iterator it = cmap.begin(); it != cmap.end(); ++it)
-      {
-      fprintf(m_ConstraintLogFile, "%12.8f ", it->second);
-      }
+    for(auto it : catmap)
+      fprintf(m_ConstraintLogFile, "%12.8f ", it.second);
     fprintf(m_ConstraintLogFile, "\n");
     fflush(m_ConstraintLogFile);
-    iter++;
+    m_ConstraintLogIter++;
+    }
+  else
+    {
+    // If not logging constraints, just one line
+    for(unsigned int i = 0; i < m; i++)
+      g[i] = m_Problem.EvaluateConstraint(x, i);
+
     }
 
   return true;
-  */
 }
 
 bool IPOptQCQPProblemInterface::eval_jac_g(
@@ -222,6 +241,10 @@ void IPOptQCQPProblemInterface::finalize_solution(
 {
   for(int i = 0; i < n; i++)
     m_Problem.SetVariableValue(i, x[i]);
+
+  m_Problem.SetWarmStartLambda(m, lambda);
+  m_Problem.SetWarmStartZL(n, z_L);
+  m_Problem.SetWarmStartZU(n, z_U);
 
   m_Problem.Finalize();
 }

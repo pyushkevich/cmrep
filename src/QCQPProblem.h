@@ -753,6 +753,34 @@ public:
 
   }
 
+  template <class TNumber>
+  void SetWarmStartLambda(int n, const TNumber *values)
+  {
+    m_WarmStartLambda.set_size(n);
+    for(int i = 0; i < n; i++)
+      m_WarmStartLambda[i] = values[i];
+  }
+
+  template <class TNumber>
+  void SetWarmStartZL(int n, const TNumber *values)
+  {
+    m_WarmStartZL.set_size(n);
+    for(int i = 0; i < n; i++)
+      m_WarmStartZL[i] = values[i];
+  }
+
+  template <class TNumber>
+  void SetWarmStartZU(int n, const TNumber *values)
+  {
+    m_WarmStartZU.set_size(n);
+    for(int i = 0; i < n; i++)
+      m_WarmStartZU[i] = values[i];
+  }
+
+  const vnl_vector<double> &GetWarmStartLambda() const { return m_WarmStartLambda; }
+  const vnl_vector<double> &GetWarmStartZL() const { return m_WarmStartZL; }
+  const vnl_vector<double> &GetWarmStartZU() const { return m_WarmStartZU; }
+
   /** Maps variable values from flat array back to the per-variable arrays */
   void Finalize()
   {
@@ -787,6 +815,9 @@ protected:
 
   // Variable bounds - available after SetupProblem
   vnl_vector<double> m_VariableLB, m_VariableUB, m_VariableValue;
+
+  // Storage for warm start data - Lagrange multipliers
+  vnl_vector<double> m_WarmStartLambda, m_WarmStartZL, m_WarmStartZU;
 
 
 };

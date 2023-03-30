@@ -359,13 +359,15 @@ int main(int argc, char *argv[])
     tri_mesh.CleanMesh();
 
     vcg::tri::TriEdgeCollapseQuadricParameter qparams;
-
-    qparams.PreserveBoundary=false;
-    qparams.PreserveTopology=false;
+    qparams.QualityThr = 0.3;
+    qparams.PreserveBoundary=true;
+    qparams.BoundaryQuadricWeight=1.0;
+    qparams.PreserveTopology=true;
     qparams.QualityWeight=false;
-    qparams.NormalCheck=false;
+    qparams.NormalCheck=true;
     qparams.OptimalPlacement=true;
-    qparams.QualityQuadric=false;
+    qparams.QualityQuadric=true;
+    qparams.QualityQuadricWeight=0.001;
 
     // decimator initialization
     vcg::LocalOptimization<VCGTriMesh::Mesh> DeciSession(tri_mesh.GetMesh(), &qparams);
@@ -410,6 +412,10 @@ int main(int argc, char *argv[])
     printf("\nCompleted in (%5.3f+%5.3f) sec\n", float(t2-t1)/CLOCKS_PER_SEC, float(t3-t2)/CLOCKS_PER_SEC);
 
     DeciSession.Finalize<MyTriEdgeCollapse>();
+
+    // Postprocess by cleaning and fixing normals
+    tri_mesh.CleanMesh();
+    tri_mesh.RecomputeNormals();
 
     tri_mesh.ExportToVTK(mesh);
 #else

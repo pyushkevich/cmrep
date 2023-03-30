@@ -75,7 +75,6 @@ void VCGTriMesh::ExportToVTK(vtkPolyData *pd)
       const auto &n = vi->cN();
       pts->InsertNextPoint(p[0], p[1], p[2]);
       normals->InsertNextTuple3(n[0], n[1], n[2]);
-
       VertexId[vi - m_Mesh.vert.begin()] = numvert++;
       }
     }
@@ -105,9 +104,33 @@ void VCGTriMesh::CleanMesh()
   int unref = tri::Clean<Mesh>::RemoveUnreferencedVertex(m_Mesh);
   printf("Removed %i duplicate and %i unreferenced vertices from mesh\n", dup, unref);
 
+  // Remove degenerate and zero area faces
+  int dupf = tri::Clean<Mesh>::RemoveDuplicateFace(m_Mesh);
+  int degf = tri::Clean<Mesh>::RemoveDegenerateFace(m_Mesh);
+  int zaf = tri::Clean<Mesh>::RemoveZeroAreaFace(m_Mesh);
+  printf("Removed %i duplicate, %i degenerate, and %i zero area faces from mesh\n", dupf, degf, zaf);
+
   tri::Allocator<Mesh>::CompactEveryVector(m_Mesh);
   tri::UpdateTopology<Mesh>::VertexFace(m_Mesh);
   tri::UpdateBounding<Mesh>::Box(m_Mesh);
   tri::UpdateFlags<Mesh>::FaceBorderFromVF(m_Mesh);
   tri::UpdateFlags<Mesh>::VertexBorderFromFaceBorder(m_Mesh);
+}
+
+void VCGTriMesh::RecomputeNormals()
+{
+  // updateBoxAndNormals() in meshlab
+  tri::UpdateBounding<Mesh>::Box(m_Mesh);
+  if(m_Mesh.fn > 0)
+    {
+    tri::UpdateNormal<Mesh>::PerFaceNormalized(m_Mesh);
+    tri::UpdateNormal<Mesh>::PerVertexAngleWeighted(m_Mesh);
+    }
+
+  // Normal cleaning
+  tri::UpdateNormal<Mesh>::NormalizePerFace(m_Mesh);
+  tri::UpdateNormal<Mesh>::PerVertexFromCurrentFaceNormal(m_Mesh);
+  tri::UpdateNormal<Mesh>::NormalizePerVertex(m_Mesh);
+
+
 }
