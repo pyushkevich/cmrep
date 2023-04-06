@@ -11,6 +11,7 @@
 #include <vtkUnstructuredGridWriter.h>
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
+#include "vtkCellData.h"
 #include "vtkPointData.h"
 #include "vtkFloatArray.h"
 #include "itkVectorImage.h"
@@ -21,6 +22,7 @@
 #include "ReadWriteVTK.h"
 #include <iostream>
 #include <limits>
+#include "vtkPointDataToCellData.h"
 
 using namespace std;
 
@@ -160,7 +162,7 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
   bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode, bool vtk_binary, float background_value)
 {
   // Read the input mesh
-  TMeshType *mesh = ReadMesh<TMeshType>(argv[argc-4]);
+  vtkSmartPointer<TMeshType> mesh = ReadMesh<TMeshType>(argv[argc-4]);
   size_t n = mesh->GetNumberOfPoints();
 
   // Create an array to hold the output
@@ -351,6 +353,21 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
     // Apply thresholding
     mesh = ThresholdMesh(mesh, trim_min, trim_max, arrname, trim_comp);
     }
+
+  // Also generate cell labels
+  vtkNew<vtkPointDataToCellData> pdcd;
+  pdcd->SetInputData(mesh);
+  pdcd->SetProcessAllArrays(false);
+  pdcd->AddPointDataArray(arrname);
+
+  if(voting_mode)
+    {
+    mesh->GetPointData()->SetScalars(mesh->GetPointData()->GetArray(arrname));
+    pdcd->SetCategoricalData(true);
+    }
+
+  pdcd->Update();
+  mesh->GetCellData()->AddArray(pdcd->GetOutput()->GetCellData()->GetArray(arrname));
 
   // Write the output
   WriteMesh<TMeshType>(mesh, argv[argc - 2], vtk_binary);

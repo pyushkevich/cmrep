@@ -67,6 +67,7 @@ public:
 private:
   qcqp::Problem &m_Problem;
   FILE *m_ConstraintLogFile;
+  int m_ConstraintLogIter = 0;
 };
 
 #endif // IPOPTQCQPPROBLEMINTERFACE_H

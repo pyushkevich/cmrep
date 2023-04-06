@@ -1,6 +1,7 @@
 #include "VTKMeshBuilder.h"
 #include "MeshTraversal.h"
 
+#include "vtkCellData.h"
 #include "vtkPolyData.h"
 #include "vtkCellArray.h"
 #include "vtkPointData.h"
@@ -76,7 +77,7 @@ void VTKMeshBuilder<TDataSet>::SetNormals(const vnl_matrix<double> &x)
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<double> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<double> &x, const char *name, bool cell)
 {
   assert(pd->GetNumberOfPoints() == x.rows());
 
@@ -90,11 +91,14 @@ void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<double> &x, con
     for(int a = 0; a < x.columns(); a++)
       arr->SetComponent(i, a, x(i,a));
 
-  pd->GetPointData()->AddArray(arr);
+  if(cell)
+    pd->GetCellData()->AddArray(arr);
+  else
+    pd->GetPointData()->AddArray(arr);
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<double> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<double> &x, const char *name, bool cell)
 {
   assert(pd->GetNumberOfPoints() == x.size());
 
@@ -107,11 +111,14 @@ void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<double> &x, con
   for(int i = 0; i < x.size(); i++)
     arr->SetTuple1(i, x[i]);
 
-  pd->GetPointData()->AddArray(arr);
+  if(cell)
+    pd->GetCellData()->AddArray(arr);
+  else
+    pd->GetPointData()->AddArray(arr);
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<int> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<int> &x, const char *name, bool cell)
 {
   assert(pd->GetNumberOfPoints() == x.rows());
 
@@ -125,11 +132,14 @@ void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_matrix<int> &x, const 
     for(int a = 0; a < x.columns(); a++)
       arr->SetComponent(i, a, x(i,a));
 
-  pd->GetPointData()->AddArray(arr);
+  if(cell)
+    pd->GetCellData()->AddArray(arr);
+  else
+    pd->GetPointData()->AddArray(arr);
 }
 
 template <class TDataSet>
-void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<int> &x, const char *name)
+void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<int> &x, const char *name, bool cell)
 {
   assert(pd->GetNumberOfPoints() == x.size());
 
@@ -142,7 +152,10 @@ void VTKMeshBuilder<TDataSet>::AddArrayInternal(const vnl_vector<int> &x, const 
   for(int i = 0; i < x.size(); i++)
     arr->SetTuple1(i, x[i]);
 
-  pd->GetPointData()->AddArray(arr);
+  if(cell)
+    pd->GetCellData()->AddArray(arr);
+  else
+    pd->GetPointData()->AddArray(arr);
 }
 
 template <class TDataSet>

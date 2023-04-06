@@ -36,6 +36,7 @@ FIND_PACKAGE(VTK 9 REQUIRED COMPONENTS
   FiltersGeometry
   FiltersModeling
   FiltersSources
+  FiltersVerdict
   IOExport
   IOGeometry
   IOImage
@@ -69,7 +70,7 @@ IF(USE_EIGEN)
   FIND_PACKAGE (Eigen3 3.3 REQUIRED)
   IF(EIGEN3_FOUND)
     ADD_DEFINITIONS(-DHAVE_EIGEN)
-    SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen)
+    SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${LAPACK_LIB})
     SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} Eigen3::Eigen)
     SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} Eigen3::Eigen)
     SET(SOLVER_SRC src/EigenSolverInterface.cxx)

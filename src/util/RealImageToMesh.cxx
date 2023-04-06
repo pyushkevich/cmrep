@@ -21,6 +21,7 @@
 #include <vtkDiscreteMarchingCubes.h>
 #include <vtkUnsignedShortArray.h>
 #include <vtkAppendPolyData.h>
+#include <vtkPolyDataNormals.h>
 
 #include "MeshTraversal.h"
 
@@ -51,6 +52,7 @@ int usage()
   cout << "  -r <factor|num>    : reduce the size of the final mesh via quadric edge collapse" << endl;
   cout << "                       algorithm from MeshLab by a factor (e.g., 0.1) or to given " << endl;
   cout << "                       number of vertices " << endl;
+  cout << "  -f                 : make sure that normal vectors are facing outward" << endl;
   return -1;
 }
 
@@ -104,7 +106,7 @@ int main(int argc, char *argv[])
   const char *imClip = NULL;
   bool voxelSpace = false;
   bool preserveLabels = false;
-  bool flag_clean = false, flag_delaunay = false, flag_2d = false;
+  bool flag_clean = false, flag_delaunay = false, flag_2d = false, flag_fix_normals = false;
   double reduction_factor = 1.0;
   for(int i = 1; i < argc - 3; i++)
     {
@@ -135,6 +137,10 @@ int main(int argc, char *argv[])
     else if(!strcmp(argv[i], "-r"))
       {
       reduction_factor = atof(argv[++i]);
+      }
+    else if(!strcmp(argv[i], "-f"))
+      {
+      flag_fix_normals = true;
       }
     else
       { 
@@ -339,15 +345,24 @@ int main(int argc, char *argv[])
   // Get final output
   vtkSmartPointer<vtkPolyData> mesh = fltTransform->GetOutput();
 
-  // Flip normals if determinant of SFORM is negative
-  if(transform->GetMatrix()->Determinant() < 0)
+  // If the user asked us to fix the normals, or the transform has negative
+  // determinant, apply the normals filter
+  if(flag_fix_normals || transform->GetMatrix()->Determinant() < 0)
     {
-    vtkPointData *pd = mesh->GetPointData();
-    vtkDataArray *nrm = pd->GetNormals();
-    for(size_t i = 0; i < (size_t)nrm->GetNumberOfTuples(); i++)
-      for(size_t j = 0; j < (size_t)nrm->GetNumberOfComponents(); j++)
-        nrm->SetComponent(i,j,-nrm->GetComponent(i,j));
-    nrm->Modified();
+    vtkNew<vtkPolyDataNormals> normals_filter;
+    normals_filter->SetInputData(mesh);
+    if(flag_fix_normals)
+      {
+      cout << "vtkPolyDataNormals: automatically orienting normal vectors" << endl;
+      normals_filter->SetAutoOrientNormals(true);
+      }
+    else
+      {
+      cout << "vtkPolyDataNormals: inverting normal vectors due to sform" << endl;
+      normals_filter->SetFlipNormals(true);
+      }
+    normals_filter->Update();
+    mesh = normals_filter->GetOutput();
     }
 
   if(reduction_factor != 1.0)
@@ -359,13 +374,15 @@ int main(int argc, char *argv[])
     tri_mesh.CleanMesh();
 
     vcg::tri::TriEdgeCollapseQuadricParameter qparams;
-
-    qparams.PreserveBoundary=false;
-    qparams.PreserveTopology=false;
+    qparams.QualityThr = 0.3;
+    qparams.PreserveBoundary=true;
+    qparams.BoundaryQuadricWeight=1.0;
+    qparams.PreserveTopology=true;
     qparams.QualityWeight=false;
-    qparams.NormalCheck=false;
+    qparams.NormalCheck=true;
     qparams.OptimalPlacement=true;
-    qparams.QualityQuadric=false;
+    qparams.QualityQuadric=true;
+    qparams.QualityQuadricWeight=0.001;
 
     // decimator initialization
     vcg::LocalOptimization<VCGTriMesh::Mesh> DeciSession(tri_mesh.GetMesh(), &qparams);
@@ -410,6 +427,10 @@ int main(int argc, char *argv[])
     printf("\nCompleted in (%5.3f+%5.3f) sec\n", float(t2-t1)/CLOCKS_PER_SEC, float(t3-t2)/CLOCKS_PER_SEC);
 
     DeciSession.Finalize<MyTriEdgeCollapse>();
+
+    // Postprocess by cleaning and fixing normals
+    tri_mesh.CleanMesh();
+    tri_mesh.RecomputeNormals();
 
     tri_mesh.ExportToVTK(mesh);
 #else
