@@ -18,6 +18,79 @@ SET(CMREP_VERSION_MINOR 0)
 SET(CMREP_VERSION_PATCH 0)
 SET(CMREP_VERSION_FULL "${CMREP_VERSION_MAJOR}.${CMREP_VERSION_MINOR}.${CMREP_VERSION_PATCH}")
 
+# Variables that determine the needed packages
+SET(NEED_EIGEN OFF)
+SET(NEED_IPOPT OFF)
+SET(NEED_LAPACK OFF)
+SET(NEED_MKL OFF)
+SET(NEED_NLOPT OFF)
+SET(NEED_PARDISO OFF)
+SET(NEED_TETGEN OFF)
+SET(NEED_VCG OFF)
+
+# Set of options that users can select to build different components of cm-rep
+# Building PDE requires a sparse solver
+OPTION(CMREP_BUILD_PDE "Build cm-rep models formulated as a solution of a PDE (Neuroimage '08)" OFF)
+IF(CMREP_BUILD_PDE)
+    SET(CMREP_PDE_SPARSE_SOLVER "EIGEN" CACHE STRING "Sparse linear solver to use for PDE-based cm-rep model")
+    SET_PROPERTY(CACHE CMREP_PDE_SPARSE_SOLVER PROPERTY STRINGS EIGEN PARDISO MKL_PARDISO)
+    IF(CMREP_PDE_SPARSE_SOLVER STREQUAL EIGEN)
+        SET(NEED_EIGEN ON)
+        SET(NEED_LAPACK ON)
+    ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL PARDISO)
+        SET(NEED_PARDISO ON)
+        IF(NOT WIN32)
+            SET(NEED_LAPACK ON)
+        ENDIF()
+    ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL MKL_PARDISO)
+        SET(NEED_EIGEN ON)
+        SET(NEED_MKL ON)
+    ENDIF()
+ENDIF()
+
+# Building the bcmrep cm-rep model requires IPOpt and a sparse solver
+OPTION(CMREP_BUILD_BCMREP "Build boundary-constrained cm-rep model (IPMI '13)" OFF)
+IF(CMREP_BUILD_BCMREP)
+    SET(NEED_IPOPT ON)
+    SET(NEED_LAPACK ON)
+ENDIF()
+
+# Building AUGLAG requires a separate optimization library
+OPTION(CMREP_BUILD_AUGLAG "Build augmented lagrangean diffeomorphic cm-rep model (IPMI '19)" OFF)
+IF(CMREP_BUILD_AUGLAG)
+    SET(NEED_EIGEN ON)
+    SET(NEED_NLOPT ON)
+ENDIF()
+
+# Building GSHOOT requires Eigen
+OPTION(CMREP_BUILD_GSHOOT "Build geodesic shooting routines" OFF)
+IF(CMREP_BUILD_GSHOOT)
+    SET(NEED_EIGEN ON)
+ENDIF()
+
+# Build tet-gen utilities
+OPTION(CMREP_BUILD_TETGEN_UTILS "Build utility programs for mesh tetrahedralization" OFF)
+IF(CMREP_BUILD_TETGEN_UTILS)
+    SET(NEED_TETGEN ON)
+ENDIF()
+
+# Build tet-gen utilities
+OPTION(CMREP_BUILD_VCG_UTILS "Build utility programs for that use the VCG library" OFF)
+IF(CMREP_BUILD_VCG_UTILS)
+    SET(NEED_VCG ON)
+ENDIF()
+
+# Print the current configuration
+MESSAGE(STATUS "Libraries required by the current configuration:")
+MESSAGE(STATUS "  EIGEN: ${NEED_EIGEN}")
+MESSAGE(STATUS "  IPOPT: ${NEED_IPOPT}")
+MESSAGE(STATUS "  LAPACK: ${NEED_LAPACK}")
+MESSAGE(STATUS "  MKL: ${NEED_MKL}")
+MESSAGE(STATUS "  NLOPT: ${NEED_NLOPT}")
+MESSAGE(STATUS "  PARDISO: ${NEED_PARDISO}")
+MESSAGE(STATUS "  TETGEN: ${NEED_TETGEN}")
+MESSAGE(STATUS "  VCG: ${NEED_VCG}")
+
 # Get ITK
 FIND_PACKAGE(ITK REQUIRED)
 INCLUDE(${ITK_USE_FILE})
@@ -64,168 +137,138 @@ SET(CMREP_AUGLAG_LIBS "")
 SET(CMREP_UTIL_LIBS "")
 SET(CMREP_PDE_LIBS "")
 
-# Optionally, use Eigen (provides sparse solvers)
-OPTION(USE_EIGEN "Use the EIGEN sparse solvers" OFF)
-IF(USE_EIGEN)
+# If we need Eigen, then find Eigen
+IF(NEED_EIGEN)
   FIND_PACKAGE (Eigen3 3.3 REQUIRED)
   IF(EIGEN3_FOUND)
     ADD_DEFINITIONS(-DHAVE_EIGEN)
-    SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${LAPACK_LIB})
-    SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} Eigen3::Eigen)
-    SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} Eigen3::Eigen)
-    SET(SOLVER_SRC src/EigenSolverInterface.cxx)
     INCLUDE_DIRECTORIES(${EIGEN3_INCLUDE_DIR})
-  ENDIF(EIGEN3_FOUND)
-ENDIF(USE_EIGEN)
+  ENDIF()
+ENDIF()
+
 
 # Optionally, support PARDISO
-OPTION(USE_PARDISO "Use the PARDISO sparse solver library" OFF)
-IF(USE_PARDISO)
-  IF(WIN32)
+IF(NEED_PARDISO)
+  IF(WIN32)  
     # On Windows, the library can only be loaded dynamically
     ADD_DEFINITIONS(-DHAVE_PARDISO -DPARDISO_DYNLOAD)  
-  ELSE(WIN32)
-
-    # On Linux, Lapack is also required
-    INCLUDE(${CMREP_SOURCE_DIR}/CMake/FindLapack.cmake)
-
+    SET(PARDISO_FOUND ON BOOL)
+  ELSE()
     # Search for PARDISO
-    FIND_LIBRARY(PARDISO_LIB pardiso DOC "The location of the PARDISO shared library")
-    IF(PARDISO_LIB)
-      ADD_DEFINITIONS(-DHAVE_PARDISO)
-      SET(SOLVER_SRC src/PardisoInterface.cxx)
-
+    FIND_LIBRARY(PARDISO_LIBRARY pardiso DOC "The location of the PARDISO shared library")
+    IF(PARDISO_LIBRARY)
       FIND_LIBRARY(GOMP_LIB gomp DOC "The location of the libgomp library")
-      IF(NOT GOMP_LIB)
+      IF(GOMP_LIB)
+          ADD_DEFINITIONS(-DHAVE_PARDISO)
+          SET(PARDISO_FOUND ON BOOL)
+          SET(PARDISO_LIBS ${PARDISO_LIBRARY} ${GOMP_LIB})
+      ELSE()
         MESSAGE(ERROR "GNU OpenMP (gomp) library required for PARDISO")
-      ENDIF(NOT GOMP_LIB) 
-
-      IF(NOT LAPACK_LIB)
-        MESSAGE(ERROR "Lapack is required for PARDISO")
-      ENDIF(NOT LAPACK_LIB)
-
-      # Set the PDE libraries variable
-      SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${PARDISO_LIB} ${LAPACK_LIB} ${GOMP_LIB})
-    ENDIF(PARDISO_LIB)  
-  ENDIF(WIN32)
-ELSE(USE_PARDISO)
+      ENDIF()
+    ENDIF()
+  ENDIF()
+ELSE()
   ADD_DEFINITIONS(-UHAVE_PARDISO)
-ENDIF(USE_PARDISO)
+ENDIF()
 
 # Optionally, use MKL
-OPTION(USE_MKL "Use the Intel MKL library" OFF)
-IF(USE_MKL)
+IF(NEED_MKL)
   FIND_PACKAGE(MKL REQUIRED)
   IF(MKL_LIBRARIES)
-    IF(USE_EIGEN)
-      ADD_DEFINITIONS(-DHAVE_MKL)
+    ADD_DEFINITIONS(-DHAVE_MKL)
+    INCLUDE_DIRECTORIES(${MKL_INCLUDE_DIR})
+
+    SET(MKL_LIBRARY_DIR "")
+    FOREACH(LIB ${MKL_LIBRARIES})
+      GET_FILENAME_COMPONENT(LIBDIR ${LIB} DIRECTORY)
+      SET(MKL_LIBRARY_DIR ${MKL_LIBRARY_DIR} ${LIBDIR})
+    ENDFOREACH(LIB)
+
+    # TODO: is this necessary?
+    IF(EIGEN3_FOUND)
       ADD_DEFINITIONS(-DEIGEN_USE_MKL_ALL)
-      INCLUDE_DIRECTORIES(${MKL_INCLUDE_DIR})
 
-      SET(MKL_LIBRARY_DIR "")
-      FOREACH(LIB ${MKL_LIBRARIES})
-        GET_FILENAME_COMPONENT(LIBDIR ${LIB} DIRECTORY)
-        SET(MKL_LIBRARY_DIR ${MKL_LIBRARY_DIR} ${LIBDIR})
-      ENDFOREACH(LIB)
-
-      SET(SOLVER_SRC src/EigenSolverInterface.cxx)
-      SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${MKL_LIBRARIES})
-      SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${MKL_LIBRARIES})
-      SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${MKL_LIBRARIES})
-    ELSE(USE_EIGEN)
-      MESSAGE(ERROR "MKL cannot be used without Eigen, set USE_EIGEN to ON")
-    ENDIF(USE_EIGEN)
+      #SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${MKL_LIBRARIES})
+      #SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${MKL_LIBRARIES})
+    ENDIF()
   ENDIF(MKL_LIBRARIES)
-ENDIF(USE_MKL)
+ENDIF()
 
 # Optionally, use BLAS/LAPACK with Eigen
-OPTION(USE_LAPACK "Use the Lapack/BLAS libraries" OFF)
-IF(USE_LAPACK)
-  FIND_PACKAGE(LAPACK REQUIRED)
-  IF(LAPACK_FOUND)
-    IF(USE_EIGEN)
-      ADD_DEFINITIONS(-DEIGEN_USE_BLAS)
-      ADD_DEFINITIONS(-DEIGEN_USE_LAPACKE)
+IF(NEED_LAPACK)
 
+  # Provide an option to use MKL as the source of Lapack functionality
+  OPTION(CMREP_LAPACK_USE_MKL OFF "Use Intel MKL as source of Lapack functionality")
+  IF(NEED_MKL)
+    SET(CMREP_LAPACK_USE_MKL ON)
+  ENDIF()
+  IF(CMREP_LAPACK_USE_MKL)
+    SET(NEED_MKL ON)
+    SET(LAPACK_LIBRARIES ${MKL_LIBRARIES})
+  ELSE()
+    # If Lapack taken outside of MKL, it needs to be found
+    FIND_PACKAGE(LAPACK REQUIRED)
+    IF(LAPACK_FOUND)
       SET(LAPACK_LIBRARY_DIR "")
       FOREACH(LIB ${LAPACK_LIBRARIES})
         GET_FILENAME_COMPONENT(LIBDIR ${LIB} DIRECTORY)
         SET(LAPACK_LIBRARY_DIR ${MKL_LIBRARY_DIR} ${LIBDIR})
       ENDFOREACH(LIB)
 
-      SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${LAPACK_LIBRARIES})
-      SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${LAPACK_LIBRARIES})
-      SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${LAPACK_LIBRARIES})
-    ELSE(USE_EIGEN)
-      MESSAGE(ERROR "Lapack cannot be used without Eigen, set USE_EIGEN to ON")
-    ENDIF(USE_EIGEN)
-  ENDIF(LAPACK_FOUND)
-ENDIF(USE_LAPACK)
+      # TODO: what about this?
+      IF(EIGEN3_FOUND)
+        ADD_DEFINITIONS(-DEIGEN_USE_BLAS)
+        # ADD_DEFINITIONS(-DEIGEN_USE_LAPACKE)
+      ENDIF(EIGEN3_FOUND)
+    ENDIF()
+  ENDIF()
+ENDIF()
+
+# Set a variable that includes libraries that can be linked with for programs that
+# need basic LAPACK functionality
+
 
 INCLUDE(ExternalProject)
 
-OPTION(USE_IPOPT "Use the IpOpt Solver" OFF)
-IF(USE_IPOPT)
+IF(NEED_IPOPT)
+  # Find the IPOpt library itself
+  FIND_LIBRARY(IPOPT_LIBRARY NAMES ipopt REQUIRED)
 
-  # Flags for compiling IPOPT and HSL
-  IF(COMMENT_THIS_OUT_FOR_FUTURE)
-    IF(APPLE)
-      SET(IPOPT_FFLAGS "-fexceptions -m64 -fbackslash")
-      SET(IPOPT_CFLAGS "-fno-common -no-cpp-precomp -fexceptions -arch x86_64 -m64 -Wno-sign-conversion")
-
-    ENDIF(APPLE)
-   
-    ExternalProject_Add(project_ipopt 
-      SVN_REPOSITORY "https://projects.coin-or.org/svn/Ipopt/releases/3.10.2"
-      PREFIX "${CMAKE_CURRENT_BINARY_DIR}/ipopt-3.10.2"
-      CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=${CMAKE_CURRENT_BINARY_DIR}/ipopt-3.10.2
-        FFLAGS=${IPOPT_CFLAGS} CFLAGS=${IPOPT_CFLAGS} CXXFLAGS=${IPOPT_CFLAGS}
-      BUILD_COMMAND make
-      INSTALL_COMMAND make install)
-
-    ExternalProject_Get_Property(project_ipopt install_dir)
-    SET(ipopt_install_dir ${install_dir})
-
-    add_library(ipopt STATIC IMPORTED)
-    set_property(TARGET ipopt PROPERTY IMPORTED_LOCATION ${ipopt_install_dir}/lib/libipopt.a)
-    add_dependencies(ipopt project_ipopt)
-
-    INCLUDE_DIRECTORIES(${ipopt_install_dir})
-  ENDIF(COMMENT_THIS_OUT_FOR_FUTURE)
-
-  FIND_PACKAGE(IpOpt REQUIRED)
+  # Find the include files
+  FIND_PATH(IPOPT_INCLUDE_DIR NAMES IpTNLP.hpp PATHS ${IPOPT_ROOT_DIR}/include/coin REQUIRED)
   INCLUDE_DIRECTORIES(${IPOPT_INCLUDE_DIR})
-  MESSAGE(STATUS "Using IPOPT libraries ${IPOPT_LIBRARIES}")
-  SET(CMREP_BCMREP_LIBS ${CMREP_BCMREP_LIBS} ${IPOPT_LIBRARIES})
-ENDIF(USE_IPOPT)
 
-OPTION(USE_TETGEN "Use the TetGen library" OFF)
-IF(USE_TETGEN)
+  # Set the IPOpt libraries
+  SET(IPOPT_LIBS ${IPOPT_LIBRARY})
+
+  # FIND_PACKAGE(IpOpt REQUIRED)
+  # MESSAGE(STATUS "Using IPOPT libraries ${IPOPT_LIBRARIES}")
+  # SET(CMREP_BCMREP_LIBS ${CMREP_BCMREP_LIBS} ${IPOPT_LIBRARIES})
+ENDIF()
+
+IF(NEED_TETGEN)
   FIND_PACKAGE(TetGen REQUIRED)
-  SET(CMREP_BCMREP_LIBS ${CMREP_BCMREP_LIBS} ${TETGEN_LIBRARY})
-ENDIF(USE_TETGEN)
+ENDIF()
 
 # Not sure why we need OpenGL
 # FIND_PACKAGE(OpenGL)
 
 # Find NLOPT - a small non-linear optimization package
-OPTION(USE_NLOPT "Use the NLOPT optimization library" OFF)
-IF(USE_NLOPT)
+IF(NEED_NLOPT)
   FIND_PACKAGE(NLOPT REQUIRED)
   INCLUDE_DIRECTORIES(${NLOPT_INCLUDE_DIRS})
   GET_FILENAME_COMPONENT(NLOPT_LIBRARY_DIR ${NLOPT_LIBRARIES} DIRECTORY)
-  SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${NLOPT_LIBRARIES})
-ENDIF(USE_NLOPT)
+  # SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${NLOPT_LIBRARIES})
+ENDIF()
 
 # VCG library (for some mesh utilities, like Taubin smooth)
-OPTION(USE_VCG "Use the VCG mesh geometry library (for some utilities)")
-IF(USE_VCG)
+IF(NEED_VCG)
   FIND_PATH(VCGLIB_DIR NAMES vcg/simplex/vertex/base.h)
   IF(VCGLIB_DIR)
     INCLUDE_DIRECTORIES(${VCGLIB_DIR} ${VCGLIB_DIR}/eigenlib)
     ADD_COMPILE_DEFINITIONS(CMREP_USE_VCG)
   ENDIF(VCGLIB_DIR)
-ENDIF(USE_VCG)
+ENDIF()
 
 # Include subdirectories
 SUBDIRS(extras/toms611)
@@ -234,12 +277,30 @@ SUBDIRS(testing)
 # Add triangle to include path
 INCLUDE_DIRECTORIES(extras/triangle)
 
-OPTION(BUILD_UTILS "Build some cm-rep utilities" ON)
-
 # Platform-specifics
 IF(WIN32)
   ADD_DEFINITIONS(-D_SCL_SECURE_NO_DEPRECATE)
 ENDIF(WIN32)
+
+# Determine which solver wrapper to build for PDE
+SET(CMREP_FIT_LIBS ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
+IF(CMREP_BUILD_PDE)
+    IF(CMREP_PDE_SPARSE_SOLVER STREQUAL "EIGEN")
+        SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+        SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${})
+    ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL "PARDISO")
+        SET(SOLVER_SRC src/PardisoInterface.cxx)
+        SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${PARDISO_LIBS} ${LAPACK_LIBRARIES})
+    ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL "MKL_PARDISO")
+        SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+        SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${MKL_LIBRARIES})
+    ENDIF()
+ENDIF()
+
+#SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${LAPACK_LIBRARIES})
+#SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${LAPACK_LIBRARIES})
+#SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${LAPACK_LIBRARIES})
+
 
 # Sources for the PDE executable
 SET(COMMON_SRCS
@@ -296,52 +357,56 @@ vtk_module_autoinit(TARGETS cmrep_dijkstra MODULES ${VTK_LIBRARIES})
 
 # Set the list of required libraries
 SET(CMREP_LMSHOOT_LIBS ${CMREP_LMSHOOT_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES})
-SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
 SET(CMREP_BCMREP_LIBS ${CMREP_BCMREP_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
 SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
 SET(CMREP_UTIL_LIBS ${CMREP_UTIL_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
-# New: Geodesic shooting
-IF(EIGEN3_FOUND)
+# Geodesic shooting
+IF(CMREP_BUILD_GSHOOT)
+    SET(CMREP_LMSHOOT_LIBS Eigen3::Eigen ${ITK_LIBRARIES} ${VTK_LIBRARIES} ${LAPACK_LIBRARIES})
 
-  ADD_EXECUTABLE(shooting_test src/PointSetHamiltonianSystem.cxx src/TestGeodesicShooting.cxx)
-  TARGET_LINK_LIBRARIES(shooting_test ${CMREP_LMSHOOT_LIBS})
+    ADD_EXECUTABLE(shooting_test
+        src/PointSetHamiltonianSystem.cxx
+        src/TestGeodesicShooting.cxx)
+    TARGET_LINK_LIBRARIES(shooting_test ${CMREP_LMSHOOT_LIBS})
 
-  ADD_EXECUTABLE(lmshoot 
-    src/PointSetHamiltonianSystem.cxx 
-    src/PointSetGeodesicShooting.cxx
-    src/util/ReadWriteVTK.cxx)
-  TARGET_LINK_LIBRARIES(lmshoot ${CMREP_LMSHOOT_LIBS})
+    ADD_EXECUTABLE(lmshoot
+        src/PointSetHamiltonianSystem.cxx
+        src/PointSetGeodesicShooting.cxx
+        src/util/ReadWriteVTK.cxx)
+    TARGET_LINK_LIBRARIES(lmshoot ${CMREP_LMSHOOT_LIBS})
 
-  ADD_EXECUTABLE(lmflow
-    src/PointSetHamiltonianSystem.cxx
-    src/util/ReadWriteVTK.cxx
-    src/PointSetGeodesicFlowUtil.cxx)
-  TARGET_LINK_LIBRARIES(lmflow ${CMREP_LMSHOOT_LIBS})
+    ADD_EXECUTABLE(lmflow
+        src/PointSetHamiltonianSystem.cxx
+        src/util/ReadWriteVTK.cxx
+        src/PointSetGeodesicFlowUtil.cxx)
+    TARGET_LINK_LIBRARIES(lmflow ${CMREP_LMSHOOT_LIBS})
 
-  INCLUDE_DIRECTORIES(submodules/greedy/src/ITKFilters/include submodules/greedy/src)
-  ADD_EXECUTABLE(lmtowarp
-    src/PointSetHamiltonianSystem.cxx
-    src/util/ReadWriteVTK.cxx
-    src/PointSetGeodesicToWarp.cxx
-    submodules/greedy/src/lddmm_data.cxx)
-  TARGET_LINK_LIBRARIES(lmtowarp ${CMREP_LMSHOOT_LIBS})
+    INCLUDE_DIRECTORIES(submodules/greedy/src/ITKFilters/include submodules/greedy/src)
+    ADD_EXECUTABLE(lmtowarp
+        src/PointSetHamiltonianSystem.cxx
+        src/util/ReadWriteVTK.cxx
+        src/PointSetGeodesicToWarp.cxx
+        submodules/greedy/src/lddmm_data.cxx)
+    TARGET_LINK_LIBRARIES(lmtowarp ${CMREP_LMSHOOT_LIBS})
 
-  # Update the list of binaries
-  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} shooting_test lmshoot lmflow lmtowarp)
+    # Update the list of binaries
+    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} shooting_test lmshoot lmflow lmtowarp)
+ENDIF()
 
-  IF(NLOPT_FOUND)
+# Augmented Lagrangean cm-rep
+IF(CMREP_BUILD_AUGLAG)
+    SET(CMREP_LMSHOOT_LIBS Eigen3::Eigen ${ITK_LIBRARIES} ${VTK_LIBRARIES} ${LAPACK_LIBRARIES} ${NLOPT_LIBRARIES})
+
     ADD_EXECUTABLE(alcmrep_test
-      src/TestAugLagCMRep.cxx
-      src/MeshTraversal.cxx
-      src/PointSetOptimalControlSystem.cxx
-      src/PointSetHamiltonianSystem.cxx
-      src/VTKMeshBuilder.cxx)
+        src/TestAugLagCMRep.cxx
+        src/MeshTraversal.cxx
+        src/PointSetOptimalControlSystem.cxx
+        src/PointSetHamiltonianSystem.cxx
+        src/VTKMeshBuilder.cxx)
     TARGET_LINK_LIBRARIES(alcmrep_test cmrep ${CMREP_AUGLAG_LIBS})
     SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} alcmrep_test)
-  ENDIF(NLOPT_FOUND)
-
-ENDIF(EIGEN3_FOUND)
+ENDIF()
 
 # Link the main executables
 ADD_EXECUTABLE(cmrep_test src/ScriptTest.cxx)
@@ -386,135 +451,170 @@ SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS}
   cmrep_pca_generate cmrep_fillmesh cmrep_genwarp cmrep_warpimage
   cmrep_afftran cmrep_vskel)
 
-IF(USE_IPOPT AND USE_TETGEN)
-  ADD_EXECUTABLE(bcmrep_test src/GentleNLP.cxx src/IPOptProblemInterface.cxx src/IPOptTest.cxx)
-  ADD_EXECUTABLE(bcmrep_main
-                 src/GentleNLP.cxx
-                 src/IPOptProblemInterface.cxx
-                 src/IPOptQCQPProblemInterface.cxx
-                 src/ConstrainedCMRepObjectives.cxx
-                 src/ConstrainedCMRepTest.cxx
-                 src/VTKMeshBuilder.cxx
-                 src/QCQPProblem.h)
-  TARGET_LINK_LIBRARIES(bcmrep_test cmrep ${CMREP_BCMREP_LIBS})
-  TARGET_LINK_LIBRARIES(bcmrep_main cmrep ${CMREP_BCMREP_LIBS})
+IF(CMREP_BUILD_BCMREP)
+    SET(CMREP_BCMREP_LIBS ${ITK_LIBRARIES} ${VTK_LIBRARIES} ${IPOPT_LIBS} ${LAPACK_LIBRARIES} toms611)
+    ADD_EXECUTABLE(bcmrep_test
+        src/GentleNLP.cxx
+        src/IPOptProblemInterface.cxx
+        src/IPOptTest.cxx)
+    TARGET_LINK_LIBRARIES(bcmrep_test cmrep ${CMREP_BCMREP_LIBS})
 
-  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} bcmrep_main bcmrep_test)
+    ADD_EXECUTABLE(bcmrep_main
+        src/GentleNLP.cxx
+        src/IPOptProblemInterface.cxx
+        src/IPOptQCQPProblemInterface.cxx
+        src/ConstrainedCMRepObjectives.cxx
+        src/ConstrainedCMRepTest.cxx
+        src/VTKMeshBuilder.cxx
+        src/QCQPProblem.h)
+    TARGET_LINK_LIBRARIES(bcmrep_main cmrep ${CMREP_BCMREP_LIBS})
 
-ENDIF(USE_IPOPT AND USE_TETGEN)
+    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} bcmrep_main bcmrep_test)
+ENDIF()
 
 # Include the utilities
-IF(BUILD_UTILS)
+ADD_EXECUTABLE(sphere_splat
+    src/util/SplatOntoSphere.cxx)
 
-  # VCG-based utilities
-  IF(USE_VCG)
-    SET(VCG_UTIL_SRC src/util/VCGTriMesh.h src/util/VCGTriMesh.cxx ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
-  ENDIF(USE_VCG)
-
-  ADD_EXECUTABLE(sphere_splat src/util/SplatOntoSphere.cxx)
-  ADD_EXECUTABLE(vtkprocrustes 
-    src/util/MeshProcrustes.cxx 
-    src/util/ReadWriteVTK.cxx 
+ADD_EXECUTABLE(vtkprocrustes
+    src/util/MeshProcrustes.cxx
+    src/util/ReadWriteVTK.cxx
     src/Procrustes.cxx)
 
-  ADD_EXECUTABLE(vtklevelset src/util/RealImageToMesh.cxx src/util/ReadWriteVTK.cxx ${VCG_UTIL_SRC})
-  TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS})
+ADD_EXECUTABLE(vtkcontour
+    src/util/RealImageToContour.cxx
+    src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(vtkcontour src/util/RealImageToContour.cxx src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(mesh2img
+    src/util/FillSTLMesh.cxx
+    src/util/DrawTriangles.cpp
+    src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(mesh2img src/util/FillSTLMesh.cxx src/util/DrawTriangles.cpp src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(mesh_image_sample
+    src/util/MeshImageSample.cxx)
 
-  ADD_EXECUTABLE(mesh_image_sample src/util/MeshImageSample.cxx)
+ADD_EXECUTABLE(mesh_tetra_sample
+    src/util/MeshTetraSample.cxx)
 
-  ADD_EXECUTABLE(mesh_tetra_sample src/util/MeshTetraSample.cxx)
+ADD_EXECUTABLE(mesh_merge_arrays
+    src/util/MeshMergeArrays.cxx
+    src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(mesh_merge_arrays src/util/MeshMergeArrays.cxx src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(mesh_area_element
+    src/util/MeshAreaElement.cxx)
 
-  ADD_EXECUTABLE(mesh_area_element src/util/MeshAreaElement.cxx)
-
-  ADD_EXECUTABLE(meshglm 
-    src/util/SurfaceClusterGLM.cxx 
+ADD_EXECUTABLE(meshglm
+    src/util/SurfaceClusterGLM.cxx
     src/util/asa243.c
-    src/util/ReadWriteVTK.cxx 
+    src/util/ReadWriteVTK.cxx
     src/Registry.cxx)
 
-  ADD_EXECUTABLE(meshcluster 
-    src/util/SurfaceClusterAnalysis.cxx 
-    src/util/ReadWriteVTK.cxx 
-    src/Registry.cxx)
+ADD_EXECUTABLE(meshdiff
+    src/util/CompareMeshes.cxx
+    src/util/DrawFillInside.cpp
+    src/util/DrawTriangles.cpp)
 
-  ADD_EXECUTABLE(meshdiff src/util/CompareMeshes.cxx src/util/DrawFillInside.cpp src/util/DrawTriangles.cpp)
-  #TARGET_LINK_LIBRARIES(meshdiff ${ITK_LIBRARIES} ${VTK_LIBRARIES})
+ADD_EXECUTABLE(warpmesh
+    src/util/WarpMeshBackwards.cxx)
 
-  ADD_EXECUTABLE(warpmesh src/util/WarpMeshBackwards.cxx)
+# This is a one-off tool for sampling from skeleton tetra meshes
+ADD_EXECUTABLE(skel_tetra_max_thick_sphere
+    src/util/SkelTetraMaxThicknessSphere.cxx)
 
-  # This is a one-off tool for sampling from skeleton tetra meshes
-  ADD_EXECUTABLE(skel_tetra_max_thick_sphere src/util/SkelTetraMaxThicknessSphere.cxx)
+# This uses triangle library to triangulate a 2d contour
+ADD_EXECUTABLE(contour2surf
+    src/util/ContourMesh2SurfMesh.cxx
+    src/util/ReadWriteVTK.cxx)
 
-  # This uses triangle library to triangulate a 2d contour
-  ADD_EXECUTABLE(contour2surf src/util/ContourMesh2SurfMesh.cxx src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(apply_remeshing_to_another
+    src/util/ApplyRemeshingToAnotherMesh.cxx
+    src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(apply_remeshing_to_another src/util/ApplyRemeshingToAnotherMesh.cxx src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(mesh_convert_format
+    src/util/MeshConvertFormat.cxx
+    src/util/ReadWriteVTK.cxx)
 
-  ADD_EXECUTABLE(mesh_convert_format src/util/MeshConvertFormat.cxx src/util/ReadWriteVTK.cxx)
+ADD_EXECUTABLE(ml_affine
+    src/util/MultiLabelAffine.cxx
+    src/GentleNLP.cxx)
 
-  ADD_EXECUTABLE(ml_affine src/util/MultiLabelAffine.cxx src/GentleNLP.cxx)
-
-  # List of cmrep utilities
-  SET(CMREP_UTIL_TOOLS
-    sphere_splat vtkprocrustes vtklevelset vtkcontour
+# List of cmrep utilities
+SET(CMREP_UTIL_TOOLS
+    sphere_splat vtkprocrustes vtkcontour
     mesh2img mesh_image_sample mesh_tetra_sample mesh_merge_arrays mesh_area_element
-    meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere
+    meshglm meshdiff warpmesh skel_tetra_max_thick_sphere
     contour2surf apply_remeshing_to_another mesh_convert_format ml_affine)
 
-  # Tetrahedron tools
-  ADD_EXECUTABLE(tetdumpattr src/util/TetDumpAttr.cxx)
-  ADD_EXECUTABLE(tetfill src/util/TetraFill.cxx)
-  ADD_EXECUTABLE(tetjac src/util/TetJacobian.cxx)
-  ADD_EXECUTABLE(tetmergearr src/util/MergeVTKArrays.cxx)
-  ADD_EXECUTABLE(tetsample src/util/TetSampleImage.cxx)
-  SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS}
-    tetdumpattr tetfill tetjac tetmergearr tetsample)
+# Tetrahedron tools
+ADD_EXECUTABLE(tetdumpattr src/util/TetDumpAttr.cxx)
+ADD_EXECUTABLE(tetfill src/util/TetraFill.cxx)
+ADD_EXECUTABLE(tetjac src/util/TetJacobian.cxx)
+ADD_EXECUTABLE(tetmergearr src/util/MergeVTKArrays.cxx)
+ADD_EXECUTABLE(tetsample src/util/TetSampleImage.cxx)
+SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} tetdumpattr tetfill tetjac tetmergearr tetsample)
 
-  IF(USE_VCG)
-    ADD_EXECUTABLE(mesh_smooth_curv src/util/MeshSmoothAndCurvature.cxx ${VCG_UTIL_SRC} )
-    ADD_EXECUTABLE(mesh_poisson_sample src/util/MeshPoissonSample.cxx ${VCG_UTIL_SRC} )
-    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample)
-  ENDIF(USE_VCG)
+IF(CMREP_BUILD_VCG_UTILS)
+    SET(VCG_UTIL_SRC
+        src/util/VCGTriMesh.h
+        src/util/VCGTriMesh.cxx
+        ${VCGLIB_DIR}/wrap/ply/plylib.cpp)
 
-  # Link libraries for the tools
-  FOREACH(CMREP_TOOL ${CMREP_UTIL_TOOLS})
-    vtk_module_autoinit(TARGETS ${CMREP_TOOL} MODULES ${VTK_LIBRARIES})
-    TARGET_LINK_LIBRARIES(${CMREP_TOOL} ${CMREP_UTIL_LIBS})
-  ENDFOREACH(CMREP_TOOL)
+    ADD_EXECUTABLE(mesh_smooth_curv
+        src/util/MeshSmoothAndCurvature.cxx
+        ${VCG_UTIL_SRC} )
 
-  # Add to the list of binaries
-  SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} ${CMREP_UTIL_TOOLS})
+    ADD_EXECUTABLE(mesh_poisson_sample
+        src/util/MeshPoissonSample.cxx
+        ${VCG_UTIL_SRC})
 
-  # TetGen tetra tools
-  IF(USE_TETGEN)
-    ADD_EXECUTABLE(tetgen2vtk 
-      src/util/TetGenToVTK.cxx src/util/ReadWriteVTK.cxx src/util/TetraLib.cxx)
+    ADD_EXECUTABLE(vtklevelset
+        src/util/RealImageToMesh.cxx
+        src/util/ReadWriteVTK.cxx
+        ${VCG_UTIL_SRC})
+
+    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample vtklevelset)
+    TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS} ${LAPACK_LIBRARIES})
+ELSE()
+    # vtklevelset can be built without VCG support
+    ADD_EXECUTABLE(vtklevelset
+        src/util/RealImageToMesh.cxx
+        src/util/ReadWriteVTK.cxx)
+    TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS})
+    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} vtklevelset)
+ENDIF()
+
+
+IF(CMREP_BUILD_TETGEN_UTILS)
+    ADD_EXECUTABLE(tetgen2vtk
+        src/util/TetGenToVTK.cxx
+        src/util/ReadWriteVTK.cxx
+        src/util/TetraLib.cxx)
     ADD_EXECUTABLE(surf2tet
-      src/util/SurfMesh2VolMesh.cxx src/util/ReadWriteVTK.cxx src/util/TetraLib.cxx)
+        src/util/SurfMesh2VolMesh.cxx
+        src/util/ReadWriteVTK.cxx
+        src/util/TetraLib.cxx)
     TARGET_LINK_LIBRARIES(tetgen2vtk ${CMREP_UTIL_LIBS} ${TETGEN_LIBRARY})
     TARGET_LINK_LIBRARIES(surf2tet ${CMREP_UTIL_LIBS} ${TETGEN_LIBRARY})
     SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} tetgen2vtk surf2tet)
-  ENDIF(USE_TETGEN)
+ENDIF()
 
-ENDIF(BUILD_UTILS)
+# Link libraries for the tools
+FOREACH(CMREP_TOOL ${CMREP_UTIL_TOOLS})
+    vtk_module_autoinit(TARGETS ${CMREP_TOOL} MODULES ${VTK_LIBRARIES})
+    TARGET_LINK_LIBRARIES(${CMREP_TOOL} ${CMREP_UTIL_LIBS})
+ENDFOREACH(CMREP_TOOL)
+
+# Add to the list of binaries
+SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} ${CMREP_UTIL_TOOLS})
 
 # Install all the targets
 FOREACH(CMREP_TOOL ${CMREP_BINARY_TOOLS})
-
   INSTALL(TARGETS ${CMREP_TOOL} 
     BUNDLE DESTINATION . COMPONENT Runtime
     RUNTIME DESTINATION bin COMPONENT RUNTIME)
+ENDFOREACH()
 
-ENDFOREACH(CMREP_TOOL)
-
-INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION
-  "share/cmrep/")
+INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION "share/cmrep/")
 
 # INCLUDE(BundleUtilities)
 
