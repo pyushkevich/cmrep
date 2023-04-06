@@ -425,6 +425,8 @@ IF(BUILD_UTILS)
 
   ADD_EXECUTABLE(mesh_image_sample src/util/MeshImageSample.cxx)
 
+  ADD_EXECUTABLE(mesh_tetra_sample src/util/MeshTetraSample.cxx)
+
   ADD_EXECUTABLE(mesh_merge_arrays src/util/MeshMergeArrays.cxx src/util/ReadWriteVTK.cxx)
 
   ADD_EXECUTABLE(mesh_area_element src/util/MeshAreaElement.cxx)
@@ -460,7 +462,7 @@ IF(BUILD_UTILS)
   # List of cmrep utilities
   SET(CMREP_UTIL_TOOLS
     sphere_splat vtkprocrustes vtklevelset vtkcontour
-    mesh2img mesh_image_sample mesh_merge_arrays mesh_area_element
+    mesh2img mesh_image_sample mesh_tetra_sample mesh_merge_arrays mesh_area_element
     meshglm meshcluster meshdiff warpmesh skel_tetra_max_thick_sphere
     contour2surf apply_remeshing_to_another mesh_convert_format ml_affine)
 
