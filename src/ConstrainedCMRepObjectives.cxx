@@ -14,7 +14,6 @@
 #include "IpIpoptApplication.hpp"
 #include "MedialAtomGrid.h"
 #include "vtkPolyDataWriter.h"
-#include "tetgen.h"
 
 #include "vtkPolyData.h"
 #include "vtkCellLocator.h"
