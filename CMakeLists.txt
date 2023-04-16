@@ -463,8 +463,8 @@ IF(CMREP_BUILD_BCMREP)
         src/GentleNLP.cxx
         src/IPOptProblemInterface.cxx
         src/IPOptQCQPProblemInterface.cxx
-        src/ConstrainedCMRepObjectives.cxx
-        src/ConstrainedCMRepTest.cxx
+        src/BoundaryConstrainedCMRepObjectives.cxx
+        src/BoundaryConstrainedCMRep.cxx
         src/VTKMeshBuilder.cxx
         src/QCQPProblem.h)
     TARGET_LINK_LIBRARIES(bcmrep_main cmrep ${CMREP_BCMREP_LIBS})
