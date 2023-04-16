@@ -35,8 +35,6 @@
 #include "vtkTriangleFilter.h"
 #include "vtkLinearSubdivisionFilter.h"
 
-#include "tetgen.h"
-
 #include "vtkPolyData.h"
 #include "vtkCellLocator.h"
 #include "vtkSmartPointer.h"
