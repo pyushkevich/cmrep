@@ -98,7 +98,7 @@ public:
   typedef typename HSystem::Matrix Matrix;
   typedef vnl_matrix<int> Triangulation;
 
-  TriangleCentersAndNormals( const Triangulation &tri);
+  TriangleCentersAndNormals(const Triangulation &tri, bool normalize);
   void Forward(const Matrix &q);
   void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq);
 };
@@ -112,8 +112,9 @@ public:
   typedef typename HSystem::Matrix Matrix;
   typedef vnl_matrix<int> Triangulation;
 
-  TriangleCentersAndNormals( const Triangulation &tri)
+  TriangleCentersAndNormals( const Triangulation &tri, bool normalize)
   {
+    this->normalize = normalize;
     this->tri = tri;
     this->C.set_size(tri.rows(), 3);
     this->N.set_size(tri.rows(), 3);
@@ -142,31 +143,34 @@ public:
         Vi[a] = q(v2, a) - q(v0, a);
         }
 
-      // Compute the cross-product and store in the normal (this is what currents use)
-      Ni[0] = 0.5 * (Ui[1] * Vi[2] - Ui[2] * Vi[1]);
-      Ni[1] = 0.5 * (Ui[2] * Vi[0] - Ui[0] * Vi[2]);
-      Ni[2] = 0.5 * (Ui[0] * Vi[1] - Ui[1] * Vi[0]);
-
-      /*
-      Wi[0] = Ui[1] * Vi[2] - Ui[2] * Vi[1];
-      Wi[1] = Ui[2] * Vi[0] - Ui[0] * Vi[2];
-      Wi[2] = Ui[0] * Vi[1] - Ui[1] * Vi[0];
-
-      // Compute the norm of the cross-product
-      W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1] + Wi[2] * Wi[2]);
-      if(W_norm[i] > 0.0)
+      if(normalize)
         {
-        Ni[0] = Wi[0] / W_norm[i];
-        Ni[1] = Wi[1] / W_norm[i];
-        Ni[2] = Wi[2] / W_norm[i];
+        Wi[0] = Ui[1] * Vi[2] - Ui[2] * Vi[1];
+        Wi[1] = Ui[2] * Vi[0] - Ui[0] * Vi[2];
+        Wi[2] = Ui[0] * Vi[1] - Ui[1] * Vi[0];
+
+        // Compute the norm of the cross-product
+        W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1] + Wi[2] * Wi[2]);
+        if(W_norm[i] > 0.0)
+          {
+          Ni[0] = Wi[0] / W_norm[i];
+          Ni[1] = Wi[1] / W_norm[i];
+          Ni[2] = Wi[2] / W_norm[i];
+          }
+        else
+          {
+          Ni[0] = 0.0;
+          Ni[1] = 0.0;
+          Ni[2] = 0.0;
+          }
         }
       else
         {
-        Ni[0] = 0.0;
-        Ni[1] = 0.0;
-        Ni[2] = 0.0;
+        // Compute the cross-product and store in the normal (this is what currents use)
+        Ni[0] = 0.5 * (Ui[1] * Vi[2] - Ui[2] * Vi[1]);
+        Ni[1] = 0.5 * (Ui[2] * Vi[0] - Ui[0] * Vi[2]);
+        Ni[2] = 0.5 * (Ui[0] * Vi[1] - Ui[1] * Vi[0]);
         }
-      */
       }
   }
 
@@ -190,41 +194,42 @@ public:
       TFloat *dq1 = dE_dq.data_array()[v1];
       TFloat *dq2 = dE_dq.data_array()[v2];
 
-      /*
-
-      // Partial of the norm of W
-      if(W_norm[i] > 0.0)
+      if(normalize)
         {
-        dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] - Ni[0] * Ni[2] * dNi[2]) / W_norm[i];
-        dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] - Ni[1] * Ni[2] * dNi[2]) / W_norm[i];
-        dW[2] = ((1 - Ni[2]*Ni[2]) * dNi[2] - Ni[2] * Ni[0] * dNi[0] - Ni[2] * Ni[1] * dNi[1]) / W_norm[i];
+        // Partial of the norm of W
+        if(W_norm[i] > 0.0)
+          {
+          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] - Ni[0] * Ni[2] * dNi[2]) / W_norm[i];
+          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] - Ni[1] * Ni[2] * dNi[2]) / W_norm[i];
+          dW[2] = ((1 - Ni[2]*Ni[2]) * dNi[2] - Ni[2] * Ni[0] * dNi[0] - Ni[2] * Ni[1] * dNi[1]) / W_norm[i];
+          }
+        else
+          {
+          dW[0] = dNi[0];
+          dW[1] = dNi[1];
+          dW[2] = dNi[2];
+          }
+
+        // Backprop the cross-product
+        dU[0] = Vi[1] * dW[2] - Vi[2] * dW[1];
+        dU[1] = Vi[2] * dW[0] - Vi[0] * dW[2];
+        dU[2] = Vi[0] * dW[1] - Vi[1] * dW[0];
+
+        dV[0] = Ui[2] * dW[1] - Ui[1] * dW[2];
+        dV[1] = Ui[0] * dW[2] - Ui[2] * dW[0];
+        dV[2] = Ui[1] * dW[0] - Ui[0] * dW[1];
         }
       else
         {
-        dW[0] = dNi[0];
-        dW[1] = dNi[1];
-        dW[2] = dNi[2];
+        // Backprop the cross-product
+        dU[0] = 0.5 * (Vi[1] * dNi[2] - Vi[2] * dNi[1]);
+        dU[1] = 0.5 * (Vi[2] * dNi[0] - Vi[0] * dNi[2]);
+        dU[2] = 0.5 * (Vi[0] * dNi[1] - Vi[1] * dNi[0]);
+
+        dV[0] = 0.5 * (Ui[2] * dNi[1] - Ui[1] * dNi[2]);
+        dV[1] = 0.5 * (Ui[0] * dNi[2] - Ui[2] * dNi[0]);
+        dV[2] = 0.5 * (Ui[1] * dNi[0] - Ui[0] * dNi[1]);
         }
-
-      // Backprop the cross-product
-      dU[0] = Vi[1] * dW[2] - Vi[2] * dW[1];
-      dU[1] = Vi[2] * dW[0] - Vi[0] * dW[2];
-      dU[2] = Vi[0] * dW[1] - Vi[1] * dW[0];
-
-      dV[0] = Ui[2] * dW[1] - Ui[1] * dW[2];
-      dV[1] = Ui[0] * dW[2] - Ui[2] * dW[0];
-      dV[2] = Ui[1] * dW[0] - Ui[0] * dW[1];
-
-      */
-
-      // Backprop the cross-product
-      dU[0] = 0.5 * (Vi[1] * dNi[2] - Vi[2] * dNi[1]);
-      dU[1] = 0.5 * (Vi[2] * dNi[0] - Vi[0] * dNi[2]);
-      dU[2] = 0.5 * (Vi[0] * dNi[1] - Vi[1] * dNi[0]);
-
-      dV[0] = 0.5 * (Ui[2] * dNi[1] - Ui[1] * dNi[2]);
-      dV[1] = 0.5 * (Ui[0] * dNi[2] - Ui[2] * dNi[0]);
-      dV[2] = 0.5 * (Ui[1] * dNi[0] - Ui[0] * dNi[1]);
 
       // Backprop the Ui and Vi
       for(unsigned int a = 0; a < 3; a++)
@@ -237,6 +242,10 @@ public:
         }
       }
   }
+
+  // Whether or not we normalize the values, normalization
+  // is needed for the Varifold metric but not for Currents
+  bool normalize;
 
   // Intermediate values
   Triangulation tri;
@@ -257,8 +266,9 @@ public:
   typedef typename HSystem::Matrix Matrix;
   typedef vnl_matrix<int> Triangulation;
 
-  TriangleCentersAndNormals( const Triangulation &tri)
+  TriangleCentersAndNormals( const Triangulation &tri, bool normalize)
   {
+    this->normalize = normalize;
     this->tri = tri;
     this->C.set_size(tri.rows(), 2);
     this->N.set_size(tri.rows(), 2);
@@ -284,29 +294,31 @@ public:
         Ui[a] = q(v1, a) - q(v0, a);
         }
 
-      // Compute the cross-product
-      Ni[0] = Ui[1];
-      Ni[1] = -Ui[0];
-
-      /*
-
-      // Compute the cross-product
-      Wi[0] = Ui[1];
-      Wi[1] = -Ui[0];
-
-      // Compute the norm of the cross-product
-      W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1]);
-      if(W_norm[i] > 0.0)
+      if(normalize)
         {
-        Ni[0] = Wi[0] / W_norm[i];
-        Ni[1] = Wi[1] / W_norm[i];
+        // Compute the cross-product
+        Wi[0] = Ui[1];
+        Wi[1] = -Ui[0];
+
+        // Compute the norm of the cross-product
+        W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1]);
+        if(W_norm[i] > 0.0)
+          {
+          Ni[0] = Wi[0] / W_norm[i];
+          Ni[1] = Wi[1] / W_norm[i];
+          }
+        else
+          {
+          Ni[0] = 0.0;
+          Ni[1] = 0.0;
+          }
         }
       else
         {
-        Ni[0] = 0.0;
-        Ni[1] = 0.0;
+        // Compute the cross-product
+        Ni[0] = Ui[1];
+        Ni[1] = -Ui[0];
         }
-        */
       }
   }
 
@@ -327,29 +339,30 @@ public:
       TFloat *dq0 = dE_dq.data_array()[v0];
       TFloat *dq1 = dE_dq.data_array()[v1];
 
-      /*
+      if(normalize)
+      {
+        // Partial of the norm of W
+        if(W_norm[i] > 0.0)
+          {
+          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1]) / W_norm[i];
+          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0]) / W_norm[i];
+          }
+        else
+          {
+          dW[0] = dNi[0];
+          dW[1] = dNi[1];
+          }
 
-      // Partial of the norm of W
-      if(W_norm[i] > 0.0)
-        {
-        dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1]) / W_norm[i];
-        dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0]) / W_norm[i];
+        // Backprop the cross-product
+        dU[0] = -dW[1];
+        dU[1] = dW[0];
         }
       else
         {
-        dW[0] = dNi[0];
-        dW[1] = dNi[1];
+        // Backprop the cross-product
+        dU[0] = -dNi[1];
+        dU[1] = dNi[0];
         }
-
-      // Backprop the cross-product
-      dU[0] = -dW[1];
-      dU[1] = dW[0];
-
-      */
-
-      // Backprop the cross-product
-      dU[0] = -dNi[1];
-      dU[1] = dNi[0];
 
       // Backprop the Ui and Vi
       for(unsigned int a = 0; a < 2; a++)
@@ -363,6 +376,7 @@ public:
   }
 
   // Intermediate values
+  bool normalize;
   Triangulation tri;
   Matrix U, W;
   Vector W_norm;
@@ -380,12 +394,15 @@ public:
   typedef typename HSystem::Vector Vector;
   typedef typename HSystem::Matrix Matrix;
 
+  enum Mode { CURRENTS, VARIFOLD };
+
   /** Triangulation data type */
   typedef vnl_matrix<int> Triangulation;
 
   /* Thread-specific data for the computation of the currents norm */
   struct ThreadData {
     Matrix dE_dC, dE_dN;
+    Vector dE_dW;
     std::vector<unsigned int> rows;
   };
 
@@ -398,6 +415,9 @@ public:
     // Partials with respect to centers and normals
     Matrix dE_dC, dE_dN;
 
+    // Partials with respect to the weights/areas (varifold only)
+    Vector dE_dW;
+
     // Per-vertex energy component
     Vector z;
 
@@ -408,17 +428,19 @@ public:
 
   /**
    * Constructor
+   *   mode         : Mode (currents or varifolds)
    *   m            : Number of total landmarks (control and template)
    *   qT           : Target vertices
    *   tri_template : Triangles (3D) or edges (2D) of the template
    *   tri_target   : Triangles (3D) or edges (2D) of the target
    */
-  CurrentsAttachmentTerm(unsigned int m, const Matrix &qT,
+  CurrentsAttachmentTerm(Mode mode, unsigned int m, const Matrix &qT,
                          const Triangulation &tri_template,
                          const Triangulation &tri_target,
                          TFloat sigma, unsigned int n_threads)
-    : tcan_template(tri_template), tcan_target(tri_target)
+    : tcan_template(tri_template, mode==VARIFOLD), tcan_target(tri_target, mode==VARIFOLD)
   {
+    this->mode = mode;
     this->m = m;
     this->tri_target = tri_target;
     this->tri_template = tri_template;
@@ -466,12 +488,16 @@ public:
           {
           my_td.dE_dC.fill(0.0);
           my_td.dE_dN.fill(0.0);
+          my_td.dE_dW.fill(0.0);
           }
 
         // Get data arrays for fast memory access
         auto c_da = tcan->C.data_array();
         auto n_da = tcan->N.data_array();
-        auto dc_da = my_td.dE_dC.data_array(), dn_da = my_td.dE_dN.data_array();
+        auto w_da = tcan->W.data_block();
+        auto dc_da = my_td.dE_dC.data_array();
+        auto dn_da = my_td.dE_dN.data_array();
+        auto dw_da = my_td.dE_dW.data_block();
         auto z_da = cspd->z.data_block();
 
         TFloat f = -0.5 / (sigma * sigma);
@@ -481,25 +507,37 @@ public:
         for(unsigned int i : my_td.rows)
           {
           TFloat zi = 0.0;
-          TFloat *ci = c_da[i], *ni = n_da[i];
-          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i];
+          TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
+          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
           TFloat dq[VDim];
 
           // Handle the diagonal term
-          for(unsigned int a = 0; a < VDim; a++)
-            zi += 0.5 * ni[a] * ni[a];
-
-          // Handle the diagonal term in the gradient
-          if(grad)
+          if(mode == CURRENTS)
+            {
             for(unsigned int a = 0; a < VDim; a++)
-              d_ni[a] += ni[a];
+              zi += 0.5 * ni[a] * ni[a];
+
+            // Handle the diagonal term in the gradient
+            if(grad)
+              for(unsigned int a = 0; a < VDim; a++)
+                d_ni[a] += ni[a];
+            }
+          else
+            {
+            // We know that the dot product of the normal with itself is just one
+            // so we don't need to do anything with the normals. We just need to
+            // compute the product of the weights
+            zi += 0.5 * wi * wi;
+            if(grad)
+              d_wi += wi;
+            }
 
           // Handle the off-diagonal terms
           for(unsigned int j = i+1; j < tcan->C.rows(); j++)
             {
             // Compute the kernel
-            TFloat *cj = c_da[j], *nj = n_da[j];
-            TFloat *d_cj = dc_da[j], *d_nj = dn_da[j];
+            TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
+            TFloat *d_cj = dc_da[j], *d_nj = dn_da[j], &d_wj = dw_da[j];
             TFloat dist_sq = 0.0;
             TFloat dot_ni_nj = 0.0;
             for(unsigned int a = 0; a < VDim; a++)
@@ -510,18 +548,43 @@ public:
               }
 
             TFloat K = exp(f * dist_sq);
-            TFloat zij = K * dot_ni_nj;
-            zi += zij;
 
-            if(grad)
+            if(mode == CURRENTS)
               {
-              TFloat w = f_times_2 * zij;
-              for(unsigned int a = 0; a < VDim; a++)
+              TFloat zij = K * dot_ni_nj;
+              zi += zij;
+
+              if(grad)
                 {
-                d_ci[a] += w * dq[a];
-                d_cj[a] -= w * dq[a];
-                d_ni[a] += K * nj[a];
-                d_nj[a] += K * ni[a];
+                TFloat w = f_times_2 * zij;
+                for(unsigned int a = 0; a < VDim; a++)
+                  {
+                  d_ci[a] += w * dq[a];
+                  d_cj[a] -= w * dq[a];
+                  d_ni[a] += K * nj[a];
+                  d_nj[a] += K * ni[a];
+                  }
+                }
+              }
+            else
+              {
+              TFloat K_wi_wj = K * wi * wj;
+              TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
+              TFloat zij = K_wi_wj * dot_ni_nj_sq;
+              zi += zij;
+
+              if(grad)
+                {
+                TFloat w = f_times_2 * zij;
+                for(unsigned int a = 0; a < VDim; a++)
+                  {
+                  d_ci[a] += w * dq[a];
+                  d_cj[a] -= w * dq[a];
+                  d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
+                  d_nj[a] += 2 * dot_ni_nj * K_wi_wj * ni[a];
+                  }
+                d_wi += K * wj * dot_ni_nj_sq;
+                d_wj += K * wi * dot_ni_nj_sq;
                 }
               }
             }
@@ -540,6 +603,7 @@ public:
       {
       cspd->dE_dC += cspd->td[i].dE_dC;
       cspd->dE_dN += cspd->td[i].dE_dN;
+      cspd->dE_dW += cspd->td[i].dE_dW;
       }
   }
 
@@ -563,7 +627,9 @@ public:
         // Get data arrays for fast memory access
         auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
         auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
+        auto w1_da = tcan_1->W.data_block(), w2_da = tcan_2->W.data_block();
         auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
+        auto dw_da = cspd_1->dE_dW.data_block();
         auto z1_da = cspd_1->z.data_block();
 
         TFloat f = -0.5 / (sigma * sigma);
@@ -573,14 +639,14 @@ public:
         for(unsigned int i = thr; i < tcan_1->C.rows(); i+=n_threads)
           {
           TFloat zi = 0.0;
-          TFloat *ci = c1_da[i], *ni = n1_da[i];
-          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i];
+          TFloat *ci = c1_da[i], *ni = n1_da[i], wi = w1_da[i];
+          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
           TFloat dq[VDim];
 
           for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
             {
             // Compute the kernel
-            TFloat *cj = c2_da[j], *nj = n2_da[j];
+            TFloat *cj = c2_da[j], *nj = n2_da[j], wj = w2_da[j];
             TFloat dist_sq = 0.0;
             TFloat dot_ni_nj = 0.0;
             for(unsigned int a = 0; a < VDim; a++)
@@ -591,16 +657,38 @@ public:
               }
 
             TFloat K = -exp(f * dist_sq);
-            TFloat zij = K * dot_ni_nj;
-            zi += zij;
 
-            if(grad)
+            if(mode == CURRENTS)
               {
-              TFloat w = f_times_2 * zij;
-              for(unsigned int a = 0; a < VDim; a++)
+              TFloat zij = K * dot_ni_nj;
+              zi += zij;
+
+              if(grad)
                 {
-                d_ci[a] += w * dq[a];
-                d_ni[a] += K * nj[a];
+                TFloat w = f_times_2 * zij;
+                for(unsigned int a = 0; a < VDim; a++)
+                  {
+                  d_ci[a] += w * dq[a];
+                  d_ni[a] += K * nj[a];
+                  }
+                }
+              }
+            else
+              {
+              TFloat K_wi_wj = K * wi * wj;
+              TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
+              TFloat zij = K_wi_wj * dot_ni_nj_sq;
+              zi += zij;
+
+              if(grad)
+                {
+                TFloat w = f_times_2 * zij;
+                for(unsigned int a = 0; a < VDim; a++)
+                  {
+                  d_ci[a] += w * dq[a];
+                  d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
+                  }
+                d_wi += K * wj * dot_ni_nj_sq;
                 }
               }
             }
@@ -693,6 +781,7 @@ public:
     // Global objects
     cspd->dE_dC.set_size(tri->rows(), VDim);
     cspd->dE_dN.set_size(tri->rows(), VDim);
+    cspd->dE_dW.set_size(tri->rows());
     cspd->z.set_size(tri->rows());
     cspd->td.resize(n_threads);
 
@@ -701,6 +790,7 @@ public:
       {
       cspd->td[t].dE_dC.set_size(tri->rows(), VDim);
       cspd->td[t].dE_dN.set_size(tri->rows(), VDim);
+      cspd->td[t].dE_dW.set_size(tri->rows());
       }
 
     // Assign lines in pairs, one at the top of the symmetric matrix K and
@@ -738,6 +828,8 @@ protected:
   // Threading
   unsigned int n_threads;
 
+  // Mode
+  Mode mode;
 };
 
 
@@ -780,10 +872,14 @@ public:
 
     // Set up the currents attachment
     currents_attachment = nullptr;
-    if(param.attach == ShootingParameters::Current)
+    if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
       {
-      currents_attachment = new CurrentsAttachmentTerm<TFloat, VDim>(
+      // Create the appropriate attachment term (currents or varifolds)
+      currents_attachment = new CATerm(
+            param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
             m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
+
+      // Allocate the gradient storage
       grad_currents.set_size(m, VDim);
       }
     }
@@ -912,7 +1008,8 @@ protected:
   Vector alpha[VDim], beta[VDim], grad_f[VDim];
 
   // Attachment terms
-  CurrentsAttachmentTerm<TFloat, VDim> *currents_attachment;
+  typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
+  CATerm *currents_attachment;
 
   // For currents, the gradient is supplied as a matrix
   Matrix grad_currents;
@@ -1671,7 +1768,9 @@ PointSetShootingProblem<TFloat, VDim>
   int m = q0.rows();
   Matrix grad_currents(m, VDim);
 
-  CurrentsAttachmentTerm<TFloat, VDim> currents_attachment(
+  typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
+  CATerm currents_attachment(
+        param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
         m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
 
   double value = currents_attachment.Compute(q0, &grad_currents);
