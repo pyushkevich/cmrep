@@ -562,17 +562,25 @@ IF(CMREP_BUILD_VCG_UTILS)
     ADD_EXECUTABLE(mesh_smooth_curv
         src/util/MeshSmoothAndCurvature.cxx
         ${VCG_UTIL_SRC} )
+    TARGET_LINK_LIBRARIES(mesh_smooth_curv ${LAPACK_LIBRARIES})
 
     ADD_EXECUTABLE(mesh_poisson_sample
         src/util/MeshPoissonSample.cxx
         ${VCG_UTIL_SRC})
+    TARGET_LINK_LIBRARIES(mesh_poisson_sample ${LAPACK_LIBRARIES})
+
+    ADD_EXECUTABLE(mesh_decimate_vcg
+        src/util/MeshDecimateVCG.cxx
+        src/util/ReadWriteVTK.cxx
+        ${VCG_UTIL_SRC})
+    TARGET_LINK_LIBRARIES(mesh_decimate_vcg ${LAPACK_LIBRARIES})
 
     ADD_EXECUTABLE(vtklevelset
         src/util/RealImageToMesh.cxx
         src/util/ReadWriteVTK.cxx
         ${VCG_UTIL_SRC})
 
-    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample vtklevelset)
+    SET(CMREP_UTIL_TOOLS ${CMREP_UTIL_TOOLS} mesh_smooth_curv mesh_poisson_sample mesh_decimate_vcg vtklevelset)
     TARGET_LINK_LIBRARIES(vtklevelset cmrep ${CMREP_FIT_LIBS} ${LAPACK_LIBRARIES})
 ELSE()
     # vtklevelset can be built without VCG support

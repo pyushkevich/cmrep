@@ -82,6 +82,7 @@ struct ShootingParameters
   bool use_float = false;
   unsigned int n_threads = 0;
   unsigned int n_deriv_check = 0;
+  bool test_currents_attachment = false;
 
   // For constrained optimization - just exprimental
   double constrained_mu_init = 0.0, constrained_mu_mult = 0.0;
@@ -526,7 +527,7 @@ public:
             }
 
           // Store the cost for this template vertex
-          z_da[i] = zi;
+          z_da[i] += zi;
           }
         }));
       }
@@ -589,7 +590,7 @@ public:
               dot_ni_nj += ni[a] * nj[a];
               }
 
-            TFloat K = -2.0 * exp(f * dist_sq);
+            TFloat K = -exp(f * dist_sq);
             TFloat zij = K * dot_ni_nj;
             zi += zij;
 
@@ -1290,6 +1291,10 @@ public:
   static int minimize(const ShootingParameters &param);
 
 private:
+  static int TestCurrentsAttachmentTerm(
+      const ShootingParameters &param,
+      Matrix &q0, Matrix &qT,
+      vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target);
 };
 
 #include <vnl/algo/vnl_brent_minimizer.h>
@@ -1656,7 +1661,22 @@ PointSetShootingProblem<TFloat, VDim>
 }
 
 
+template <class TFloat, unsigned int VDim>
+int
+PointSetShootingProblem<TFloat, VDim>
+::TestCurrentsAttachmentTerm(const ShootingParameters &param,
+                             Matrix &q0, Matrix &qT,
+                             vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target)
+{
+  int m = q0.rows();
+  Matrix grad_currents(m, VDim);
 
+  CurrentsAttachmentTerm<TFloat, VDim> currents_attachment(
+        m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
+
+  double value = currents_attachment.Compute(q0, &grad_currents);
+  printf("Currents Attachment Value: %f\n", value);
+}
 
 
 template <class TFloat, unsigned int VDim>
@@ -1767,6 +1787,12 @@ PointSetShootingProblem<TFloat, VDim>
         }
       for(unsigned int a = 0; a < VDim; a++)
         tri_target(i,a) = pTarget->GetCell(i)->GetPointId(a);
+      }
+
+    if(param.test_currents_attachment)
+      {
+      TestCurrentsAttachmentTerm(param, q0, qT, tri_template, tri_target);
+      return 0;
       }
     }
 
@@ -1965,6 +1991,10 @@ int main(int argc, char *argv[])
     else if(arg == "-S")
       {
       param.currents_sigma = cl.read_double();
+      }
+    else if(arg == "-test-currents")
+      {
+      param.test_currents_attachment = true;
       }
     else if(arg == "-h")
       {

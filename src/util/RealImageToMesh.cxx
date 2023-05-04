@@ -384,54 +384,12 @@ int main(int argc, char *argv[])
     qparams.QualityQuadric=true;
     qparams.QualityQuadricWeight=0.001;
 
-    // decimator initialization
-    vcg::LocalOptimization<VCGTriMesh::Mesh> DeciSession(tri_mesh.GetMesh(), &qparams);
-
-    // specialization
-    typedef vcg::tri::BasicVertexPair<VCGTriMesh::Vertex> VertexPair;
-    class MyTriEdgeCollapse: public vcg::tri::TriEdgeCollapseQuadric<
-        VCGTriMesh::Mesh, VertexPair,
-        MyTriEdgeCollapse,
-        vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  >
-    {
-    public:
-      typedef vcg::tri::TriEdgeCollapseQuadric<
-          VCGTriMesh::Mesh, VertexPair,
-          MyTriEdgeCollapse,
-          vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  > TECQ;
-      typedef  VCGTriMesh::Mesh::VertexType::EdgeType EdgeType;
-      inline MyTriEdgeCollapse(const VertexPair &p, int i, vcg::BaseParameterClass *pp) :TECQ(p,i,pp){}
-    };
-
-    // Target number of vertices
-    int n_target = reduction_factor < 1.0
-        ? (int) (tri_mesh.GetMesh().FN() * reduction_factor)
-        : (int) reduction_factor;
-
-    int t1=clock();
-    DeciSession.Init<MyTriEdgeCollapse>();
-    int t2=clock();
-    printf("Simplifying to reduce from %7i to %7i faces\n", tri_mesh.GetMesh().FN(), n_target);
-
-    DeciSession.SetTargetSimplices(n_target);
-    DeciSession.SetTimeBudget(2.0f);
-    // DeciSession.SetTargetOperations(100000);
-    // if(TargetError< std::numeric_limits<float>::max() ) DeciSession.SetTargetMetric(TargetError);
-
-    double TargetError = std::numeric_limits<double>::max();
-    while( DeciSession.DoOptimization() && tri_mesh.GetMesh().FN() > n_target && DeciSession.currMetric < TargetError)
-      printf("Current Mesh size %7i heap sz %9i err %9g \n", tri_mesh.GetMesh().FN(), int(DeciSession.h.size()),DeciSession.currMetric);
-
-    int t3=clock();
-    printf("mesh (%d,%d) Error %g \n", tri_mesh.GetMesh().VN(), tri_mesh.GetMesh().FN(), DeciSession.currMetric);
-    printf("\nCompleted in (%5.3f+%5.3f) sec\n", float(t2-t1)/CLOCKS_PER_SEC, float(t3-t2)/CLOCKS_PER_SEC);
-
-    DeciSession.Finalize<MyTriEdgeCollapse>();
+    // Perform decimation
+    tri_mesh.QuadricEdgeCollapseRemeshing(reduction_factor, qparams);
 
     // Postprocess by cleaning and fixing normals
     tri_mesh.CleanMesh();
     tri_mesh.RecomputeNormals();
-
     tri_mesh.ExportToVTK(mesh);
 #else
     cout << "Mesh reduction is not implemented - need to compile with VCG" << endl;

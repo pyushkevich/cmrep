@@ -40,6 +40,14 @@ public:
   // Recompute normals
   void RecomputeNormals();
 
+  // Get default parameters for quadric edge collapse filter
+  static vcg::tri::TriEdgeCollapseQuadricParameter GetDefaultQuadricEdgeCollapseRemeshingParameters();
+
+  // Perform remeshing using the quadric edge collapse filter
+  void QuadricEdgeCollapseRemeshing(double reduction_factor = 0.1,
+                                    vcg::tri::TriEdgeCollapseQuadricParameter params
+                                    = GetDefaultQuadricEdgeCollapseRemeshingParameters());
+
   // Access the  mesh
   Mesh &GetMesh() { return m_Mesh; }
 

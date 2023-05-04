@@ -131,6 +131,69 @@ void VCGTriMesh::RecomputeNormals()
   tri::UpdateNormal<Mesh>::NormalizePerFace(m_Mesh);
   tri::UpdateNormal<Mesh>::PerVertexFromCurrentFaceNormal(m_Mesh);
   tri::UpdateNormal<Mesh>::NormalizePerVertex(m_Mesh);
+  }
 
+tri::TriEdgeCollapseQuadricParameter VCGTriMesh::GetDefaultQuadricEdgeCollapseRemeshingParameters()
+{
+  vcg::tri::TriEdgeCollapseQuadricParameter qparams;
+  qparams.QualityThr = 0.3;
+  qparams.PreserveBoundary=true;
+  qparams.BoundaryQuadricWeight=1.0;
+  qparams.PreserveTopology=true;
+  qparams.QualityWeight=false;
+  qparams.NormalCheck=true;
+  qparams.OptimalPlacement=true;
+  qparams.QualityQuadric=true;
+  qparams.QualityQuadricWeight=0.001;
 
+  return qparams;
+  }
+
+void VCGTriMesh::QuadricEdgeCollapseRemeshing(
+    double reduction_factor,
+    vcg::tri::TriEdgeCollapseQuadricParameter qparams)
+{
+  // decimator initialization
+  vcg::LocalOptimization<VCGTriMesh::Mesh> DeciSession(m_Mesh, &qparams);
+
+  // specialization
+  typedef vcg::tri::BasicVertexPair<VCGTriMesh::Vertex> VertexPair;
+  class MyTriEdgeCollapse: public vcg::tri::TriEdgeCollapseQuadric<
+      VCGTriMesh::Mesh, VertexPair,
+      MyTriEdgeCollapse,
+      vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  >
+  {
+  public:
+    typedef vcg::tri::TriEdgeCollapseQuadric<
+        VCGTriMesh::Mesh, VertexPair,
+        MyTriEdgeCollapse,
+        vcg::tri::QInfoStandard<VCGTriMesh::Vertex>  > TECQ;
+    typedef  VCGTriMesh::Mesh::VertexType::EdgeType EdgeType;
+    inline MyTriEdgeCollapse(const VertexPair &p, int i, vcg::BaseParameterClass *pp) :TECQ(p,i,pp){}
+  };
+
+  // Target number of vertices
+  int n_target = reduction_factor < 1.0
+      ? (int) (m_Mesh.FN() * reduction_factor)
+      : (int) reduction_factor;
+
+  int t1=clock();
+  DeciSession.Init<MyTriEdgeCollapse>();
+  int t2=clock();
+  printf("Simplifying to reduce from %7i to %7i faces\n", m_Mesh.FN(), n_target);
+
+  DeciSession.SetTargetSimplices(n_target);
+  DeciSession.SetTimeBudget(2.0f);
+  // DeciSession.SetTargetOperations(100000);
+  // if(TargetError< std::numeric_limits<float>::max() ) DeciSession.SetTargetMetric(TargetError);
+
+  double TargetError = std::numeric_limits<double>::max();
+  while( DeciSession.DoOptimization() && m_Mesh.FN() > n_target && DeciSession.currMetric < TargetError)
+    printf("Current Mesh size %7i heap sz %9i err %9g \n", m_Mesh.FN(), int(DeciSession.h.size()),DeciSession.currMetric);
+
+  int t3=clock();
+  printf("mesh (%d,%d) Error %g \n", m_Mesh.VN(), m_Mesh.FN(), DeciSession.currMetric);
+  printf("\nCompleted in (%5.3f+%5.3f) sec\n", float(t2-t1)/CLOCKS_PER_SEC, float(t3-t2)/CLOCKS_PER_SEC);
+
+  DeciSession.Finalize<MyTriEdgeCollapse>();
 }
