@@ -100,7 +100,7 @@ public:
 
   TriangleCentersAndNormals(const Triangulation &tri, bool normalize);
   void Forward(const Matrix &q);
-  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq);
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, const Vector &dE_dW_norm, Matrix &dE_dq);
 };
 
 template <class TFloat>
@@ -145,9 +145,9 @@ public:
 
       if(normalize)
         {
-        Wi[0] = Ui[1] * Vi[2] - Ui[2] * Vi[1];
-        Wi[1] = Ui[2] * Vi[0] - Ui[0] * Vi[2];
-        Wi[2] = Ui[0] * Vi[1] - Ui[1] * Vi[0];
+        Wi[0] = 0.5 * (Ui[1] * Vi[2] - Ui[2] * Vi[1]);
+        Wi[1] = 0.5 * (Ui[2] * Vi[0] - Ui[0] * Vi[2]);
+        Wi[2] = 0.5 * (Ui[0] * Vi[1] - Ui[1] * Vi[0]);
 
         // Compute the norm of the cross-product
         W_norm[i] = sqrt(Wi[0] * Wi[0] + Wi[1] * Wi[1] + Wi[2] * Wi[2]);
@@ -174,7 +174,7 @@ public:
       }
   }
 
-  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq)
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, const Vector &dE_dW_norm, Matrix &dE_dq)
   {
     dE_dq.fill(0.0);
     TFloat dU[3], dV[3], dW[3];
@@ -184,9 +184,11 @@ public:
       // Get pointer access to the outputs
       TFloat *Ui = U.data_array()[i];
       TFloat *Vi = V.data_array()[i];
+      TFloat *Wi = W.data_array()[i];
       TFloat *Ni = N.data_array()[i];
       const TFloat *dCi = dE_dC.data_array()[i];
       const TFloat *dNi = dE_dN.data_array()[i];
+      TFloat dW_norm = dE_dW_norm[i];
 
       // Get the vertex indices and the corresponding gradients
       int v0 = tri(i, 0), v1 = tri(i, 1), v2 = tri(i, 2);
@@ -199,9 +201,9 @@ public:
         // Partial of the norm of W
         if(W_norm[i] > 0.0)
           {
-          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] - Ni[0] * Ni[2] * dNi[2]) / W_norm[i];
-          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] - Ni[1] * Ni[2] * dNi[2]) / W_norm[i];
-          dW[2] = ((1 - Ni[2]*Ni[2]) * dNi[2] - Ni[2] * Ni[0] * dNi[0] - Ni[2] * Ni[1] * dNi[1]) / W_norm[i];
+          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] - Ni[0] * Ni[2] * dNi[2] + Wi[0] * dW_norm) / W_norm[i];
+          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] - Ni[1] * Ni[2] * dNi[2] + Wi[1] * dW_norm) / W_norm[i];
+          dW[2] = ((1 - Ni[2]*Ni[2]) * dNi[2] - Ni[2] * Ni[0] * dNi[0] - Ni[2] * Ni[1] * dNi[1] + Wi[2] * dW_norm) / W_norm[i];
           }
         else
           {
@@ -211,13 +213,13 @@ public:
           }
 
         // Backprop the cross-product
-        dU[0] = Vi[1] * dW[2] - Vi[2] * dW[1];
-        dU[1] = Vi[2] * dW[0] - Vi[0] * dW[2];
-        dU[2] = Vi[0] * dW[1] - Vi[1] * dW[0];
+        dU[0] = 0.5 * (Vi[1] * dW[2] - Vi[2] * dW[1]);
+        dU[1] = 0.5 * (Vi[2] * dW[0] - Vi[0] * dW[2]);
+        dU[2] = 0.5 * (Vi[0] * dW[1] - Vi[1] * dW[0]);
 
-        dV[0] = Ui[2] * dW[1] - Ui[1] * dW[2];
-        dV[1] = Ui[0] * dW[2] - Ui[2] * dW[0];
-        dV[2] = Ui[1] * dW[0] - Ui[0] * dW[1];
+        dV[0] = 0.5 * (Ui[2] * dW[1] - Ui[1] * dW[2]);
+        dV[1] = 0.5 * (Ui[0] * dW[2] - Ui[2] * dW[0]);
+        dV[2] = 0.5 * (Ui[1] * dW[0] - Ui[0] * dW[1]);
         }
       else
         {
@@ -322,7 +324,7 @@ public:
       }
   }
 
-  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, Matrix &dE_dq)
+  void Backward(const Matrix &dE_dC, const Matrix &dE_dN, const Vector &dE_dW_norm, Matrix &dE_dq)
   {
     dE_dq.fill(0.0);
     TFloat dU[2], dW[2];
@@ -333,6 +335,8 @@ public:
       TFloat *Ni = N.data_array()[i];
       const TFloat *dCi = dE_dC.data_array()[i];
       const TFloat *dNi = dE_dN.data_array()[i];
+      TFloat *Wi = W.data_array()[i];
+      TFloat dW_norm = dE_dW_norm[i];
 
       // Get the vertex indices and the corresponding gradients
       int v0 = tri(i, 0), v1 = tri(i, 1);
@@ -344,8 +348,8 @@ public:
         // Partial of the norm of W
         if(W_norm[i] > 0.0)
           {
-          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1]) / W_norm[i];
-          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0]) / W_norm[i];
+          dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] + Wi[0] * dW_norm) / W_norm[i];
+          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] + Wi[0] * dW_norm) / W_norm[i];
           }
         else
           {
@@ -494,7 +498,7 @@ public:
         // Get data arrays for fast memory access
         auto c_da = tcan->C.data_array();
         auto n_da = tcan->N.data_array();
-        auto w_da = tcan->W.data_block();
+        auto w_da = tcan->W_norm.data_block();
         auto dc_da = my_td.dE_dC.data_array();
         auto dn_da = my_td.dE_dN.data_array();
         auto dw_da = my_td.dE_dW.data_block();
@@ -627,7 +631,7 @@ public:
         // Get data arrays for fast memory access
         auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
         auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
-        auto w1_da = tcan_1->W.data_block(), w2_da = tcan_2->W.data_block();
+        auto w1_da = tcan_1->W_norm.data_block(), w2_da = tcan_2->W_norm.data_block();
         auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
         auto dw_da = cspd_1->dE_dW.data_block();
         auto z1_da = cspd_1->z.data_block();
@@ -714,20 +718,26 @@ public:
       {
       cspd_template.dE_dC.fill(0.0);
       cspd_template.dE_dN.fill(0.0);
+      cspd_template.dE_dW.fill(0.0);
       }
 
     // Initialize the z-term
     cspd_template.z = z0_template;
+    // double v0 = cspd_template.z.sum();
 
     // Add the squared norm term
     this->ComputeCurrentHalfNormSquared(&tcan_template, &cspd_template, grad != nullptr);
+    // double v1 = cspd_template.z.sum();
 
     // Subtract twice the scalar product term
     this->ComputeCurrentScalarProduct(&tcan_template, &tcan_target, &cspd_template, grad != nullptr);
+    // double v2 = cspd_template.z.sum();
+
+    // printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
 
     // Backpropagate the gradient to get gradient with respect to q1
     if(grad)
-      tcan_template.Backward(cspd_template.dE_dC, cspd_template.dE_dN, *grad);
+      tcan_template.Backward(cspd_template.dE_dC, cspd_template.dE_dN, cspd_template.dE_dW, *grad);
 
     // Return the total energy
     return cspd_template.z.sum();
@@ -950,7 +960,7 @@ public:
     double E_data = 0.0;
     if(param.attach == ShootingParameters::Euclidean)
       E_data = ComputeEuclideanAttachment();
-    else if(param.attach == ShootingParameters::Current)
+    else if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
       {
       static int my_iter = 0;
       if(g)
@@ -1767,6 +1777,20 @@ PointSetShootingProblem<TFloat, VDim>
 {
   int m = q0.rows();
   Matrix grad_currents(m, VDim);
+
+  TriangleCentersAndNormals <TFloat, VDim> tcan(tri_template, true);
+  tcan.Forward(q0);
+  cout << "TCAN test" << endl;
+  cout << tcan.C.get_row(333) << endl;
+  cout << tcan.N.get_row(333) << endl;
+  cout << tcan.W_norm(333) << endl;
+
+  Matrix eC(tcan.C.rows(), VDim); eC.fill(1.0);
+  Matrix eN(tcan.C.rows(), VDim); eN.fill(1.0);
+  Vector ea(tcan.C.rows()); ea.fill(1.0);
+  Matrix eQ(tcan.C.rows(), VDim); eC.fill(1.0);
+  tcan.Backward(eC, eN, ea, eQ);
+  cout << eQ.get_row(333) << endl;
 
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
   CATerm currents_attachment(
