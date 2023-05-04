@@ -22,7 +22,7 @@
 #include <utility>
 #include "itk_to_nifti_xform.h"
 
-#include "ConstrainedCMRepObjectives.h"
+#include "BoundaryConstrainedCMRepObjectives.h"
 
 #include "itkImageRegionIterator.h"
 #include "itkImageRegionIteratorWithIndex.h"
