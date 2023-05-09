@@ -1266,7 +1266,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
 
   // Standard GLM calculation
   vnl_matrix<double> A = vnl_matrix_inverse<double>(X.transpose() * X).pinverse(rank);
-  vnl_matrix<double> bhat = (A * X.transpose()) * Y;
+  vnl_matrix<double> bhat = (A * X.transpose()) * Yperm;
   
   // Compute the contrast
   vnl_matrix<double> res = cv * bhat;
@@ -1281,7 +1281,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
   // The rest only if we need the t-stat
   if(need_t)
     {
-    vnl_matrix<double> errmat = Y - X * bhat;
+    vnl_matrix<double> errmat = Yperm - X * bhat;
     
     // Residual variance
     vnl_matrix<double> resvar(1, nelt);
@@ -1290,10 +1290,6 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
       {
       for(size_t i = 0; i < X.rows(); i++)
         resvar(0, j) += errmat(i,j) * errmat(i,j);
-      if(j==0){
-        std::cout << "res_mag" << resvar(0,j) << std::endl;
-        std::cout << "df" << df << std::endl;
-        }
       resvar(0, j) = resvar(0, j) / (double) df;
       }
 
