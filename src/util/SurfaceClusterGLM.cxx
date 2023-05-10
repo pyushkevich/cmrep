@@ -118,12 +118,15 @@ const char *usage_text =
   "  -e / --edges   \n"
   "                 Generate separate output files containing cluster edges.\n"
   "                 The file names are derived from the -m output parameters.\n"
-  "  -M / --missing \n"
+  "  -M / --missing <min_obs|min_obs_fraction>\n"
   "                 Input data (per-vertex observations) have missing data encoded\n"
   "                 as NaNs. The algorithm will exclude these observations from the\n"
   "                 GLM and compute the GLM with only non-missing observations\n"
+  "                 You must specify the minimum number of non-NaN observations at\n"
+  "                 a vertex that are required to perform GLM at that vertex (e.g., 100),\n"
+  "                 or a minimum fraction of observations that must be not NaN (e.g., 0.5).\n"
   "                 NOTE: on some operating systems NaNs can only be read from VTK\n"
-  "                 meshes in binary (not ASCII) format.\n"
+  "                 meshes in binary (not ASCII) format. \n"
   "  -B / --binary  Write output meshes in binary format. This is turned on automatically\n"
   "                 when the -M flag is supplied\n"
   "  -f / --flane   Use the Freedman-Lane procedure for permutation testing\n"
@@ -631,6 +634,7 @@ private:
 
   vtkSmartPointer<vtkDataSet> mesh;
   vtkSmartPointer<vtkUnstructuredGrid> mout;
+  vtkSmartPointer<vtkFloatArray> scalar_backup;
 
   double thresh;
   Domain dom;
@@ -721,6 +725,7 @@ double ComputeCellVolume(vtkCell *cell)
   return vol;
 }
 
+
 ClusterArray
 ClusterComputer::ComputeClusters(bool build_combo_mesh)
 {
@@ -739,26 +744,59 @@ ClusterComputer::ComputeClusters(bool build_combo_mesh)
   int nelt = (dom == POINT) ?  p->GetNumberOfPoints() : p->GetNumberOfCells();
 
   // Leave if there are no clusters
-  if(nelt == 0)
-    return ClusterArray(0);
-
-  // Create a temporary array to store cell area element
-  vector<double> daArea(nelt, 0.0);
-
-  // Compute the area of each triangle in the cluster set
-  for(int k = 0; k < p->GetNumberOfCells(); k++)
+  ClusterArray ca(0);
+  if(nelt > 0)
     {
-    vtkCell *cell = p->GetCell(k);
-    if(cell->GetCellType() == VTK_TRIANGLE)
+    // Create a temporary array to store cell area element
+    vector<double> daArea(nelt, 0.0);
+
+    // Compute the area of each triangle in the cluster set
+    for(int k = 0; k < p->GetNumberOfCells(); k++)
       {
+      vtkCell *cell = p->GetCell(k);
+      if(cell->GetCellType() == VTK_TRIANGLE)
+        {
+        // Compute the area of the triangle
+        double p0[3], p1[3], p2[3];
+        vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
+        p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2);
+        double area = vtkTriangle::TriangleArea(p0, p1, p2);
+
+        if(dom == POINT)
+          {
+          // Split the volume between neighbors
+          daArea[a0] += area / 3.0; daArea[a1] += area / 3.0; daArea[a2] += area / 3.0;
+          }
+        else
+          {
+          // No need to split, working with cells
+          daArea[k] = area;
+          }
+        }
+      else if(cell->GetCellType() == VTK_TETRA || cell->GetCellType() == VTK_WEDGE)
+        {
+        double vol = ComputeCellVolume(cell);
+        if(dom == POINT)
+          {
+          for(int m = 0; m < cell->GetNumberOfPoints(); m++)
+            daArea[cell->GetPointId(m)] += vol / cell->GetNumberOfPoints();
+          }
+        else
+          {
+          daArea[k] = vol;
+          }
+        }
+      else
+        throw MCException("Wrong cell type, should be VTK_TRIANGLE, VTK_TETRA or VTK_WEDGE");
+
       // Compute the area of the triangle
       double p0[3], p1[3], p2[3];
       vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
-      p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2); 
+      p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2);
       double area = vtkTriangle::TriangleArea(p0, p1, p2);
 
       if(dom == POINT)
-        {  
+        {
         // Split the volume between neighbors
         daArea[a0] += area / 3.0; daArea[a1] += area / 3.0; daArea[a2] += area / 3.0;
         }
@@ -768,105 +806,73 @@ ClusterComputer::ComputeClusters(bool build_combo_mesh)
         daArea[k] = area;
         }
       }
-    else if(cell->GetCellType() == VTK_TETRA || cell->GetCellType() == VTK_WEDGE)
+
+    // Get the input statistic
+    vtkDataArray *daStat = GetArrayFromMesh(p, dom, scalar_name);
+
+    // Get the region ID
+    vtkDataArray *daRegion = GetScalarsFromMesh(p, dom);
+
+    // Build up the cluster array
+    ca = ClusterArray(fConnect->GetNumberOfExtractedRegions());
+    for(int i = 0; i < nelt; i++)
       {
-      double vol = ComputeCellVolume(cell);
+      size_t region = (size_t) (daRegion->GetTuple1(i));
+      double x = daStat->GetTuple1(i);
+      double a = daArea[i];
+      ca[region].n++;
+      ca[region].area += a;
+      ca[region].power += a * x;
+      ca[region].tvalue += x;
+      }
+
+    // Get the output if needed
+    if(build_combo_mesh)
+      {
       if(dom == POINT)
         {
-        for(int m = 0; m < cell->GetNumberOfPoints(); m++)
-          daArea[cell->GetPointId(m)] += vol / cell->GetNumberOfPoints();
+        // Get the stuff that got cut out
+        fClip->InsideOutOn();
+        fClip->Update();
+        vtkUnstructuredGrid *fout = fClip->GetOutput();
+        fClip->InsideOutOff();
+
+        // Assign each cell in cut away piece a ClusterId of -1
+        AddArrayToMesh(fout, CELL, "RegionId", 1, -1.0);
+
+        // Assign a RegionId to each cell in the thresholded part
+        vtkFloatArray *prid = AddArrayToMesh(p, CELL, "RegionId", 1, 0.0);
+
+        for(int i = 0; i < p->GetNumberOfCells(); i++)
+          {
+          vtkCell *cell = p->GetCell(i);
+          double c1 = daRegion->GetTuple1(cell->GetPointId(0));
+          double c2 = daRegion->GetTuple1(cell->GetPointId(1));
+          double c3 = daRegion->GetTuple1(cell->GetPointId(2));
+          if(c1 != c2 || c1 != c3 || c2 != c3)
+            throw MCException("Inconsistent RegionID mapping");
+
+          prid->SetTuple1(i, c1);
+          }
+
+        // Merge the two arrays
+        MergeMeshPieces<vtkUnstructuredGrid>(p, fout, mout);
+        mout->GetPointData()->SetActiveScalars(scalar_name);
+        cout << "SC = " <<  mout->GetPointData()->GetScalars() << endl;
         }
       else
         {
-        daArea[k] = vol;
+        // Apply an inverted threshold
+        fThreshInv->Update();
+        vtkUnstructuredGrid *cut = fThreshInv->GetOutput();
+
+        // Each cell in p already has a region id. Just need to add regionids to the cut
+        AddArrayToMesh(cut, CELL, "RegionId", 1, -1);
+
+        // Merge the pieces
+        MergeMeshPieces<vtkUnstructuredGrid>(p, cut, mout);
+        mout->GetCellData()->SetActiveScalars(scalar_name);
         }
-      }
-    else
-      throw MCException("Wrong cell type, should be VTK_TRIANGLE, VTK_TETRA or VTK_WEDGE");
-
-    // Compute the area of the triangle
-    double p0[3], p1[3], p2[3];
-    vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
-    p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2); 
-    double area = vtkTriangle::TriangleArea(p0, p1, p2);
-
-    if(dom == POINT)
-      {  
-      // Split the volume between neighbors
-      daArea[a0] += area / 3.0; daArea[a1] += area / 3.0; daArea[a2] += area / 3.0;
-      }
-    else
-      {
-      // No need to split, working with cells
-      daArea[k] = area;
-      }
-    }
-
-  // Get the input statistic
-  vtkDataArray *daStat = GetArrayFromMesh(p, dom, scalar_name);
-
-  // Get the region ID
-  vtkDataArray *daRegion = GetScalarsFromMesh(p, dom);
-
-  // Build up the cluster array
-  ClusterArray ca(fConnect->GetNumberOfExtractedRegions());
-  for(int i = 0; i < nelt; i++)
-    {
-    size_t region = (size_t) (daRegion->GetTuple1(i));
-    double x = daStat->GetTuple1(i);
-    double a = daArea[i];
-    ca[region].n++;
-    ca[region].area += a;
-    ca[region].power += a * x;
-    ca[region].tvalue += x;
-    }
-
-  // Get the output if needed
-  if(build_combo_mesh)
-    {
-    if(dom == POINT)
-      {
-      // Get the stuff that got cut out
-      fClip->InsideOutOn();
-      fClip->Update();
-      vtkUnstructuredGrid *fout = fClip->GetOutput();
-      fClip->InsideOutOff();
-
-      // Assign each cell in cut away piece a ClusterId of -1
-      AddArrayToMesh(fout, CELL, "RegionId", 1, -1.0);
-
-      // Assign a RegionId to each cell in the thresholded part
-      vtkFloatArray *prid = AddArrayToMesh(p, CELL, "RegionId", 1, 0.0);
-
-      for(int i = 0; i < p->GetNumberOfCells(); i++)
-        {
-        vtkCell *cell = p->GetCell(i);
-        double c1 = daRegion->GetTuple1(cell->GetPointId(0));
-        double c2 = daRegion->GetTuple1(cell->GetPointId(1));
-        double c3 = daRegion->GetTuple1(cell->GetPointId(2));
-        if(c1 != c2 || c1 != c3 || c2 != c3)
-          throw MCException("Inconsistent RegionID mapping");
-
-        prid->SetTuple1(i, c1);
-        }
-
-      // Merge the two arrays
-      MergeMeshPieces<vtkUnstructuredGrid>(p, fout, mout);
-      mout->GetPointData()->SetActiveScalars(scalar_name);
-      cout << "SC = " <<  mout->GetPointData()->GetScalars() << endl;
-      }
-    else
-      {
-      // Apply an inverted threshold
-      fThreshInv->Update();
-      vtkUnstructuredGrid *cut = fThreshInv->GetOutput();
-
-      // Each cell in p already has a region id. Just need to add regionids to the cut
-      AddArrayToMesh(cut, CELL, "RegionId", 1, -1);
-
-      // Merge the pieces
-      MergeMeshPieces<vtkUnstructuredGrid>(p, cut, mout);
-      mout->GetCellData()->SetActiveScalars(scalar_name);
       }
     }
 
@@ -1266,7 +1272,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
 
   // Standard GLM calculation
   vnl_matrix<double> A = vnl_matrix_inverse<double>(X.transpose() * X).pinverse(rank);
-  vnl_matrix<double> bhat = (A * X.transpose()) * Y;
+  vnl_matrix<double> bhat = (A * X.transpose()) * Yperm;
   
   // Compute the contrast
   vnl_matrix<double> res = cv * bhat;
@@ -1281,7 +1287,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
   // The rest only if we need the t-stat
   if(need_t)
     {
-    vnl_matrix<double> errmat = Y - X * bhat;
+    vnl_matrix<double> errmat = Yperm - X * bhat;
     
     // Residual variance
     vnl_matrix<double> resvar(1, nelt);
@@ -1290,10 +1296,6 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
       {
       for(size_t i = 0; i < X.rows(); i++)
         resvar(0, j) += errmat(i,j) * errmat(i,j);
-      if(j==0){
-        std::cout << "res_mag" << resvar(0,j) << std::endl;
-        std::cout << "df" << df << std::endl;
-        }
       resvar(0, j) = resvar(0, j) / (double) df;
       }
 
@@ -1323,6 +1325,19 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
     }
 
   }
+
+template <typename TDataArray> void set_tuple_to_nan(TDataArray *arr, int j)
+{
+  for(int k = 0; k < arr->GetNumberOfComponents(); k++)
+    arr->SetComponent(j, k, std::nan(0));
+}
+
+template <typename TDataArray> void set_tuple_to_zero(TDataArray *arr, int j)
+{
+  for(int k = 0; k < arr->GetNumberOfComponents(); k++)
+    arr->SetComponent(j, k, 0);
+}
+
 
 void
 GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool need_t, bool need_p, bool need_res)
@@ -1363,6 +1378,25 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
         }
       }
 
+    // If the number of nans equals the number of observations, we cannot do any stats and we
+    // should just assign NaN to everything in the output
+    if(n_nans == ns)
+      {
+      set_tuple_to_nan(beta.GetPointer(), j);
+      set_tuple_to_nan(contrast.GetPointer(), j);
+      if(need_t)
+        {
+        set_tuple_to_nan(tstat.GetPointer(), j);
+        dfarray->SetTuple1(j, 0);
+        if(residual)
+          set_tuple_to_nan(residual.GetPointer(), j);
+
+        if(need_p)
+          set_tuple_to_nan(pval.GetPointer(), j);
+        }
+      continue;
+      }
+
     // If the pattern is changed, we need to compute the new A matrix
     if(!same_pattern)
       {
@@ -1372,7 +1406,6 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
         if(!vnl_math::isnan(Yperm(k,j)))
           Xj.set_row(p++, X.get_row(k));
 
-      
       // Compute A - should be Xj?
       A = vnl_matrix_inverse<double>(Xj.transpose() * Xj).pinverse(rank);
       AXjT = A * Xj.transpose();
@@ -1630,6 +1663,11 @@ struct Parameters
   // Whether the data has missing observations encoded as nans
   bool flag_missing_data;
 
+  // Minimum number of valid (non-missing) observations that must be present
+  // at a vertex for it to be included in the GLM. Specified either as a number
+  // of observations or as a fraction.
+  double min_valid_obs;
+
   // Whether to write output in binary format
   bool flag_write_binary;
 
@@ -1648,7 +1686,7 @@ struct Parameters
   Parameters()
     {
     np = 0; dom = POINT; threshold = 0; diffusion = 0; flag_edges = false; ttype = TSTAT; delta_t = 0.01; 
-    flag_missing_data = false; flag_write_binary = false; flag_freedman_lane = false; flag_triangulate = false;
+    flag_missing_data = false; min_valid_obs = 0.0; flag_write_binary = false; flag_freedman_lane = false; flag_triangulate = false;
     max_threads = 0;
     }
 };
@@ -1805,6 +1843,18 @@ void read_vector(const std::string &fn, const std::string &desc, vnl_vector<doub
   }
 }
 
+void copy_array_replace_nans(vtkDataArray *src, vtkDataArray *trg, float nan_value = 0.0)
+{
+  for(int j = 0; j < src->GetNumberOfTuples(); j++)
+    {
+    for(int k = 0; k < src->GetNumberOfComponents(); k++)
+      {
+      float c = src->GetComponent(j,k);
+      trg->SetComponent(j,k,std::isnan(c) ? nan_value : c);
+      }
+    }
+}
+
 template <class TMeshType>
 int meshcluster(Parameters &p, bool isPolyData)
 {
@@ -1872,6 +1922,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   string an_contrast = "Contrast", an_tstat = "T-statistic";
   string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
   string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance", an_dfarray="DOF";
+  string an_cluster_array = "ClusterVariable";
 
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
@@ -2002,13 +2053,37 @@ int meshcluster(Parameters &p, bool isPolyData)
         CellDataDiffusion(mesh[i], p.diffusion, p.delta_t, p.array_name.c_str());
       }
 
+    // If missing data is specified, check for number of nans at each vertex, and if the number
+    // is too low, replace all values in that column with NaNs
+    if(p.min_valid_obs > 0.0)
+      {
+      int min_not_nan = p.min_valid_obs < 1.0
+                        ? int(data->GetNumberOfComponents() * p.min_valid_obs)
+                        : int(p.min_valid_obs);
+      int n_excluded = 0;
+      for(unsigned int j = 0; j < data->GetNumberOfTuples(); j++)
+        {
+        int n_nans = 0;
+        for(int k = 0; k < data->GetNumberOfComponents(); k++)
+          if(std::isnan(data->GetComponent(j, k)))
+            n_nans++;
+        if(data->GetNumberOfComponents() - n_nans < min_not_nan)
+          {
+          set_tuple_to_nan(data, j);
+          n_excluded++;
+          }
+        }
+      cout << "Excluded " << n_excluded << " vertices with fewer than " << min_not_nan << " valid observations" << endl;
+      }
+
     // Add the statistics array for output. The actual permutation testing always uses
     // CONTRAST or TSTAT, never the PVALUE (as that would waste time computing tcdf)
-    vtkFloatArray * contrast = AddArrayToMesh(mesh[i], p.dom, an_contrast, 1, 0, p.ttype == CONTRAST);
-    vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, p.ttype != CONTRAST);
+    vtkFloatArray * contrast = AddArrayToMesh(mesh[i], p.dom, an_contrast, 1, 0, false);
+    vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, false);
     vtkFloatArray * dfarray = AddArrayToMesh(mesh[i], p.dom, an_dfarray, 1, 0, false);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
+    vtkFloatArray * cluster_array = AddArrayToMesh(mesh[i], p.dom, an_cluster_array, 1, 0, true);
     vtkFloatArray * residual {0} ;
     vtkFloatArray * beta_nuiss {0};
 
@@ -2050,6 +2125,15 @@ int meshcluster(Parameters &p, bool isPolyData)
 
   // Run permutation analysis
   vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
+
+  // Name of the array that is involved in thresholding for permutation testing
+  string an_ttype;
+  switch(p.ttype)
+    {
+    case CONTRAST: an_ttype = an_contrast; break;
+    case TSTAT: an_ttype = an_tstat; break;
+    case PVALUE: an_ttype = an_pval; break;
+    }
 
   // Perform permutation test
   if(p.np > 0)
@@ -2158,6 +2242,8 @@ int meshcluster(Parameters &p, bool isPolyData)
             // Generate a list of clusters (based on current scalars)
             if(p.threshold > 0)
               {
+              copy_array_replace_nans(GetArrayFromMesh(mesh_t[i], p.dom, an_ttype),
+                                      GetArrayFromMesh(mesh_t[i], p.dom, an_cluster_array), 0);
               ClusterArray ca = clustcomp_t[i]->ComputeClusters(false);
 
               // Now find the largest cluster
@@ -2227,6 +2313,8 @@ int meshcluster(Parameters &p, bool isPolyData)
         {
         // Generate true clusters (with full output)
         ClusterComputer clustcomp(mesh[i], p.dom, p.threshold);
+        copy_array_replace_nans(GetArrayFromMesh(mesh[i], p.dom, an_ttype),
+                                GetArrayFromMesh(mesh[i], p.dom, an_cluster_array), 0);
         ClusterArray ca = clustcomp.ComputeClusters(true);
         printf("MESH %s HAS %d CLUSTERS \n", p.fn_mesh_input[i].c_str(), (int) ca.size());
 
@@ -2426,6 +2514,7 @@ int main(int argc, char *argv[])
         {
         p.flag_missing_data = true;
         p.flag_write_binary = true;
+        p.min_valid_obs = atof(argv[++i]);
         }
       else if(arg == "-B" || arg == "--binary")
         {
