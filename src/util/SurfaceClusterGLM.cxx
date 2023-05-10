@@ -46,6 +46,8 @@
 #include <thread>
 #include <mutex>
 
+const double glm_NAN = std::numeric_limits<double>::quiet_NaN();
+
 extern "C" {
   double tnc ( double t, double df, double delta, int *ifault );
 }
@@ -1329,7 +1331,7 @@ GeneralLinearModel::Compute(const vnl_matrix<double> &Yperm, bool need_t, bool n
 template <typename TDataArray> void set_tuple_to_nan(TDataArray *arr, int j)
 {
   for(int k = 0; k < arr->GetNumberOfComponents(); k++)
-    arr->SetComponent(j, k, std::nan(0));
+    arr->SetComponent(j, k, glm_NAN);
 }
 
 template <typename TDataArray> void set_tuple_to_zero(TDataArray *arr, int j)
@@ -2019,7 +2021,7 @@ int meshcluster(Parameters &p, bool isPolyData)
         for(int k = 0; k < data->GetNumberOfComponents(); k++)
           if(excl->GetComponent(j, k) != 0.0)
             {
-            data->SetComponent(j, k, std::nan(0));
+            data->SetComponent(j, k, glm_NAN);
             ++n_excl;
             }
 
