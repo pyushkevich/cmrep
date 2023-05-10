@@ -45,6 +45,7 @@ int usage()
   cout << "  -C mu0 mu_mult             : test constrained optimization (not for general use)" << endl;
   cout << "  -t n_threads               : limit number of concurrent threads to n_threads" << endl;
   cout << "  -D n                       : perform derivative check (for first n momenta)" << endl;
+  cout << "  -L array_name              : use label-restricted data attachment, with label posteriors in given array" << endl;
   return -1;
 }
 
@@ -71,6 +72,7 @@ struct ShootingParameters
   string fnOutput;
   string fnOutputPaths;
   string arrInitialMomentum;
+  string arrAttachmentLabelPosteriors;
   double sigma = 0.0;
   double currents_sigma = 0.0;
   double lambda = 0.0;
@@ -437,10 +439,13 @@ public:
    *   qT           : Target vertices
    *   tri_template : Triangles (3D) or edges (2D) of the template
    *   tri_target   : Triangles (3D) or edges (2D) of the target
+   *   lab_template : Template label posterior array (per triangle)
+   *   lab_target   : Target label posterior array (per triangle)
    */
   CurrentsAttachmentTerm(Mode mode, unsigned int m, const Matrix &qT,
                          const Triangulation &tri_template,
                          const Triangulation &tri_target,
+                         const Matrix &lab_template, const Matrix &lab_target,
                          TFloat sigma, unsigned int n_threads)
     : tcan_template(tri_template, mode==VARIFOLD), tcan_target(tri_target, mode==VARIFOLD)
   {
@@ -450,6 +455,8 @@ public:
     this->tri_template = tri_template;
     this->sigma = sigma;
     this->n_threads = n_threads;
+    this->lab_template = lab_template;
+    this->lab_target = lab_target;
 
     // Compute the triangle centers once and for all
     tcan_target.Forward(qT);
@@ -460,7 +467,7 @@ public:
 
     // Compute the current norm for the target (fixed quantity)
     cspd_target.z.fill(0.0);
-    ComputeCurrentHalfNormSquared(&tcan_target, &cspd_target, false);
+    ComputeCurrentHalfNormSquared(&tcan_target, &cspd_target, lab_target, false);
 
     // Allocate this norm among template trianges equally (so that the z array
     // after the complete current computation makes sense on a per-triangle
@@ -476,13 +483,14 @@ public:
   double ComputeCurrentHalfNormSquared(
       TriangleCentersAndNormals<TFloat, VDim> *tcan,
       CurrentScalarProductData *cspd,
+      const Matrix &label_matrix,
       bool grad)
   {
     // Perform the pairwise computation multi-threaded
     std::vector<std::thread> workers;
     for (unsigned int thr = 0; thr < n_threads; thr++)
       {
-      workers.push_back(std::thread([this,thr,tcan,cspd,grad]()
+      workers.push_back(std::thread([this,thr,tcan,cspd,label_matrix,grad]()
         {
         // Get our thread data
         ThreadData &my_td = cspd->td[thr];
@@ -503,9 +511,12 @@ public:
         auto dn_da = my_td.dE_dN.data_array();
         auto dw_da = my_td.dE_dW.data_block();
         auto z_da = cspd->z.data_block();
+        auto l_da = label_matrix.data_array();
 
         TFloat f = -0.5 / (sigma * sigma);
         TFloat f_times_2 = 2.0 * f;
+
+        int n_labels = label_matrix.columns();
 
         // Handle triangles for this thread
         for(unsigned int i : my_td.rows)
@@ -513,27 +524,32 @@ public:
           TFloat zi = 0.0;
           TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
           TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
+          const TFloat *l_i = l_da[i];
           TFloat dq[VDim];
+
+          TFloat label_weight = 0.0;
+          for(int l = 0; l < n_labels; l++)
+            label_weight += l_i[l]  * l_i[l];
 
           // Handle the diagonal term
           if(mode == CURRENTS)
             {
             for(unsigned int a = 0; a < VDim; a++)
-              zi += 0.5 * ni[a] * ni[a];
+              zi += 0.5 * label_weight * ni[a] * ni[a];
 
             // Handle the diagonal term in the gradient
             if(grad)
               for(unsigned int a = 0; a < VDim; a++)
-                d_ni[a] += ni[a];
+                d_ni[a] += label_weight * ni[a];
             }
           else
             {
             // We know that the dot product of the normal with itself is just one
             // so we don't need to do anything with the normals. We just need to
             // compute the product of the weights
-            zi += 0.5 * wi * wi;
+            zi += 0.5 * label_weight * wi * wi;
             if(grad)
-              d_wi += wi;
+              d_wi += label_weight * wi;
             }
 
           // Handle the off-diagonal terms
@@ -542,6 +558,7 @@ public:
             // Compute the kernel
             TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
             TFloat *d_cj = dc_da[j], *d_nj = dn_da[j], &d_wj = dw_da[j];
+            const TFloat *l_j = l_da[j];
             TFloat dist_sq = 0.0;
             TFloat dot_ni_nj = 0.0;
             for(unsigned int a = 0; a < VDim; a++)
@@ -551,7 +568,11 @@ public:
               dot_ni_nj += ni[a] * nj[a];
               }
 
-            TFloat K = exp(f * dist_sq);
+            TFloat label_weight = 0.0;
+            for(int l = 0; l < n_labels; l++)
+              label_weight += l_i[l] * l_j[l];
+
+            TFloat K = label_weight * exp(f * dist_sq);
 
             if(mode == CURRENTS)
               {
@@ -620,13 +641,14 @@ public:
       TriangleCentersAndNormals<TFloat, VDim> *tcan_1,
       TriangleCentersAndNormals<TFloat, VDim> *tcan_2,
       CurrentScalarProductData *cspd_1,
+      const Matrix &label_matrix1, const Matrix &label_matrix2,
       bool grad)
   {
     // Perform the pairwise computation multi-threaded
     std::vector<std::thread> workers;
     for (unsigned int thr = 0; thr < n_threads; thr++)
       {
-      workers.push_back(std::thread([this,thr,tcan_1,tcan_2,cspd_1,grad]()
+      workers.push_back(std::thread([this,thr,tcan_1,tcan_2,cspd_1,label_matrix1,label_matrix2,grad]()
         {
         // Get data arrays for fast memory access
         auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
@@ -635,9 +657,12 @@ public:
         auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
         auto dw_da = cspd_1->dE_dW.data_block();
         auto z1_da = cspd_1->z.data_block();
+        auto l1_da = label_matrix1.data_array(), l2_da = label_matrix2.data_array();
 
         TFloat f = -0.5 / (sigma * sigma);
         TFloat f_times_2 = 2.0 * f;
+
+        int n_labels = label_matrix1.columns();
 
         // Handle triangles for this thread
         for(unsigned int i = thr; i < tcan_1->C.rows(); i+=n_threads)
@@ -646,11 +671,13 @@ public:
           TFloat *ci = c1_da[i], *ni = n1_da[i], wi = w1_da[i];
           TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
           TFloat dq[VDim];
+          const TFloat *l_i = l1_da[i];
 
           for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
             {
             // Compute the kernel
             TFloat *cj = c2_da[j], *nj = n2_da[j], wj = w2_da[j];
+            const TFloat *l_j = l2_da[j];
             TFloat dist_sq = 0.0;
             TFloat dot_ni_nj = 0.0;
             for(unsigned int a = 0; a < VDim; a++)
@@ -660,7 +687,11 @@ public:
               dot_ni_nj += ni[a] * nj[a];
               }
 
-            TFloat K = -exp(f * dist_sq);
+            TFloat label_weight = 0.0;
+            for(int l = 0; l < n_labels; l++)
+              label_weight += l_i[l] * l_j[l];
+
+            TFloat K = -label_weight * exp(f * dist_sq);
 
             if(mode == CURRENTS)
               {
@@ -726,11 +757,11 @@ public:
     // double v0 = cspd_template.z.sum();
 
     // Add the squared norm term
-    this->ComputeCurrentHalfNormSquared(&tcan_template, &cspd_template, grad != nullptr);
+    this->ComputeCurrentHalfNormSquared(&tcan_template, &cspd_template, lab_template, grad != nullptr);
     // double v1 = cspd_template.z.sum();
 
     // Subtract twice the scalar product term
-    this->ComputeCurrentScalarProduct(&tcan_template, &tcan_target, &cspd_template, grad != nullptr);
+    this->ComputeCurrentScalarProduct(&tcan_template, &tcan_target, &cspd_template, lab_template, lab_target, grad != nullptr);
     // double v2 = cspd_template.z.sum();
 
     // printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
@@ -828,6 +859,9 @@ protected:
   // Template and target current norm/scalar product data
   CurrentScalarProductData cspd_template, cspd_target;
 
+  // Label posteriors
+  Matrix lab_template, lab_target;
+
   // Current squared norm of the target allocated equally between all
   // the trianges in the template
   Vector z0_template;
@@ -859,8 +893,9 @@ public:
   PointSetShootingCostFunction(
     const ShootingParameters &param,
       const Matrix &q0, const Matrix &p0, const Matrix &qT,
-      Triangulation tri_template = Triangulation(),
-      Triangulation tri_target = Triangulation())
+      Triangulation tri_template,
+      Triangulation tri_target,
+      const Matrix &lab_template, const Matrix &lab_target)
     : vnl_cost_function(p0.rows() * VDim),
       hsys(q0, param.sigma, param.N, q0.rows() - p0.rows())
     {
@@ -887,7 +922,8 @@ public:
       // Create the appropriate attachment term (currents or varifolds)
       currents_attachment = new CATerm(
             param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
-            m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
+            m, qT, tri_template, tri_target, lab_template, lab_target,
+            param.currents_sigma, param.n_threads);
 
       // Allocate the gradient storage
       grad_currents.set_size(m, VDim);
@@ -1032,167 +1068,6 @@ protected:
   unsigned int iter = 0;
 };
 
-/**
- * This is just a simple test of a cost function to be used with augmented lagrangian methods
- */
-template <class TFloat, unsigned int VDim>
-class ExampleConstrainedPointSetShootingCostFunction : public PointSetShootingCostFunction<TFloat, VDim>
-{
-public:
-
-  typedef PointSetShootingCostFunction<TFloat,VDim> Superclass;
-  typedef typename Superclass::HSystem HSystem;
-  typedef typename HSystem::Vector Vector;
-  typedef typename HSystem::Matrix Matrix;
-
-  // Separate type because vnl optimizer is double-only
-  typedef vnl_vector<double> DVector;
-
-  ExampleConstrainedPointSetShootingCostFunction(
-    const ShootingParameters &param, const Matrix &q0, const Matrix &p0, const Matrix &qT)
-    : Superclass(param, q0, p0, qT)
-    {
-    // Compute the vectors with which the flows have to be orthogonal
-    norm.set_size(q0.rows(), q0.columns());
-    for(int i = 0; i < q0.rows(); i++)
-      {
-      Vector del = qT.get_row(i) - q0.get_row(i);
-      double len = del.magnitude();
-      norm(i,0) = -del[1] / len;
-      norm(i,1) = del[0] / len;
-      }
-    }
-
-  void set_lambdas(Matrix &m)
-    {
-    this->lambda = m;
-    }
-
-  const Matrix & lambdas() const { return this->lambda; }
-
-  void set_mu(double mu)
-    {
-    this->mu = mu;
-    }
-
-  virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
-    {
-    // Initialize the p0-vector
-    this->p0 = this->tall_to_wide(x);
-
-    // Perform flow
-    double H = this->hsys.FlowHamiltonian(this->p0, this->q1, this->p1);
-
-    // Compute the landmark errors
-    double fnorm_sq = 0.0;
-    for(unsigned int a = 0; a < VDim; a++)
-      {
-      for(unsigned int i = 0; i < this->k; i++)
-        {
-        this->alpha[a](i) = this->q1(i,a) - this->qT(i,a);
-        fnorm_sq += this->alpha[a](i) * this->alpha[a](i);
-        }
-      }
-
-    // Compute the landmark part of the objective
-    double Edist = 0.5 * fnorm_sq;
-
-    if(f)
-      {
-      // Compute the objective part
-      *f = H + this->param.lambda * Edist;
-
-      // Compute the constraints
-      int i_lam = 0;
-      for(int t = 0; t < this->hsys.GetN(); t++)
-        {
-        const Matrix &qt = this->hsys.GetQt(t);
-        for(int i = 0; i < this->q0.rows(); i++)
-          {
-          // C(i) is the dot product of norm vector with current time vector
-          Vector del = qt.get_row(i) - this->q0.get_row(i);
-          double Cti = dot_product(del, norm.get_row(i));
-          *f -= lambda(t, i) * Cti;
-          *f += (mu / 2) * Cti * Cti;
-          }
-        }
-      }
-
-    if(g)
-      {
-      // Create the gradient array to pass to backward flow
-      std::vector<Matrix> d_obj__d_qt(this->hsys.GetN());
-
-      // Fill out the gradients due to the constraint parts of the augmented Lagrangian
-      for(int t = 0; t < this->hsys.GetN(); t++)
-        {
-        d_obj__d_qt[t].set_size(this->q0.rows(), VDim);
-
-        const Matrix &qt = this->hsys.GetQt(t);
-        for(int i = 0; i < this->q0.rows(); i++)
-          {
-          Vector del = qt.get_row(i) - this->q0.get_row(i);
-          double Cti = dot_product(del, norm.get_row(i));
-          double term1 = ( -lambda(t, i) + mu * Cti);
-          d_obj__d_qt[t].set_row(i, norm.get_row(i) * term1);
-          }
-        }
-
-      // Add the parts due to the objective function
-      for(int i = 0; i < this->q0.rows(); i++)
-        {
-        for(int a = 0; a < this->q0.columns(); a++)
-          {
-          d_obj__d_qt[this->hsys.GetN() - 1](i,a) += this->alpha[a](i) * this->param.lambda;
-          }
-        }
-
-      // Multiply gradient of f. wrt q1 (alpha) by Jacobian of q1 wrt p0
-      this->hsys.FlowTimeVaryingGradientsBackward(d_obj__d_qt, this->grad_f);
-
-      // Recompute Hq/Hp at initial timepoint
-      this->hsys.ComputeHamiltonianJet(this->q0, this->p0, false);
-
-      // Complete gradient computation
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        // Combine the gradient terms
-        this->grad_f[a] = this->grad_f[a] + this->hsys.GetHp(a);
-        }
-
-      // Pack the gradient into the output vector
-      *g = this->wide_to_tall(this->grad_f);
-      }
-    }
-
-  void update_lambdas(vnl_vector<double> const& x)
-    {
-    // Initialize the p0-vector
-    this->p0 = this->tall_to_wide(x);
-
-    // Perform flow
-    double H = this->hsys.FlowHamiltonian(this->p0, this->q1, this->p1);
-
-    for(int t = 0; t < this->hsys.GetN(); t++)
-      {
-      const Matrix &qt = this->hsys.GetQt(t);
-      for(int i = 0; i < this->q0.rows(); i++)
-        {
-        // C(i) is the dot product of norm vector with current time vector
-        Vector del = qt.get_row(i) - this->q0.get_row(i);
-        double Cti = dot_product(del, norm.get_row(i));
-        lambda(t, i) -= mu * Cti;
-        }
-      }
-    }
-
-protected:
-
-  Matrix lambda;
-  Matrix norm;
-  double mu;
-
-};
 
 
 template <class TFloat, unsigned int VDim>
@@ -1389,11 +1264,8 @@ public:
   static void minimize_gradient(
       const ShootingParameters &param,
       const Matrix &q0, const Matrix &qT, Matrix &p0,
-      const Triangulation &tri_template, const Triangulation &tri_target);
-
-  // Minimize constrained problem using Augmented Lagrangian method
-  static void minimize_constrained(const ShootingParameters &param, 
-    const Matrix &q0, const Matrix &qT, Matrix &p0);
+      const Triangulation &tri_template, const Triangulation &tri_target,
+      const Matrix &lab_template, const Matrix &lab_target);
 
   static int minimize(const ShootingParameters &param);
 
@@ -1401,7 +1273,8 @@ private:
   static int TestCurrentsAttachmentTerm(
       const ShootingParameters &param,
       Matrix &q0, Matrix &qT,
-      vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target);
+      vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target,
+      const Matrix &lab_template, const Matrix &lab_target);
 };
 
 #include <vnl/algo/vnl_brent_minimizer.h>
@@ -1640,13 +1513,14 @@ PointSetShootingProblem<TFloat, VDim>
 ::minimize_gradient(
     const ShootingParameters &param,
     const Matrix &q0, const Matrix &qT, Matrix &p0,
-    const Triangulation &tri_template, const Triangulation &tri_target)
+    const Triangulation &tri_template, const Triangulation &tri_target,
+    const Matrix &lab_template, const Matrix &lab_target)
 {
   // unsigned int k = q0.rows();
 
   // Create the minimization problem
   typedef PointSetShootingCostFunction<TFloat, VDim> CostFn;
-  CostFn cost_fn(param, q0, p0, qT, tri_template, tri_target);
+  CostFn cost_fn(param, q0, p0, qT, tri_template, tri_target, lab_template, lab_target);
 
   // Create initial/final solution
   typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
@@ -1693,87 +1567,12 @@ PointSetShootingProblem<TFloat, VDim>
 
 
 template <class TFloat, unsigned int VDim>
-void
-PointSetShootingProblem<TFloat, VDim>
-::minimize_constrained(const ShootingParameters &param, 
-  const Matrix &q0, const Matrix &qT, Matrix &p0)
-{
-  unsigned int k = q0.rows();
-
-  // Create initial/final solution
-  p0 = (qT - q0) / param.N;
-
-  // Create the minimization problem
-  typedef ExampleConstrainedPointSetShootingCostFunction<TFloat, VDim> CostFn;
-  CostFn cost_fn(param, q0, p0, qT);
-
-  // Initialize mu
-  double mu = param.constrained_mu_init;
-  cost_fn.set_mu(mu);
-
-  // Initialize the lambdas
-  typename CostFn::Matrix lambdas(param.N, k);
-  lambdas.fill(0.0);
-  cost_fn.set_lambdas(lambdas);
-
-  // Do this for some number of iterations
-  for(int it = 0; it < 10; it++)
-    {
-    typename CostFn::DVector x = cost_fn.wide_to_tall(p0);
-
-    // Update the parameters
-    printf("Augmented Lagrangian Phase %d (mu = %8.4f, max-lambda = %8.4f)\n",
-      it, mu, cost_fn.lambdas().array_inf_norm());
-
-    // Uncomment this code to test derivative computation
-    TFloat eps = 1e-6;
-    typename CostFn::DVector test_grad(x.size());
-    double f_test;
-    cost_fn.compute(x, &f_test, &test_grad);
-    for(int i = 0; i < std::min((int) p0.size(), 10); i++)
-      {
-      typename CostFn::DVector xtest = x;
-      double f1, f2;
-      xtest[i] = x[i] - eps;
-      cost_fn.compute(xtest, &f1, NULL);
-
-      xtest[i] = x[i] + eps;
-      cost_fn.compute(xtest, &f2, NULL);
-
-      printf("i = %03d,  AG = %12.8f,  NG = %12.8f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
-      }
-
-    // Create an optimization
-    vnl_lbfgsb optimizer(cost_fn);
-    optimizer.set_f_tolerance(1e-9);
-    optimizer.set_x_tolerance(1e-4);
-    optimizer.set_g_tolerance(1e-6);
-    optimizer.set_trace(true);
-    optimizer.set_max_function_evals(param.iter_grad / 10);
-
-    // vnl_conjugate_gradient optimizer(cost_fn);
-    // optimizer.set_trace(true);
-    optimizer.minimize(x);
-
-    // Take the optimal solution from this round
-    p0 = cost_fn.tall_to_wide(x);
-
-    // Update the lambdas
-    cost_fn.update_lambdas(x);
-
-    // Update the mu
-    mu *= param.constrained_mu_mult;
-    cost_fn.set_mu(mu);
-    }
-}
-
-
-template <class TFloat, unsigned int VDim>
 int
 PointSetShootingProblem<TFloat, VDim>
 ::TestCurrentsAttachmentTerm(const ShootingParameters &param,
                              Matrix &q0, Matrix &qT,
-                             vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target)
+                             vnl_matrix<int> &tri_template, vnl_matrix<int> &tri_target,
+                             const Matrix &lab_template, const Matrix &lab_target)
 {
   int m = q0.rows();
   Matrix grad_currents(m, VDim);
@@ -1795,7 +1594,8 @@ PointSetShootingProblem<TFloat, VDim>
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
   CATerm currents_attachment(
         param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
-        m, qT, tri_template, tri_target, param.currents_sigma, param.n_threads);
+        m, qT, tri_template, tri_target, lab_template, lab_target,
+        param.currents_sigma, param.n_threads);
 
   double value = currents_attachment.Compute(q0, &grad_currents);
   printf("Currents Attachment Value: %f\n", value);
@@ -1882,6 +1682,9 @@ PointSetShootingProblem<TFloat, VDim>
 
   // Compute the triangulation of the template for non-landmark metrics
   vnl_matrix<int> tri_template, tri_target;
+  Matrix lab_template(pTemplate->GetNumberOfCells(), 1, 1.0);
+  Matrix lab_target(pTarget->GetNumberOfCells(), 1, 1.0);
+
   if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
     {
     tri_template.set_size(pTemplate->GetNumberOfCells(), VDim);
@@ -1912,9 +1715,27 @@ PointSetShootingProblem<TFloat, VDim>
         tri_target(i,a) = pTarget->GetCell(i)->GetPointId(a);
       }
 
+    // Read the label arrays
+    if(param.arrAttachmentLabelPosteriors.length())
+      {
+      vtkDataArray *da_template = pTemplate->GetCellData()->GetArray(param.arrAttachmentLabelPosteriors.c_str());
+      vtkDataArray *da_target = pTarget->GetCellData()->GetArray(param.arrAttachmentLabelPosteriors.c_str());
+      check(da_template && da_target && da_template->GetNumberOfComponents() == da_target->GetNumberOfComponents(),
+            "Label posterior arrays in template and target missing or do not match");
+      int n_labels = da_template->GetNumberOfComponents();
+      lab_template.set_size(tri_template.rows(), n_labels);
+      for(unsigned int i = 0; i < tri_template.rows(); i++)
+        for(unsigned int l = 0; l < n_labels; l++)
+          lab_template(i,l) = da_template->GetComponent(i,l);
+      lab_target.set_size(tri_target.rows(), n_labels);
+      for(unsigned int i = 0; i < tri_target.rows(); i++)
+        for(unsigned int l = 0; l < n_labels; l++)
+          lab_target(i,l) = da_target->GetComponent(i,l);
+      }
+
     if(param.test_currents_attachment)
       {
-      TestCurrentsAttachmentTerm(param, q0, qT, tri_template, tri_target);
+      TestCurrentsAttachmentTerm(param, q0, qT, tri_template, tri_target, lab_template, lab_target);
       return 0;
       }
     }
@@ -1922,11 +1743,7 @@ PointSetShootingProblem<TFloat, VDim>
   // Run some iterations of gradient descent
   if(param.iter_grad > 0)
     {
-    if(param.constrained_mu_init > 0.0)
-      minimize_constrained(param, q0, qT, p0);
-
-    else
-      minimize_gradient(param, q0, qT, p0, tri_template, tri_target);
+    minimize_gradient(param, q0, qT, p0, tri_template, tri_target, lab_template, lab_target);
     }
 
   if(param.iter_newton > 0)
@@ -2086,6 +1903,10 @@ int main(int argc, char *argv[])
     else if(arg == "-p")
       {
       param.arrInitialMomentum = cl.read_string();
+      }
+    else if(arg == "-L")
+      {
+      param.arrAttachmentLabelPosteriors = cl.read_string();
       }
     else if(arg == "-t")
       {
