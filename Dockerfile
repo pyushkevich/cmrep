@@ -16,6 +16,7 @@ RUN cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTING=OFF \
     -DBUILD_EXAMPLES=OFF \
+    -DModule_MorphologicalContourInterpolation=ON \
     /tk/itk/src
 RUN make -j$(nproc)
 
@@ -50,21 +51,22 @@ RUN make -j$(nproc)
 RUN apt-get install -y libmetis-dev autoconf hwloc libhwloc-dev libudev-dev
 
 # Try building SPRAL
-RUN git clone https://github.com/ralna/spral /tk/spral/src
-RUN cd /tk/spral/src && git checkout v2023.03.29
-WORKDIR /tk/spral/src
-RUN ./autogen.sh && mkdir /tk/spral/build
-WORKDIR /tk/spral/build
-RUN CFLAGS="-fPIC" CXXFLAGS="-fPIC" ../src/configure && make && make install
+#RUN git clone https://github.com/ralna/spral /tk/spral/src
+#RUN cd /tk/spral/src && git checkout v2023.03.29
+#WORKDIR /tk/spral/src
+#RUN ./autogen.sh && mkdir /tk/spral/build
+#WORKDIR /tk/spral/build
+#RUN CFLAGS="-fPIC" CXXFLAGS="-fPIC" ../src/configure && make && make install
 
 # Download and build IPOPT
 RUN git clone https://github.com/coin-or/Ipopt /tk/ipopt/src
 RUN cd /tk/ipopt/src && git checkout stable/3.14
 RUN mkdir /tk/ipopt/build
 WORKDIR /tk/ipopt/build
-RUN CFLAGS="-fPIC" CXXFLAGS="-fPIC" ../src/configure \
-    --with-spral-cflags="-I/usr/local/include" \
-    --with-spral-lflags="-L/usr/local/lib -lspral -lgfortran -lmetis -lgomp -lopenblas -lstdc++ -lhwloc -fopenmp"
+RUN CFLAGS="-fPIC" CXXFLAGS="-fPIC" ../src/configure
+#RUN CFLAGS="-fPIC" CXXFLAGS="-fPIC" ../src/configure \
+#    --with-spral-cflags="-I/usr/local/include" \
+#    --with-spral-lflags="-L/usr/local/lib -lspral -lgfortran -lmetis -lgomp -lopenblas -lstdc++ -lhwloc -fopenmp"
 RUN make -j$(nproc) && make install
 
 # Install eigen
@@ -105,7 +107,7 @@ RUN cmake \
 RUN make -j$(nproc)
 
 # Set the environment variables needed by SPRAL
-ENV OMP_CANCELLATION=TRUE
-ENV OMP_NESTED=TRUE
-ENV OMP_PROC_BIND=TRUE
+#ENV OMP_CANCELLATION=TRUE
+#ENV OMP_NESTED=TRUE
+#ENV OMP_PROC_BIND=TRUE
 
