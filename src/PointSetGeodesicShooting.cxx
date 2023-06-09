@@ -18,6 +18,7 @@
 
 #include "CommandLineHelper.h"
 #include "GreedyAPI.h"
+#include "itkMultiThreaderBase.h"
 
 using namespace std;
 
@@ -427,8 +428,8 @@ public:
     // Per-vertex energy component
     Vector z;
 
-    // Per-thread data
-    std::vector<ThreadData> td;
+    // Indices of matrix indices in the upper diagonal
+    std::vector<int> ut_i, ut_j;
   };
 
 
@@ -486,150 +487,170 @@ public:
       const Matrix &label_matrix,
       bool grad)
   {
-    // Perform the pairwise computation multi-threaded
-    std::vector<std::thread> workers;
-    for (unsigned int thr = 0; thr < n_threads; thr++)
+    // Compute the diagonal terms. These don't require any per-thread data because each
+    // vertex can compute its own value and derivatives
+    unsigned int nr = tcan->C.rows();
+    TFloat f = -0.5 / (sigma * sigma);
+    TFloat f_times_2 = 2.0 * f;
+    int n_labels = label_matrix.columns();
+
+    itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+    itk::ImageRegion<1> full_region({{0}}, {{nr}});
+    mt->ParallelizeImageRegion<1>(
+          full_region,
+          [this,tcan,cspd,label_matrix,n_labels,grad](const itk::ImageRegion<1> &thread_region)
       {
-      workers.push_back(std::thread([this,thr,tcan,cspd,label_matrix,grad]()
+      // Get the list of rows to handle for this thread
+      unsigned int r_begin = thread_region.GetIndex(0);
+      unsigned int r_end = r_begin + thread_region.GetSize(0);
+
+      // Get data arrays for fast memory access
+      auto n_da = tcan->N.data_array();
+      auto w_da = tcan->W_norm.data_block();
+      auto dn_da = cspd->dE_dN.data_array();
+      auto dw_da = cspd->dE_dW.data_block();
+      auto z_da = cspd->z.data_block();
+      auto l_da = label_matrix.data_array();
+
+      // Handle the triangles for this thread
+      for(unsigned int i = r_begin; i < r_end; i++)
         {
-        // Get our thread data
-        ThreadData &my_td = cspd->td[thr];
+        TFloat *ni = n_da[i], wi = w_da[i];
+        TFloat *d_ni = dn_da[i], &d_wi = dw_da[i];
+        const TFloat *l_i = l_da[i];
 
-        // Clear the gradients
-        if(grad)
+        TFloat label_weight = 0.0;
+        for(int l = 0; l < n_labels; l++)
+          label_weight += l_i[l]  * l_i[l];
+
+        // Handle the diagonal term
+        if(mode == CURRENTS)
           {
-          my_td.dE_dC.fill(0.0);
-          my_td.dE_dN.fill(0.0);
-          my_td.dE_dW.fill(0.0);
+          for(unsigned int a = 0; a < VDim; a++)
+            z_da[i] = 0.5 * label_weight * ni[a] * ni[a];
+
+          // Handle the diagonal term in the gradient
+          if(grad)
+            for(unsigned int a = 0; a < VDim; a++)
+              d_ni[a] += label_weight * ni[a];
           }
-
-        // Get data arrays for fast memory access
-        auto c_da = tcan->C.data_array();
-        auto n_da = tcan->N.data_array();
-        auto w_da = tcan->W_norm.data_block();
-        auto dc_da = my_td.dE_dC.data_array();
-        auto dn_da = my_td.dE_dN.data_array();
-        auto dw_da = my_td.dE_dW.data_block();
-        auto z_da = cspd->z.data_block();
-        auto l_da = label_matrix.data_array();
-
-        TFloat f = -0.5 / (sigma * sigma);
-        TFloat f_times_2 = 2.0 * f;
-
-        int n_labels = label_matrix.columns();
-
-        // Handle triangles for this thread
-        for(unsigned int i : my_td.rows)
+        else
           {
-          TFloat zi = 0.0;
-          TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
-          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
-          const TFloat *l_i = l_da[i];
-          TFloat dq[VDim];
-
-          TFloat label_weight = 0.0;
-          for(int l = 0; l < n_labels; l++)
-            label_weight += l_i[l]  * l_i[l];
-
-          // Handle the diagonal term
-          if(mode == CURRENTS)
-            {
-            for(unsigned int a = 0; a < VDim; a++)
-              zi += 0.5 * label_weight * ni[a] * ni[a];
-
-            // Handle the diagonal term in the gradient
-            if(grad)
-              for(unsigned int a = 0; a < VDim; a++)
-                d_ni[a] += label_weight * ni[a];
-            }
-          else
-            {
-            // We know that the dot product of the normal with itself is just one
-            // so we don't need to do anything with the normals. We just need to
-            // compute the product of the weights
-            zi += 0.5 * label_weight * wi * wi;
-            if(grad)
-              d_wi += label_weight * wi;
-            }
-
-          // Handle the off-diagonal terms
-          for(unsigned int j = i+1; j < tcan->C.rows(); j++)
-            {
-            // Compute the kernel
-            TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
-            TFloat *d_cj = dc_da[j], *d_nj = dn_da[j], &d_wj = dw_da[j];
-            const TFloat *l_j = l_da[j];
-            TFloat dist_sq = 0.0;
-            TFloat dot_ni_nj = 0.0;
-            for(unsigned int a = 0; a < VDim; a++)
-              {
-              dq[a] = ci[a] - cj[a];
-              dist_sq += dq[a] * dq[a];
-              dot_ni_nj += ni[a] * nj[a];
-              }
-
-            TFloat label_weight = 0.0;
-            for(int l = 0; l < n_labels; l++)
-              label_weight += l_i[l] * l_j[l];
-
-            TFloat K = label_weight * exp(f * dist_sq);
-
-            if(mode == CURRENTS)
-              {
-              TFloat zij = K * dot_ni_nj;
-              zi += zij;
-
-              if(grad)
-                {
-                TFloat w = f_times_2 * zij;
-                for(unsigned int a = 0; a < VDim; a++)
-                  {
-                  d_ci[a] += w * dq[a];
-                  d_cj[a] -= w * dq[a];
-                  d_ni[a] += K * nj[a];
-                  d_nj[a] += K * ni[a];
-                  }
-                }
-              }
-            else
-              {
-              TFloat K_wi_wj = K * wi * wj;
-              TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
-              TFloat zij = K_wi_wj * dot_ni_nj_sq;
-              zi += zij;
-
-              if(grad)
-                {
-                TFloat w = f_times_2 * zij;
-                for(unsigned int a = 0; a < VDim; a++)
-                  {
-                  d_ci[a] += w * dq[a];
-                  d_cj[a] -= w * dq[a];
-                  d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
-                  d_nj[a] += 2 * dot_ni_nj * K_wi_wj * ni[a];
-                  }
-                d_wi += K * wj * dot_ni_nj_sq;
-                d_wj += K * wi * dot_ni_nj_sq;
-                }
-              }
-            }
-
-          // Store the cost for this template vertex
-          z_da[i] += zi;
+          // We know that the dot product of the normal with itself is just one
+          // so we don't need to do anything with the normals. We just need to
+          // compute the product of the weights
+          z_da[i] = 0.5 * label_weight * wi * wi;
+          if(grad)
+            d_wi += label_weight * wi;
           }
-        }));
-      }
+        }
+      }, nullptr);
 
-    // Run threads and halt until completed
-    std::for_each(workers.begin(), workers.end(), [](std::thread &t) { t.join(); });
-
-    // Accumulate the thread data
-    for(unsigned int i = 0; i < n_threads; i++)
+    // Now thread over the upper triangle of the distance matrix. Threading is done over
+    // all pairs of indices in the upper triangle. Thus to keep track of the objective
+    // value z for each vertex and the gradients with respect to each vertex, we need
+    // per-thread data that can be accumulated at the end
+    itk::MultiThreaderBase::Pointer mt_ud = itk::MultiThreaderBase::New();
+    std::mutex mutex_integration;
+    itk::ImageRegion<1> full_region_ud({{0}}, {{cspd->ut_i.size()}});
+    mt->ParallelizeImageRegion<1>(
+          full_region_ud,
+          [this,tcan,cspd,label_matrix,n_labels,f_times_2,grad,nr,f, &mutex_integration](const itk::ImageRegion<1> &thread_region)
       {
-      cspd->dE_dC += cspd->td[i].dE_dC;
-      cspd->dE_dN += cspd->td[i].dE_dN;
-      cspd->dE_dW += cspd->td[i].dE_dW;
-      }
+      // Get the list of rows to handle for this thread
+      unsigned int k_begin = thread_region.GetIndex(0);
+      unsigned int k_end = k_begin + thread_region.GetSize(0);
+
+      // Allocate the output data for this thread (wasteful)
+      Matrix my_dE_dC(nr, 3, 0.0), my_dE_dN(nr, 3, 0.0);
+      Vector my_dE_dW(nr, 0.0), my_z(nr, 0.0);
+
+      // Get data arrays for fast memory access
+      auto c_da = tcan->C.data_array();
+      auto n_da = tcan->N.data_array();
+      auto w_da = tcan->W_norm.data_block();
+      auto dc_da = my_dE_dC.data_array();
+      auto dn_da = my_dE_dN.data_array();
+      auto dw_da = my_dE_dW.data_block();
+      auto z_da = my_z.data_block();
+      auto l_da = label_matrix.data_array();
+
+      // Handle triangles for this thread
+      for(unsigned int k = k_begin; k < k_end; k++)
+        {
+        // Get the indices for this pair
+        int i = cspd->ut_i[k], j = cspd->ut_j[k];
+
+        TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
+        TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
+        const TFloat *l_i = l_da[i];
+        TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
+        TFloat *d_cj = dc_da[j], *d_nj = dn_da[j], &d_wj = dw_da[j];
+        const TFloat *l_j = l_da[j];
+
+        TFloat dq[VDim];
+        TFloat dist_sq = 0.0;
+        TFloat dot_ni_nj = 0.0;
+        for(unsigned int a = 0; a < VDim; a++)
+          {
+          dq[a] = ci[a] - cj[a];
+          dist_sq += dq[a] * dq[a];
+          dot_ni_nj += ni[a] * nj[a];
+          }
+
+        TFloat label_weight = 0.0;
+        for(int l = 0; l < n_labels; l++)
+          label_weight += l_i[l] * l_j[l];
+
+        TFloat K = label_weight * exp(f * dist_sq);
+
+        if(mode == CURRENTS)
+          {
+          TFloat zij = K * dot_ni_nj;
+          z_da[i] += zij;
+
+          if(grad)
+            {
+            TFloat w = f_times_2 * zij;
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              d_ci[a] += w * dq[a];
+              d_cj[a] -= w * dq[a];
+              d_ni[a] += K * nj[a];
+              d_nj[a] += K * ni[a];
+              }
+            }
+          }
+        else
+          {
+          TFloat K_wi_wj = K * wi * wj;
+          TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
+          TFloat zij = K_wi_wj * dot_ni_nj_sq;
+          z_da[i] += zij;
+
+          if(grad)
+            {
+            TFloat w = f_times_2 * zij;
+            for(unsigned int a = 0; a < VDim; a++)
+              {
+              d_ci[a] += w * dq[a];
+              d_cj[a] -= w * dq[a];
+              d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
+              d_nj[a] += 2 * dot_ni_nj * K_wi_wj * ni[a];
+              }
+            d_wi += K * wj * dot_ni_nj_sq;
+            d_wj += K * wi * dot_ni_nj_sq;
+            }
+          }
+        }
+
+      // Integrate using mutex
+      std::lock_guard<std::mutex> guard(mutex_integration);
+      cspd->dE_dC += my_dE_dC;
+      cspd->dE_dN += my_dE_dN;
+      cspd->dE_dW += my_dE_dW;
+      cspd->z += my_z;
+      }, nullptr);
   }
 
   /**
@@ -644,98 +665,99 @@ public:
       const Matrix &label_matrix1, const Matrix &label_matrix2,
       bool grad)
   {
-    // Perform the pairwise computation multi-threaded
-    std::vector<std::thread> workers;
-    for (unsigned int thr = 0; thr < n_threads; thr++)
-      {
-      workers.push_back(std::thread([this,thr,tcan_1,tcan_2,cspd_1,label_matrix1,label_matrix2,grad]()
+    int nr_1 = tcan_1->C.rows();
+
+    // Multithread the vertices
+    itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+    itk::ImageRegion<1> full_region({{0}}, {{static_cast<itk::SizeValueType>(nr_1)}});
+    mt->ParallelizeImageRegion<1>(
+          full_region,
+          [this,&tcan_1,&tcan_2,&cspd_1,&label_matrix1,&label_matrix2,&grad](const itk::ImageRegion<1> &thread_region)
+    {
+      // Get data arrays for fast memory access
+      auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
+      auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
+      auto w1_da = tcan_1->W_norm.data_block(), w2_da = tcan_2->W_norm.data_block();
+      auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
+      auto dw_da = cspd_1->dE_dW.data_block();
+      auto z1_da = cspd_1->z.data_block();
+      auto l1_da = label_matrix1.data_array(), l2_da = label_matrix2.data_array();
+
+      TFloat f = -0.5 / (sigma * sigma);
+      TFloat f_times_2 = 2.0 * f;
+
+      int n_labels = label_matrix1.columns();
+
+      // Get the list of rows to handle for this thread
+      unsigned int r_begin = thread_region.GetIndex(0);
+      unsigned int r_end = r_begin + thread_region.GetSize(0);
+      for(unsigned int i = r_begin; i < r_end; i++)
         {
-        // Get data arrays for fast memory access
-        auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
-        auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
-        auto w1_da = tcan_1->W_norm.data_block(), w2_da = tcan_2->W_norm.data_block();
-        auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
-        auto dw_da = cspd_1->dE_dW.data_block();
-        auto z1_da = cspd_1->z.data_block();
-        auto l1_da = label_matrix1.data_array(), l2_da = label_matrix2.data_array();
+        TFloat zi = 0.0;
+        TFloat *ci = c1_da[i], *ni = n1_da[i], wi = w1_da[i];
+        TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
+        TFloat dq[VDim];
+        const TFloat *l_i = l1_da[i];
 
-        TFloat f = -0.5 / (sigma * sigma);
-        TFloat f_times_2 = 2.0 * f;
-
-        int n_labels = label_matrix1.columns();
-
-        // Handle triangles for this thread
-        for(unsigned int i = thr; i < tcan_1->C.rows(); i+=n_threads)
+        for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
           {
-          TFloat zi = 0.0;
-          TFloat *ci = c1_da[i], *ni = n1_da[i], wi = w1_da[i];
-          TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
-          TFloat dq[VDim];
-          const TFloat *l_i = l1_da[i];
-
-          for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
+          // Compute the kernel
+          TFloat *cj = c2_da[j], *nj = n2_da[j], wj = w2_da[j];
+          const TFloat *l_j = l2_da[j];
+          TFloat dist_sq = 0.0;
+          TFloat dot_ni_nj = 0.0;
+          for(unsigned int a = 0; a < VDim; a++)
             {
-            // Compute the kernel
-            TFloat *cj = c2_da[j], *nj = n2_da[j], wj = w2_da[j];
-            const TFloat *l_j = l2_da[j];
-            TFloat dist_sq = 0.0;
-            TFloat dot_ni_nj = 0.0;
-            for(unsigned int a = 0; a < VDim; a++)
+            dq[a] = ci[a] - cj[a];
+            dist_sq += dq[a] * dq[a];
+            dot_ni_nj += ni[a] * nj[a];
+            }
+
+          TFloat label_weight = 0.0;
+          for(int l = 0; l < n_labels; l++)
+            label_weight += l_i[l] * l_j[l];
+
+          TFloat K = -label_weight * exp(f * dist_sq);
+
+          if(mode == CURRENTS)
+            {
+            TFloat zij = K * dot_ni_nj;
+            zi += zij;
+
+            if(grad)
               {
-              dq[a] = ci[a] - cj[a];
-              dist_sq += dq[a] * dq[a];
-              dot_ni_nj += ni[a] * nj[a];
-              }
-
-            TFloat label_weight = 0.0;
-            for(int l = 0; l < n_labels; l++)
-              label_weight += l_i[l] * l_j[l];
-
-            TFloat K = -label_weight * exp(f * dist_sq);
-
-            if(mode == CURRENTS)
-              {
-              TFloat zij = K * dot_ni_nj;
-              zi += zij;
-
-              if(grad)
+              TFloat w = f_times_2 * zij;
+              for(unsigned int a = 0; a < VDim; a++)
                 {
-                TFloat w = f_times_2 * zij;
-                for(unsigned int a = 0; a < VDim; a++)
-                  {
-                  d_ci[a] += w * dq[a];
-                  d_ni[a] += K * nj[a];
-                  }
-                }
-              }
-            else
-              {
-              TFloat K_wi_wj = K * wi * wj;
-              TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
-              TFloat zij = K_wi_wj * dot_ni_nj_sq;
-              zi += zij;
-
-              if(grad)
-                {
-                TFloat w = f_times_2 * zij;
-                for(unsigned int a = 0; a < VDim; a++)
-                  {
-                  d_ci[a] += w * dq[a];
-                  d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
-                  }
-                d_wi += K * wj * dot_ni_nj_sq;
+                d_ci[a] += w * dq[a];
+                d_ni[a] += K * nj[a];
                 }
               }
             }
+          else
+            {
+            TFloat K_wi_wj = K * wi * wj;
+            TFloat dot_ni_nj_sq = dot_ni_nj * dot_ni_nj;
+            TFloat zij = K_wi_wj * dot_ni_nj_sq;
+            zi += zij;
 
-          // Store the cost for this template vertex
-          z1_da[i] += zi;
+            if(grad)
+              {
+              TFloat w = f_times_2 * zij;
+              for(unsigned int a = 0; a < VDim; a++)
+                {
+                d_ci[a] += w * dq[a];
+                d_ni[a] += 2 * dot_ni_nj * K_wi_wj * nj[a];
+                }
+              d_wi += K * wj * dot_ni_nj_sq;
+              }
+            }
           }
-        }));
-      }
 
-    // Run threads and halt until completed
-    std::for_each(workers.begin(), workers.end(), [](std::thread &t) { t.join(); });
+        // Store the cost for this template vertex
+        z1_da[i] += zi;
+        }
+      }, nullptr);
   }
 
   /** Compute the energy and optional gradient of the energy */
@@ -820,33 +842,24 @@ public:
                                      CurrentScalarProductData *cspd)
   {
     // Global objects
-    cspd->dE_dC.set_size(tri->rows(), VDim);
-    cspd->dE_dN.set_size(tri->rows(), VDim);
-    cspd->dE_dW.set_size(tri->rows());
-    cspd->z.set_size(tri->rows());
-    cspd->td.resize(n_threads);
+    int r = tri->rows();
+    cspd->dE_dC.set_size(r, VDim);
+    cspd->dE_dN.set_size(r, VDim);
+    cspd->dE_dW.set_size(r);
+    cspd->z.set_size(r);
 
-    // Per-thread objects
-    for(unsigned int t = 0; t < n_threads; t++)
+    // Create a list of all the indices that require diagonal computation
+    int nud = (r * r  - r) / 2;
+    cspd->ut_i.reserve(nud);
+    cspd->ut_j.reserve(nud);
+    for(int i = 0; i < r; i++)
       {
-      cspd->td[t].dE_dC.set_size(tri->rows(), VDim);
-      cspd->td[t].dE_dN.set_size(tri->rows(), VDim);
-      cspd->td[t].dE_dW.set_size(tri->rows());
+      for(int j = i+1; j < r; j++)
+        {
+        cspd->ut_i.push_back(i);
+        cspd->ut_j.push_back(j);
+        }
       }
-
-    // Assign lines in pairs, one at the top of the symmetric matrix K and
-    // one at the bottom of K. The loop below will not assign the middle
-    // line when there is an odd number of points (e.g., line 7 when there are 15)
-    for(int i = 0; i < (int) tri->rows()/2; i++)
-      {
-      int i_thread = i % n_threads;
-      cspd->td[i_thread].rows.push_back(i);
-      cspd->td[i_thread].rows.push_back((tri->rows()-1) - i);
-      }
-
-    // Handle the middle line for odd number of vertices
-    if(tri->rows() % 2 == 1)
-      cspd->td[(tri->rows() / 2) % n_threads].rows.push_back(tri->rows()/2);
   }
 
 protected:
