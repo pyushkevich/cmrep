@@ -406,13 +406,6 @@ public:
   /** Triangulation data type */
   typedef vnl_matrix<int> Triangulation;
 
-  /* Thread-specific data for the computation of the currents norm */
-  struct ThreadData {
-    Matrix dE_dC, dE_dN;
-    Vector dE_dW;
-    std::vector<unsigned int> rows;
-  };
-
   /**
    * Intermediate and output data for calls to Currents norm and scalar product
    * computations
@@ -527,7 +520,7 @@ public:
         if(mode == CURRENTS)
           {
           for(unsigned int a = 0; a < VDim; a++)
-            z_da[i] = 0.5 * label_weight * ni[a] * ni[a];
+            z_da[i] += 0.5 * label_weight * ni[a] * ni[a];
 
           // Handle the diagonal term in the gradient
           if(grad)
@@ -539,7 +532,7 @@ public:
           // We know that the dot product of the normal with itself is just one
           // so we don't need to do anything with the normals. We just need to
           // compute the product of the weights
-          z_da[i] = 0.5 * label_weight * wi * wi;
+          z_da[i] += 0.5 * label_weight * wi * wi;
           if(grad)
             d_wi += label_weight * wi;
           }
