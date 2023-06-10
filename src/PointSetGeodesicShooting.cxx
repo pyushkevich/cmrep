@@ -456,12 +456,12 @@ public:
     tcan_target.Forward(qT);
 
     // Setup the data structures for current gradient storage
-    SetupCurrentScalarProductData(&this->tri_target, &this->cspd_target);
-    SetupCurrentScalarProductData(&this->tri_template, &this->cspd_template);
+    SetupCurrentScalarProductData(this->tri_target, this->cspd_target);
+    SetupCurrentScalarProductData(this->tri_template, this->cspd_template);
 
     // Compute the current norm for the target (fixed quantity)
     cspd_target.z.fill(0.0);
-    ComputeCurrentHalfNormSquared(&tcan_target, &cspd_target, lab_target, false);
+    ComputeCurrentHalfNormSquared(tcan_target, cspd_target, lab_target, false);
 
     // Allocate this norm among template trianges equally (so that the z array
     // after the complete current computation makes sense on a per-triangle
@@ -475,14 +475,14 @@ public:
    * partial derivatives with respect to simplex centers and normals
    */
   double ComputeCurrentHalfNormSquared(
-      TriangleCentersAndNormals<TFloat, VDim> *tcan,
-      CurrentScalarProductData *cspd,
+      TriangleCentersAndNormals<TFloat, VDim> &tcan,
+      CurrentScalarProductData &cspd,
       const Matrix &label_matrix,
       bool grad)
   {
     // Compute the diagonal terms. These don't require any per-thread data because each
     // vertex can compute its own value and derivatives
-    unsigned int nr = tcan->C.rows();
+    unsigned int nr = tcan.C.rows();
     TFloat f = -0.5 / (sigma * sigma);
     TFloat f_times_2 = 2.0 * f;
     int n_labels = label_matrix.columns();
@@ -491,24 +491,24 @@ public:
     itk::ImageRegion<1> full_region({{0}}, {{nr}});
     mt->ParallelizeImageRegion<1>(
           full_region,
-          [this,tcan,cspd,label_matrix,n_labels,grad](const itk::ImageRegion<1> &thread_region)
+          [this,&tcan,&cspd,&label_matrix,n_labels,grad](const itk::ImageRegion<1> &thread_region)
       {
       // Get the list of rows to handle for this thread
       unsigned int r_begin = thread_region.GetIndex(0);
       unsigned int r_end = r_begin + thread_region.GetSize(0);
 
       // Get data arrays for fast memory access
-      auto n_da = tcan->N.data_array();
-      auto w_da = tcan->W_norm.data_block();
-      auto dn_da = cspd->dE_dN.data_array();
-      auto dw_da = cspd->dE_dW.data_block();
-      auto z_da = cspd->z.data_block();
+      auto n_da = tcan.N.data_array();
+      auto w_da = tcan.W_norm.data_block();
+      auto dn_da = cspd.dE_dN.data_array();
+      auto dw_da = cspd.dE_dW.data_block();
+      auto z_da = cspd.z.data_block();
       auto l_da = label_matrix.data_array();
 
       // Handle the triangles for this thread
       for(unsigned int i = r_begin; i < r_end; i++)
         {
-        TFloat *ni = n_da[i], wi = w_da[i];
+        const TFloat *ni = n_da[i], wi = w_da[i];
         TFloat *d_ni = dn_da[i], &d_wi = dw_da[i];
         const TFloat *l_i = l_da[i];
 
@@ -545,10 +545,10 @@ public:
     // per-thread data that can be accumulated at the end
     itk::MultiThreaderBase::Pointer mt_ud = itk::MultiThreaderBase::New();
     std::mutex mutex_integration;
-    itk::ImageRegion<1> full_region_ud({{0}}, {{cspd->ut_i.size()}});
+    itk::ImageRegion<1> full_region_ud({{0}}, {{cspd.ut_i.size()}});
     mt->ParallelizeImageRegion<1>(
           full_region_ud,
-          [this,tcan,cspd,label_matrix,n_labels,f_times_2,grad,nr,f, &mutex_integration](const itk::ImageRegion<1> &thread_region)
+          [this,&tcan,&cspd,&label_matrix,n_labels,f_times_2,grad,nr,f, &mutex_integration](const itk::ImageRegion<1> &thread_region)
       {
       // Get the list of rows to handle for this thread
       unsigned int k_begin = thread_region.GetIndex(0);
@@ -559,9 +559,9 @@ public:
       Vector my_dE_dW(nr, 0.0), my_z(nr, 0.0);
 
       // Get data arrays for fast memory access
-      auto c_da = tcan->C.data_array();
-      auto n_da = tcan->N.data_array();
-      auto w_da = tcan->W_norm.data_block();
+      auto c_da = tcan.C.data_array();
+      auto n_da = tcan.N.data_array();
+      auto w_da = tcan.W_norm.data_block();
       auto dc_da = my_dE_dC.data_array();
       auto dn_da = my_dE_dN.data_array();
       auto dw_da = my_dE_dW.data_block();
@@ -572,12 +572,12 @@ public:
       for(unsigned int k = k_begin; k < k_end; k++)
         {
         // Get the indices for this pair
-        int i = cspd->ut_i[k], j = cspd->ut_j[k];
+        int i = cspd.ut_i[k], j = cspd.ut_j[k];
 
-        TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
+        const TFloat *ci = c_da[i], *ni = n_da[i], wi = w_da[i];
         TFloat *d_ci = dc_da[i], *d_ni = dn_da[i], &d_wi = dw_da[i];
         const TFloat *l_i = l_da[i];
-        TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
+        const TFloat *cj = c_da[j], *nj = n_da[j], wj = w_da[j];
         TFloat *d_cj = dc_da[j], *d_nj = dn_da[j], &d_wj = dw_da[j];
         const TFloat *l_j = l_da[j];
 
@@ -639,10 +639,10 @@ public:
 
       // Integrate using mutex
       std::lock_guard<std::mutex> guard(mutex_integration);
-      cspd->dE_dC += my_dE_dC;
-      cspd->dE_dN += my_dE_dN;
-      cspd->dE_dW += my_dE_dW;
-      cspd->z += my_z;
+      cspd.dE_dC += my_dE_dC;
+      cspd.dE_dN += my_dE_dN;
+      cspd.dE_dW += my_dE_dW;
+      cspd.z += my_z;
       }, nullptr);
   }
 
@@ -652,13 +652,13 @@ public:
    * first input
    */
   double ComputeCurrentScalarProduct(
-      TriangleCentersAndNormals<TFloat, VDim> *tcan_1,
-      TriangleCentersAndNormals<TFloat, VDim> *tcan_2,
-      CurrentScalarProductData *cspd_1,
+      TriangleCentersAndNormals<TFloat, VDim> &tcan_1,
+      TriangleCentersAndNormals<TFloat, VDim> &tcan_2,
+      CurrentScalarProductData &cspd_1,
       const Matrix &label_matrix1, const Matrix &label_matrix2,
       bool grad)
   {
-    int nr_1 = tcan_1->C.rows();
+    int nr_1 = tcan_1.C.rows();
 
     // Multithread the vertices
     itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
@@ -668,12 +668,12 @@ public:
           [this,&tcan_1,&tcan_2,&cspd_1,&label_matrix1,&label_matrix2,&grad](const itk::ImageRegion<1> &thread_region)
     {
       // Get data arrays for fast memory access
-      auto c1_da = tcan_1->C.data_array(), c2_da = tcan_2->C.data_array();
-      auto n1_da = tcan_1->N.data_array(), n2_da = tcan_2->N.data_array();
-      auto w1_da = tcan_1->W_norm.data_block(), w2_da = tcan_2->W_norm.data_block();
-      auto dc_da = cspd_1->dE_dC.data_array(), dn_da = cspd_1->dE_dN.data_array();
-      auto dw_da = cspd_1->dE_dW.data_block();
-      auto z1_da = cspd_1->z.data_block();
+      auto c1_da = tcan_1.C.data_array(), c2_da = tcan_2.C.data_array();
+      auto n1_da = tcan_1.N.data_array(), n2_da = tcan_2.N.data_array();
+      auto w1_da = tcan_1.W_norm.data_block(), w2_da = tcan_2.W_norm.data_block();
+      auto dc_da = cspd_1.dE_dC.data_array(), dn_da = cspd_1.dE_dN.data_array();
+      auto dw_da = cspd_1.dE_dW.data_block();
+      auto z1_da = cspd_1.z.data_block();
       auto l1_da = label_matrix1.data_array(), l2_da = label_matrix2.data_array();
 
       TFloat f = -0.5 / (sigma * sigma);
@@ -692,7 +692,7 @@ public:
         TFloat dq[VDim];
         const TFloat *l_i = l1_da[i];
 
-        for(unsigned int j = 0; j < tcan_2->C.rows(); j++)
+        for(unsigned int j = 0; j < tcan_2.C.rows(); j++)
           {
           // Compute the kernel
           TFloat *cj = c2_da[j], *nj = n2_da[j], wj = w2_da[j];
@@ -772,11 +772,11 @@ public:
     // double v0 = cspd_template.z.sum();
 
     // Add the squared norm term
-    this->ComputeCurrentHalfNormSquared(&tcan_template, &cspd_template, lab_template, grad != nullptr);
+    this->ComputeCurrentHalfNormSquared(tcan_template, cspd_template, lab_template, grad != nullptr);
     // double v1 = cspd_template.z.sum();
 
     // Subtract twice the scalar product term
-    this->ComputeCurrentScalarProduct(&tcan_template, &tcan_target, &cspd_template, lab_template, lab_target, grad != nullptr);
+    this->ComputeCurrentScalarProduct(tcan_template, tcan_target, cspd_template, lab_template, lab_target, grad != nullptr);
     // double v2 = cspd_template.z.sum();
 
     // printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
@@ -831,26 +831,26 @@ public:
   /**
    * Initialize the data for scalar product computation (target or template)
    */
-  void SetupCurrentScalarProductData(const Triangulation *tri,
-                                     CurrentScalarProductData *cspd)
+  void SetupCurrentScalarProductData(const Triangulation &tri,
+                                     CurrentScalarProductData &cspd)
   {
     // Global objects
-    int r = tri->rows();
-    cspd->dE_dC.set_size(r, VDim);
-    cspd->dE_dN.set_size(r, VDim);
-    cspd->dE_dW.set_size(r);
-    cspd->z.set_size(r);
+    int r = tri.rows();
+    cspd.dE_dC.set_size(r, VDim);
+    cspd.dE_dN.set_size(r, VDim);
+    cspd.dE_dW.set_size(r);
+    cspd.z.set_size(r);
 
     // Create a list of all the indices that require diagonal computation
     int nud = (r * r  - r) / 2;
-    cspd->ut_i.reserve(nud);
-    cspd->ut_j.reserve(nud);
+    cspd.ut_i.reserve(nud);
+    cspd.ut_j.reserve(nud);
     for(int i = 0; i < r; i++)
       {
       for(int j = i+1; j < r; j++)
         {
-        cspd->ut_i.push_back(i);
-        cspd->ut_j.push_back(j);
+        cspd.ut_i.push_back(i);
+        cspd.ut_j.push_back(j);
         }
       }
   }
