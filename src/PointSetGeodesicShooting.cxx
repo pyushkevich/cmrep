@@ -474,7 +474,7 @@ public:
    * Compute the 1/2 currents scalar product of a mesh with itself with optional
    * partial derivatives with respect to simplex centers and normals
    */
-  double ComputeCurrentHalfNormSquared(
+  void ComputeCurrentHalfNormSquared(
       TriangleCentersAndNormals<TFloat, VDim> &tcan,
       CurrentScalarProductData &cspd,
       const Matrix &label_matrix,
@@ -651,7 +651,7 @@ public:
    * partial derivatives with respect to simplex centers and normals of the
    * first input
    */
-  double ComputeCurrentScalarProduct(
+  void ComputeCurrentScalarProduct(
       TriangleCentersAndNormals<TFloat, VDim> &tcan_1,
       TriangleCentersAndNormals<TFloat, VDim> &tcan_2,
       CurrentScalarProductData &cspd_1,
@@ -1605,6 +1605,7 @@ PointSetShootingProblem<TFloat, VDim>
 
   double value = currents_attachment.Compute(q0, &grad_currents);
   printf("Currents Attachment Value: %f\n", value);
+  return 0;
 }
 
 
