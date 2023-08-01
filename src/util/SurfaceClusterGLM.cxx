@@ -45,6 +45,7 @@
 #include <cstdarg>
 #include <thread>
 #include <mutex>
+#include <functional>
 
 const double glm_NAN = std::numeric_limits<double>::quiet_NaN();
 
@@ -1922,7 +1923,7 @@ int meshcluster(Parameters &p, bool isPolyData)
 
   // Names for the statistics arrays
   string an_contrast = "Contrast", an_tstat = "T-statistic";
-  string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)";
+  string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)", an_fdr = "P-value (FDR corrected)";
   string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance", an_dfarray="DOF";
   string an_cluster_array = "ClusterVariable";
 
@@ -2084,6 +2085,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * tstat = AddArrayToMesh(mesh[i], p.dom, an_tstat, 1, 0, false);
     vtkFloatArray * dfarray = AddArrayToMesh(mesh[i], p.dom, an_dfarray, 1, 0, false);
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
+    vtkFloatArray * fdr = AddArrayToMesh(mesh[i], p.dom, an_fdr, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
     vtkFloatArray * cluster_array = AddArrayToMesh(mesh[i], p.dom, an_cluster_array, 1, 0, true);
     vtkFloatArray * residual {0} ;
@@ -2296,6 +2298,9 @@ int meshcluster(Parameters &p, bool isPolyData)
     }
     */
 
+  // --------------------------------
+  // Perform GLM on unpermuted meshes
+  // --------------------------------
 
   // Going back to the original meshes, assign a cluster p-value to each mesh
   for(size_t i = 0; i < mesh.size(); i++)
@@ -2307,6 +2312,69 @@ int meshcluster(Parameters &p, bool isPolyData)
       glm[i]->ComputeWithMissingData(glm[i]->Y, true, true, false);
     else
       glm[i]->Compute(glm[i]->Y, true, true, false);
+    }
+
+  // ------------------------------
+  // Compute FDR corrected p-values
+  // ------------------------------
+
+  // Create a sorted array of all the p-values
+  using PValueWithIndex = std::tuple<double, unsigned int, unsigned int, double>;
+  std::vector<PValueWithIndex> p_sorted;
+  std::vector<vtkDataArray *> fdr_arr;
+  for(unsigned int i = 0; i < mesh.size(); i++)
+    {
+    vtkDataArray *p_val = GetArrayFromMesh(mesh[i], p.dom, an_pval);
+    fdr_arr.push_back(GetArrayFromMesh(mesh[i], p.dom, an_fdr));
+    for(unsigned int j = 0; j < p_val->GetNumberOfTuples(); j++)
+      {
+      double p_uncorr = p_val->GetTuple1(j);
+      if(!std::isnan(p_uncorr))
+        p_sorted.push_back(std::make_tuple(p_uncorr, i, j, 1.0));
+      else
+        set_tuple_to_nan(fdr_arr.back(), j);
+      }
+    }
+
+  // Sort the p-values
+  std::sort(p_sorted.begin(), p_sorted.end());
+
+  // Perform adjustment using the BH procedure
+  for(unsigned int k = 0; k < p_sorted.size(); k++)
+    {
+    double p_uncorr = std::get<0>(p_sorted[k]);
+    double p_scaled = p_uncorr / (k * 1.0 / p_sorted.size());
+    std::get<3>(p_sorted[k]) = p_scaled;
+    }
+
+  // Ensure that the p-values are in non-descending order
+  for(unsigned int k = p_sorted.size()-1; k > 0; k--)
+    {
+    if(std::get<3>(p_sorted[k-1]) > std::get<3>(p_sorted[k]))
+      std::get<3>(p_sorted[k-1]) = std::get<3>(p_sorted[k]);
+    }
+
+  // Ensure that the p-values are less than one
+  for(unsigned int k = 0; k < p_sorted.size(); k++)
+    std::get<3>(p_sorted[k]) = std::min(1.0, std::get<3>(p_sorted[k]));
+
+  for(unsigned int k = 0; k < p_sorted.size(); k++)
+    {
+    double p_uncorr = std::get<0>(p_sorted[k]);
+    double p_fdr = std::get<3>(p_sorted[k]);
+    unsigned int i_mesh = std::get<1>(p_sorted[k]), i_elt = std::get<2>(p_sorted[k]);
+    printf("Tuple %f, %f, %d, %d   thresh %f \n", p_uncorr, p_fdr, i_mesh, i_elt, k * 0.05 / p_sorted.size());
+    fdr_arr[i_mesh]->SetTuple1(i_elt, p_fdr);
+    }
+
+  // -------------------------------
+  // Generate and save output meshes
+  // -------------------------------
+
+  // Going back to the original meshes, assign a cluster p-value to each mesh
+  for(size_t i = 0; i < mesh.size(); i++)
+    {
+    vtkSmartPointer<TMeshType> mout;
 
     // The rest is done only if permutations > 0
     if(p.np > 0)
