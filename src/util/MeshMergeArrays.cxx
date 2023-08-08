@@ -23,6 +23,7 @@ int usage()
   cout << "  -s <file>      Only add selected arrays based on file. The file must" << endl;
   cout << "                 have a 0 (drop) or 1 (select) on a separate line for each" << endl;
   cout << "                 input array." << endl;
+  cout << "  -m <file>      Read mesh filenames from a file instead of command line" << endl;
   return -1;
 }
 
@@ -79,7 +80,7 @@ template <class TMeshType>
 int MeshMergeArrays(int argc, char *argv[])
 {
   int i;
-  std::string arr_name, out_arr_name, fnout, fnref, fnsel;
+  std::string arr_name, out_arr_name, fnout, fnref, fnsel, fnmeshfile;
   bool flag_cell = false;
   bool flag_binary = false;
   
@@ -96,6 +97,8 @@ int MeshMergeArrays(int argc, char *argv[])
       flag_cell = true;
     else if (0 == strcmp(argv[i],"-B"))
       flag_binary = true;
+    else if (0 == strcmp(argv[i],"-m"))
+      fnmeshfile = argv[++i];
     else
       break;
     }
@@ -111,18 +114,45 @@ int MeshMergeArrays(int argc, char *argv[])
   arr_name = argv[i++];
 
   // Start of the input filenames
-  char **fnin = argv + i;
   int nin = argc - i;
 
+  // Did the user provide an input file with mesh names?
+  vector<string> source_meshes;
+  if(fnmeshfile.size())
+    {
+    if(nin > 0)
+      {
+      cerr << "Meshes can be specified via file (-m) or command line, but not both" << endl;
+      return -1;
+      }
+
+    // Read the input file
+    std::ifstream inputFile(fnmeshfile.c_str());
+    if (!inputFile.is_open())
+      {
+      cerr << "Error opening file " << fnmeshfile << endl;
+      return -1;
+      }
+
+    std::string line;
+    while (std::getline(inputFile, line) && line.length() > 0)
+      source_meshes.push_back(line);
+    }
+  else
+    {
+    for(int j = 0; j < nin; j++)
+      source_meshes.push_back(argv[i + j]);
+    }
+
   // Read the reference mesh
-  TMeshType *ref = fnref.length() ? ReadMesh<TMeshType>(fnref.c_str()) : ReadMesh<TMeshType>(fnin[0]);
+  TMeshType *ref = fnref.length() ? ReadMesh<TMeshType>(fnref.c_str()) : ReadMesh<TMeshType>(source_meshes.front().c_str());
 
   // Read each of the input meshes
   std::vector<vtkDataArray *> da;
   unsigned int comp_total = 0;
-  for(int j = 0; j < argc - i; j++)
+  for(auto mesh_fn: source_meshes)
     {
-    TMeshType *src = ReadMesh<TMeshType>(fnin[j]);
+    TMeshType *src = ReadMesh<TMeshType>(mesh_fn.c_str());
 
     // Get the corresponding array
     int idx = 0;
@@ -133,13 +163,13 @@ int MeshMergeArrays(int argc, char *argv[])
     // If no array, crap out
     if (arr == NULL)
       {
-      cerr << "Missing array " << arr_name << " in mesh " << fnin << endl;
+      cerr << "Missing array " << arr_name << " in mesh " << mesh_fn << endl;
       return -1;
       }
 
     // Get number of components
     unsigned int nc = arr->GetNumberOfComponents();
-    cout << "Read " << fnin[j] << " with " << nc << " components." << std::endl;
+    cout << "Read " << mesh_fn << " with " << nc << " components." << std::endl;
 
     // Push back the array
     da.push_back(arr);
