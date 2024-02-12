@@ -96,7 +96,7 @@ int main(int argc, char *argv[])
     }
 
   // Create a hamiltonian system
-  Ham hsys(q0, 0.08, 100);
+  Ham hsys(q0, 0.08, 100, 0, 0);
 
   // Compute the Hamiltonian
   double H  = hsys.ComputeHamiltonianJet(q0, p0, true);
@@ -355,7 +355,7 @@ int main(int argc, char *argv[])
       }
     }
 
-  Ham big_hsys(big_q0, 0.08, 100);
+  Ham big_hsys(big_q0, 0.08, 100, 0, 0);
   auto ch_start = std::chrono::high_resolution_clock::now();
   big_hsys.FlowHamiltonian(big_p0, big_q1, big_p1);
   auto ch_end = std::chrono::high_resolution_clock::now();
@@ -391,7 +391,7 @@ int main(int argc, char *argv[])
   q0r.update(q0, 0, 0);
   q0r.update(q0_riders, k, 0);
 
-  Ham rider_hsys(q0r, 0.08, 100, n_riders);
+  Ham rider_hsys(q0r, 0.08, 100, n_riders, 0);
   rider_hsys.FlowHamiltonian(p0, q1r, p1);
 
   std::cout << "Completed forward flow with riders" << std::endl;

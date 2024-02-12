@@ -35,8 +35,8 @@ public:
     const Matrix &q0, 
     TFloat sigma,
     unsigned int Nt,
-    unsigned int Nr = 0,
-    unsigned int n_threads = 0);
+    unsigned int Nr,
+    unsigned int n_threads);
 
   ~PointSetHamiltonianSystem();
 

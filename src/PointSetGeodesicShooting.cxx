@@ -971,7 +971,7 @@ public:
       Triangulation tri_target,
       const Matrix &lab_template, const Matrix &lab_target)
     : vnl_cost_function(p0.rows() * VDim),
-      hsys(q0, param.sigma, param.N, q0.rows() - p0.rows())
+      hsys(q0, param.sigma, param.N, q0.rows() - p0.rows(), param.n_threads)
     {
     this->p0 = p0;
     this->q0 = q0;
@@ -1187,7 +1187,8 @@ public:
 
   PointSetShootingLineSearchCostFunction(
     const ShootingParameters &param, const Matrix &q0, const Matrix &p0, const Matrix &qT, const Matrix &del_p0)
-    : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
+    : vnl_cost_function(q0.rows() * VDim),
+      hsys(q0, param.sigma, param.N, 0, param.n_threads)
     {
     this->p0 = p0;
     this->del_p0 = del_p0;
@@ -1247,7 +1248,8 @@ public:
 
   PointSetShootingTransversalityCostFunction(
     const ShootingParameters &param, const Matrix &q0, const Matrix &qT)
-    : vnl_cost_function(q0.rows() * VDim), hsys(q0, param.sigma, param.N)
+    : vnl_cost_function(q0.rows() * VDim),
+      hsys(q0, param.sigma, param.N, 0, param.n_threads)
     {
     this->p0 = (qT - q0) / param.N;
     this->qT = qT;
@@ -2075,6 +2077,9 @@ int main(int argc, char *argv[])
   // Set the number of threads if not specified
   if(param.n_threads == 0)
     param.n_threads = std::thread::hardware_concurrency();
+  else
+    // Set the threads in ITK
+    itk::MultiThreaderBase::SetGlobalDefaultNumberOfThreads(param.n_threads);
 
   // Specialize by dimension
   if(param.use_float)

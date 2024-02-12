@@ -28,6 +28,7 @@ int usage()
   cout << "  -n N               : number of time steps (100)" << endl;
   cout << "  -g mask.nii        : limit warp computation to a masked region" << endl;
   cout << "  -B                 : use brute force warp computation (not approximation)" << endl;
+  cout << "  -t n_threads       : limit number of concurrent threads to n_threads" << endl;
   cout << "Mesh warping mode:" << endl;
   cout << "  -M in.vtk out.vtk  : additional meshes to apply warp to" << endl;
   cout << "                       when using -M, -r/-o are optional" << endl;
@@ -63,12 +64,13 @@ struct WarpGenerationParameters
   unsigned int dim;
   unsigned int N;
   unsigned int anim_freq;
+  unsigned int n_threads;
   bool brute;
 
   std::list<MeshPair> fnWarpMeshes;
 
   WarpGenerationParameters():
-    N(100), dim(3), sigma(0.0), anim_freq(0), brute(false) {}
+    sigma(0.0), dim(3), N(100), anim_freq(0), n_threads(0), brute(false) {}
 };
 
 template <class TPixel, unsigned int VDim>
@@ -340,7 +342,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
 
   // We have read the mesh successfully
   // Create the hamiltonian system
-  HSystem hsys(q0, param.sigma, param.N);
+  HSystem hsys(q0, param.sigma, param.N, 0, param.n_threads);
 
   // Flow without gradients - we have streamlines
   hsys.FlowHamiltonian(p0, q1, p1);
@@ -600,6 +602,10 @@ int main(int argc, char *argv[])
       {
       param.brute = true;
       }
+    else if(arg == "-t")
+      {
+      param.n_threads = (unsigned int) atoi(argv[++i]);
+      }
     else if(arg == "-M" && i < argc-2)
       {
       string fn1 = std::string(argv[++i]);
@@ -628,6 +634,12 @@ int main(int argc, char *argv[])
     check(param.fnReference.length(), "Missing template filename");
     check(param.fnOutWarp.length(), "Missing output filename");
     }
+
+  // Set the number of threads if not specified
+  if(param.n_threads == 0)
+    param.n_threads = std::thread::hardware_concurrency();
+  else
+    itk::MultiThreaderBase::SetGlobalDefaultNumberOfThreads(param.n_threads);
 
   // Specialize by dimension
   if(param.dim == 2)
