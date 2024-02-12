@@ -76,94 +76,37 @@ void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool flag_write_binary)
   writer->Update();
 }
 
-template <class TMeshType>
-int MeshMergeArrays(int argc, char *argv[])
-{
-  int i;
+struct Parameters {
   std::string arr_name, out_arr_name, fnout, fnref, fnsel, fnmeshfile;
   bool flag_cell = false;
   bool flag_binary = false;
-  
-  // Read the optional parameters
-  for (i = 1; i < argc; i++)
-    {
-    if (0 == strcmp(argv[i],"-o"))
-      out_arr_name = argv[++i];
-    else if (0 == strcmp(argv[i],"-r"))
-      fnref = argv[++i];
-    else if (0 == strcmp(argv[i],"-s"))
-      fnsel = argv[++i];
-    else if (0 == strcmp(argv[i],"-c"))
-      flag_cell = true;
-    else if (0 == strcmp(argv[i],"-B"))
-      flag_binary = true;
-    else if (0 == strcmp(argv[i],"-m"))
-      fnmeshfile = argv[++i];
-    else
-      break;
-    }
-
-  // Check that there is enough input left
-  if(i > argc-3)
-    return usage();
-
-  // Get the output filename
-  fnout = argv[i++];
-  
-  // Get the input array
-  arr_name = argv[i++];
-
-  // Start of the input filenames
-  int nin = argc - i;
-
-  // Did the user provide an input file with mesh names?
   vector<string> source_meshes;
-  if(fnmeshfile.size())
-    {
-    if(nin > 0)
-      {
-      cerr << "Meshes can be specified via file (-m) or command line, but not both" << endl;
-      return -1;
-      }
+};
 
-    // Read the input file
-    std::ifstream inputFile(fnmeshfile.c_str());
-    if (!inputFile.is_open())
-      {
-      cerr << "Error opening file " << fnmeshfile << endl;
-      return -1;
-      }
 
-    std::string line;
-    while (std::getline(inputFile, line) && line.length() > 0)
-      source_meshes.push_back(line);
-    }
-  else
-    {
-    for(int j = 0; j < nin; j++)
-      source_meshes.push_back(argv[i + j]);
-    }
-
+template <class TMeshType>
+int MeshMergeArrays(const Parameters &p)
+{
   // Read the reference mesh
-  TMeshType *ref = fnref.length() ? ReadMesh<TMeshType>(fnref.c_str()) : ReadMesh<TMeshType>(source_meshes.front().c_str());
+  TMeshType *ref = ReadMesh<TMeshType>(p.fnref.c_str());
 
   // Read each of the input meshes
   std::vector<vtkDataArray *> da;
   unsigned int comp_total = 0;
-  for(auto mesh_fn: source_meshes)
+  for(auto mesh_fn: p.source_meshes)
     {
     TMeshType *src = ReadMesh<TMeshType>(mesh_fn.c_str());
 
     // Get the corresponding array
     int idx = 0;
-    vtkDataArray *arr = (flag_cell) 
-      ? src->GetCellData()->GetArray(arr_name.c_str(), idx)
-      : src->GetPointData()->GetArray(arr_name.c_str(), idx);
+    vtkDataArray *arr = (p.flag_cell) 
+      ? src->GetCellData()->GetArray(p.arr_name.c_str(), idx)
+      : src->GetPointData()->GetArray(p.arr_name.c_str(), idx);
 
     // If no array, crap out
     if (arr == NULL)
       {
-      cerr << "Missing array " << arr_name << " in mesh " << mesh_fn << endl;
+      cerr << "Missing array " << p.arr_name << " in mesh " << mesh_fn << endl;
       return -1;
       }
 
@@ -179,9 +122,9 @@ int MeshMergeArrays(int argc, char *argv[])
   // Read the selection file
   vector<bool> selection;
   unsigned int comp_selected = 0;
-  if(fnsel.size())
+  if(p.fnsel.size())
     {
-    ifstream sfile(fnsel);
+    ifstream sfile(p.fnsel);
     bool sel;
     while(sfile >> sel)
       {
@@ -205,19 +148,19 @@ int MeshMergeArrays(int argc, char *argv[])
   cout << "Output array will contain " << comp_selected << " components" << endl;
   vtkFloatArray *array = vtkFloatArray::New();
   array->SetNumberOfComponents(comp_selected);
-  array->SetNumberOfTuples(flag_cell ? ref->GetNumberOfCells() : ref->GetNumberOfPoints());
+  array->SetNumberOfTuples(p.flag_cell ? ref->GetNumberOfCells() : ref->GetNumberOfPoints());
 
   // Read each of the input meshes and merge their arrays
   int target_index = 0, source_index = 0;
-  for(int j = 0; j < argc - i; j++)
+  for(auto *da_j : da)
     {
     // Add array to main accumulator
-    for(unsigned int q = 0; q < da[j]->GetNumberOfComponents(); q++)
+    for(unsigned int q = 0; q < da_j->GetNumberOfComponents(); q++)
       {
       if(selection.size() == 0 || selection[source_index])
         {
-        for(int k = 0; k < da[j]->GetNumberOfTuples(); k++)
-          array->SetComponent(k, target_index, da[j]->GetComponent(k, q));
+        for(int k = 0; k < da_j->GetNumberOfTuples(); k++)
+          array->SetComponent(k, target_index, da_j->GetComponent(k, q));
         target_index++;
         }
       source_index++;
@@ -225,45 +168,108 @@ int MeshMergeArrays(int argc, char *argv[])
     }
 
   // Stick the array in the output
-  array->SetName(out_arr_name.length() > 0 ? out_arr_name.c_str() : arr_name.c_str());
-  if(flag_cell)
+  array->SetName(p.out_arr_name.length() > 0 ? p.out_arr_name.c_str() : p.arr_name.c_str());
+  if(p.flag_cell)
     ref->GetCellData()->AddArray(array);
   else
     ref->GetPointData()->AddArray(array);
 
   // Write the output
-  WriteMesh<TMeshType>(ref, fnout.c_str(), flag_binary);
+  WriteMesh<TMeshType>(ref, p.fnout.c_str(), p.flag_binary);
   return EXIT_SUCCESS;
 }
 
 int main(int argc, char *argv[])
 {
-  if(argc < 4)
-    return usage();
-
-  // Check the data type of the input file
-  vtkDataReader *reader = vtkDataReader::New();
-  reader->SetFileName(argv[argc-1]);
-  reader->OpenVTKFile();
-  reader->ReadHeader();
-
-  bool isPolyData = true;
-
-  // Is this a polydata?
-  if(reader->IsFileUnstructuredGrid())
+  int i;
+  Parameters p;
+  
+  // Read the optional parameters
+  for (i = 1; i < argc; i++)
     {
-    reader->Delete();
-    isPolyData = false;
-    return MeshMergeArrays<vtkUnstructuredGrid>( argc, argv );
+    if (0 == strcmp(argv[i],"-o"))
+      p.out_arr_name = argv[++i];
+    else if (0 == strcmp(argv[i],"-r"))
+      p.fnref = argv[++i];
+    else if (0 == strcmp(argv[i],"-s"))
+      p.fnsel = argv[++i];
+    else if (0 == strcmp(argv[i],"-c"))
+      p.flag_cell = true;
+    else if (0 == strcmp(argv[i],"-B"))
+      p.flag_binary = true;
+    else if (0 == strcmp(argv[i],"-m"))
+      p.fnmeshfile = argv[++i];
+    else
+      break;
     }
-  else if(reader->IsFilePolyData())
+
+  // Check that there is enough input left
+  int n_req_args = p.fnmeshfile.length() ? 2 : 3;
+  if(i > argc - n_req_args)
     {
-    reader->Delete();
-    return MeshMergeArrays<vtkPolyData>( argc, argv );
+    cerr << "Not enough arguments provided on the command line, see usage" << endl;
+    return usage();
+    }
+
+  // Get the output filename
+  p.fnout = argv[i++];
+  
+  // Get the input array
+  p.arr_name = argv[i++];
+
+  // Start of the input filenames
+  int nin = argc - i;
+
+  // Did the user provide an input file with mesh names?
+  if(p.fnmeshfile.size())
+    {
+    if(nin > 0)
+      {
+      cerr << "Meshes can be specified via file (-m) or command line, but not both" << endl;
+      return -1;
+      }
+
+    // Read the input file
+    std::ifstream inputFile(p.fnmeshfile.c_str());
+    if (!inputFile.is_open())
+      {
+      cerr << "Error opening file " << p.fnmeshfile << endl;
+      return -1;
+      }
+
+    std::string line;
+    while (std::getline(inputFile, line) && line.length() > 0)
+      p.source_meshes.push_back(line);
     }
   else
     {
-    reader->Delete();
+    for(int j = 0; j < nin; j++)
+      p.source_meshes.push_back(argv[i + j]);
+    }
+
+  // Read the reference mesh
+  if(p.fnref.length() == 0)
+    p.fnref = p.source_meshes.front();
+
+  // Check the data type of the input file
+  vtkDataReader *reader = vtkDataReader::New();
+  reader->SetFileName(p.fnref.c_str());
+  reader->OpenVTKFile();
+  reader->ReadHeader();
+  bool is_ug = reader->IsFileUnstructuredGrid(), is_pd = reader->IsFilePolyData();
+  reader->Delete();
+
+  // Is this a polydata?
+  if(is_ug)
+    {
+    return MeshMergeArrays<vtkUnstructuredGrid>(p);
+    }
+  else if(is_pd)
+    {
+    return MeshMergeArrays<vtkPolyData>(p);
+    }
+  else
+    {
     cerr << "Unsupported VTK data type in input file" << endl;
     return -1;
     }
