@@ -47,6 +47,7 @@ int usage()
   cout << "  -t n_threads               : limit number of concurrent threads to n_threads" << endl;
   cout << "  -D n                       : perform derivative check (for first n momenta)" << endl;
   cout << "  -L array_name              : use label-restricted data attachment, with label posteriors in given array" << endl;
+  cout << "  -J weight                  : use Jacobian regularization with provided weight" << endl;
   return -1;
 }
 
@@ -86,6 +87,9 @@ struct ShootingParameters
   unsigned int n_threads = 0;
   unsigned int n_deriv_check = 0;
   bool test_currents_attachment = false;
+
+  // Weight for the mesh Jacobian penalty term
+  double w_jacobian = 0.0;
 
   // For constrained optimization - just exprimental
   double constrained_mu_init = 0.0, constrained_mu_mult = 0.0;
@@ -352,7 +356,7 @@ public:
         if(W_norm[i] > 0.0)
           {
           dW[0] = ((1 - Ni[0]*Ni[0]) * dNi[0] - Ni[0] * Ni[1] * dNi[1] + Wi[0] * dW_norm) / W_norm[i];
-          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] + Wi[0] * dW_norm) / W_norm[i];
+          dW[1] = ((1 - Ni[1]*Ni[1]) * dNi[1] - Ni[1] * Ni[0] * dNi[0] + Wi[1] * dW_norm) / W_norm[i];
           }
         else
           {
@@ -882,6 +886,70 @@ protected:
   Mode mode;
 };
 
+template <class TFloat, unsigned int VDim>
+class MeshJacobianPenaltyTerm
+{
+public:
+  typedef PointSetHamiltonianSystem<TFloat, VDim> HSystem;
+  typedef typename HSystem::Vector Vector;
+  typedef typename HSystem::Matrix Matrix;
+  typedef vnl_matrix<int> Triangulation;
+
+  /**
+   * Constructor
+   *   qR           : Reference vertices (Jacobian computed relative to them)
+   *   tri          : Triangles (3D) or edges (2D) of the mesh
+   */
+  MeshJacobianPenaltyTerm(const Matrix &qR, const Triangulation &tri)
+    : tcan_ref(tri, true), tcan_def(tri, true)
+  {
+    tcan_ref.Forward(qR);
+
+    dE_dC.set_size(tcan_ref.W_norm.size(), VDim); dE_dC.fill(0.0);
+    dE_dN.set_size(tcan_ref.W_norm.size(), VDim); dE_dN.fill(0.0);
+    dE_dW.set_size(tcan_ref.W_norm.size()); dE_dW.fill(0.0);
+  }
+
+  /**
+   * Compute the Jacobian term
+   */
+  double Compute(const Matrix &q1, Matrix *grad = nullptr)
+  {
+    // Compute the triangle centers and normals for the template.
+    // TODO: this is redundant because same is being done by the varifold term
+    tcan_def.Forward(q1);
+
+    // Compute the change in triangle areas
+    double penalty = 0.0;
+    double z = 2.0 / std::log(10);
+    for(unsigned int i = 0; i < tcan_def.W_norm.size(); i++)
+      {
+      double area_def = tcan_def.W_norm[i];
+      double area_ref = tcan_ref.W_norm[i];
+      double log_jac = std::log10(area_def / area_ref);
+      penalty += log_jac * log_jac;
+
+      if(grad)
+        dE_dW[i] = z * log_jac / area_def;
+      }
+
+    if(grad)
+      tcan_def.Backward(dE_dC, dE_dN, dE_dW, *grad);
+
+    return penalty;
+  }
+
+protected:
+  // Triangle quantity computer for the reference and deforming meshes
+  TriangleCentersAndNormals<TFloat, VDim> tcan_ref, tcan_def;
+
+  // Partials with respect to centers and normals
+  Matrix dE_dC, dE_dN;
+
+  // Partials with respect to the weights/areas (varifold only)
+  Vector dE_dW;
+};
+
 
 
 template <class TFloat, unsigned int VDim>
@@ -933,6 +1001,13 @@ public:
 
       // Allocate the gradient storage
       grad_currents.set_size(m, VDim);
+      }
+
+    // Set up the jacobian term
+    if(param.w_jacobian > 0)
+      {
+      this->jacobian_term = new JacobianTerm(q0, tri_template);
+      this->grad_jacobian.set_size(m, VDim);
       }
     }
 
@@ -1001,7 +1076,12 @@ public:
     // Compute the data attachment term
     double E_data = 0.0;
     if(param.attach == ShootingParameters::Euclidean)
+      {
       E_data = ComputeEuclideanAttachment();
+      for(unsigned int i = 0; i < m; i++)
+        for(unsigned int a = 0; a < VDim; a++)
+          alpha[a][i] *= param.lambda;
+      }
     else if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
       {
       static int my_iter = 0;
@@ -1010,14 +1090,24 @@ public:
         E_data = currents_attachment->Compute(q1, &grad_currents);
         for(unsigned int i = 0; i < m; i++)
           for(unsigned int a = 0; a < VDim; a++)
-            alpha[a][i] = grad_currents(i,a);
+            alpha[a][i] = param.lambda * grad_currents(i,a);
         }
       else
         E_data = currents_attachment->Compute(q1);
       }
 
+    // Compute the mesh Jacobian (regularization) term
+    double E_jac = 0.0;
+    if(param.w_jacobian > 0)
+      {
+      E_jac = jacobian_term->Compute(q1, &grad_jacobian);
+      for(unsigned int i = 0; i < m; i++)
+        for(unsigned int a = 0; a < VDim; a++)
+          alpha[a][i] += param.w_jacobian * grad_jacobian(i,a);
+      }
+
     if(f)
-      *f = H + param.lambda * E_data;
+      *f = H + param.lambda * E_data + param.w_jacobian * E_jac;
 
     if(g)
       {
@@ -1031,7 +1121,7 @@ public:
       for(unsigned int a = 0; a < VDim; a++)
         {
         // Combine the gradient terms
-        grad_f[a] = grad_f[a] * param.lambda + hsys.GetHp(a).extract(k);
+        grad_f[a] += hsys.GetHp(a).extract(k);
         }
 
       // Pack the gradient into the output vector
@@ -1044,7 +1134,8 @@ public:
     // Print current results
     if(verbose && g && f) 
       {
-      printf("It = %04d  H = %8.2f  DA = %8.2f  f = %8.2f\n", iter, H, E_data * param.lambda, *f);
+      printf("It = %04d  H = %8.2f  DA = %8.2f  JC = %8.2f  f = %8.2f\n",
+             iter, H, E_data * param.lambda, param.w_jacobian * E_jac, *f);
       }
     }
 
@@ -1063,8 +1154,15 @@ protected:
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
   CATerm *currents_attachment;
 
+  // Penalty terms
+  typedef MeshJacobianPenaltyTerm<TFloat, VDim> JacobianTerm;
+  JacobianTerm *jacobian_term;
+
   // For currents, the gradient is supplied as a matrix
   Matrix grad_currents;
+
+  // For the Jacobian term, the gradient is also stored in a matrix
+  Matrix grad_jacobian;
 
   // Number of control points (k) and total points (m)
   unsigned int k, m;
@@ -1692,36 +1790,38 @@ PointSetShootingProblem<TFloat, VDim>
   Matrix lab_template(pTemplate->GetNumberOfCells(), 1, 1.0);
   Matrix lab_target(pTarget->GetNumberOfCells(), 1, 1.0);
 
+  // Compute the triangulation of the template
+  tri_template.set_size(pTemplate->GetNumberOfCells(), VDim);
+  for(unsigned int i = 0; i < pTemplate->GetNumberOfCells(); i++)
+    {
+    if(pTemplate->GetCell(i)->GetNumberOfPoints() != VDim)
+      {
+      std::cerr << "Wrong number of points in template cell " << i << std::endl;
+      return -1;
+      }
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      unsigned int j = pTemplate->GetCell(i)->GetPointId(a);
+      tri_template(i,a) = pControl ? j + k : j;
+      }
+    }
+
+  // Compute the triangulation of the target
+  tri_target.set_size(pTarget->GetNumberOfCells(), VDim);
+  for(unsigned int i = 0; i < pTarget->GetNumberOfCells(); i++)
+    {
+    if(pTarget->GetCell(i)->GetNumberOfPoints() != VDim)
+      {
+      std::cerr << "Wrong number of points in target cell " << i << std::endl;
+      return -1;
+      }
+    for(unsigned int a = 0; a < VDim; a++)
+      tri_target(i,a) = pTarget->GetCell(i)->GetPointId(a);
+    }
+
+  // For currents, additional configuration
   if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
     {
-    tri_template.set_size(pTemplate->GetNumberOfCells(), VDim);
-    for(unsigned int i = 0; i < pTemplate->GetNumberOfCells(); i++)
-      {
-      if(pTemplate->GetCell(i)->GetNumberOfPoints() != VDim)
-        {
-        std::cerr << "Wrong number of points in template cell " << i << std::endl;
-        return -1;
-        }
-      for(unsigned int a = 0; a < VDim; a++)
-        {
-        unsigned int j = pTemplate->GetCell(i)->GetPointId(a);
-        tri_template(i,a) = pControl ? j + k : j;
-        }
-      }
-
-    // Compute the triangulation of the target
-    tri_target.set_size(pTarget->GetNumberOfCells(), VDim);
-    for(unsigned int i = 0; i < pTarget->GetNumberOfCells(); i++)
-      {
-      if(pTarget->GetCell(i)->GetNumberOfPoints() != VDim)
-        {
-        std::cerr << "Wrong number of points in target cell " << i << std::endl;
-        return -1;
-        }
-      for(unsigned int a = 0; a < VDim; a++)
-        tri_target(i,a) = pTarget->GetCell(i)->GetPointId(a);
-      }
-
     // Read the label arrays
     if(param.arrAttachmentLabelPosteriors.length())
       {
@@ -1914,6 +2014,10 @@ int main(int argc, char *argv[])
     else if(arg == "-L")
       {
       param.arrAttachmentLabelPosteriors = cl.read_string();
+      }
+    else if(arg == "-J")
+      {
+      param.w_jacobian = cl.read_double();
       }
     else if(arg == "-t")
       {
