@@ -286,13 +286,13 @@ ENDIF(WIN32)
 SET(CMREP_FIT_LIBS ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
 IF(CMREP_BUILD_PDE)
     IF(CMREP_PDE_SPARSE_SOLVER STREQUAL "EIGEN")
-        SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+        SET(SOLVER_SRC ${SOLVER_SRC} src/EigenSolverInterface.cxx)
         SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${})
     ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL "PARDISO")
-        SET(SOLVER_SRC src/PardisoInterface.cxx)
+        SET(SOLVER_SRC ${SOLVER_SRC} src/PardisoInterface.cxx)
         SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} ${PARDISO_LIBS} ${LAPACK_LIBRARIES})
     ELSEIF(CMREP_PDE_SPARSE_SOLVER STREQUAL "MKL_PARDISO")
-        SET(SOLVER_SRC src/EigenSolverInterface.cxx)
+        SET(SOLVER_SRC ${SOLVER_SRC} src/EigenSolverInterface.cxx)
         SET(CMREP_FIT_LIBS ${CMREP_FIT_LIBS} Eigen3::Eigen ${MKL_LIBRARIES})
     ENDIF()
 ENDIF()
@@ -315,7 +315,6 @@ SET(COMMON_SRCS
   src/JacobianDistortionPenaltyTerm.cxx
   src/MedialAtom.cxx
   src/MedialAtomGrid.cxx
-  src/MeshMedialPDESolver.cxx
   src/MedialModelIO.cxx
   src/MedialPDEMasks.cxx
   src/MedialPDESites.cxx
@@ -331,13 +330,14 @@ SET(COMMON_SRCS
   src/ScriptInterface.cxx
   src/SmoothedImageSampler.cxx
   src/SparseMatrix.cxx
-  src/SparseSolver.cxx
   src/SubdivisionMedialModel.cxx
   src/SubdivisionSurface.cxx
   src/System.cxx
-  src/TestSolver.cxx
   src/VTKMedialMesh.cxx
   src/VTKSubdivision.cxx
+  src/SparseSolver.cxx
+  src/TestSolver.cxx
+  src/MeshMedialPDESolver.cxx
   ${SOLVER_SRC})
 
 # Create the CM-REP library

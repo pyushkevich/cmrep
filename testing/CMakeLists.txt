@@ -33,4 +33,9 @@ IF(CMREP_BUILD_GSHOOT)
                                         ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk
                                      -o ${CMREP_BINARY_DIR}/res.vtk
                                      -s 0.2 -l 20 -d 2 -i 20 0)
+    ADD_TEST(ShootingVarifold      ${CMREP_BINARY_DIR}/lmshoot
+                                     -m ${TEST_GSHOOT_DIR}/shooting_test_3d_sphere.vtk
+                                        ${TEST_GSHOOT_DIR}/shooting_test_3d_box.vtk
+                                     -o ${CMREP_BINARY_DIR}/res.vtk
+                                     -s 0.2 -l 20 -d 3 -i 20 0 -D 5 -a V -S 1.0 -J 0.1)
 ENDIF()
