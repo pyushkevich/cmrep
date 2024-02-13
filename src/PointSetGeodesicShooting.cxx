@@ -30,13 +30,14 @@ int usage()
   cout << "Required Options:" << endl;
   cout << "  -m template.vtk target.vtk : input meshes" << endl;
   cout << "  -o result.vtk              : output mesh (template with initial momentum)" << endl;
-  cout << "  -s sigma                   : kernel standard deviation" << endl;
-  cout << "  -l lambda                  : weight of landmark distance term" << endl;
+  cout << "  -s sigma                   : LDDMM kernel standard deviation" << endl;
   cout << "Additional Options" << endl;
   cout << "  -d dim                     : problem dimension (3)" << endl;
   cout << "  -n N                       : number of time steps (100)" << endl;
   cout << "  -a <L|C|V>                 : data attachment term, L for landmark euclidean distance (default), " << endl;
   cout << "                               C for current metric, V for varifold metric." << endl;
+  cout << "  -l lambda                  : weight of the data attachment term (1.0)" << endl;
+  cout << "  -g gamma                   : weight of the Hamiltonian regularization term (1.0)" << endl;
   cout << "  -S sigma                   : kernel standard deviation for current/varifold metric" << endl;
   cout << "  -c mesh.vtk                : optional control point mesh (if different from template.vtk)" << endl;
   cout << "  -p array_name              : read initial momentum from named array in control/template mesh" << endl;
@@ -47,7 +48,7 @@ int usage()
   cout << "  -t n_threads               : limit number of concurrent threads to n_threads" << endl;
   cout << "  -D n                       : perform derivative check (for first n momenta)" << endl;
   cout << "  -L array_name              : use label-restricted data attachment, with label posteriors in given array" << endl;
-  cout << "  -J weight                  : use Jacobian regularization with provided weight" << endl;
+  cout << "  -J weight                  : use Jacobian regularization with provided weight (default: no)" << endl;
   return -1;
 }
 
@@ -77,7 +78,8 @@ struct ShootingParameters
   string arrAttachmentLabelPosteriors;
   double sigma = 0.0;
   double currents_sigma = 0.0;
-  double lambda = 0.0;
+  double lambda = 1.0;
+  double gamma = 1.0;
   unsigned int dim = 3;
   unsigned int N = 100;
   unsigned int iter_grad = 20, iter_newton = 20;
@@ -1107,7 +1109,7 @@ public:
       }
 
     if(f)
-      *f = H + param.lambda * E_data + param.w_jacobian * E_jac;
+      *f = param.gamma * H + param.lambda * E_data + param.w_jacobian * E_jac;
 
     if(g)
       {
@@ -1121,7 +1123,7 @@ public:
       for(unsigned int a = 0; a < VDim; a++)
         {
         // Combine the gradient terms
-        grad_f[a] += hsys.GetHp(a).extract(k);
+        grad_f[a] += hsys.GetHp(a).extract(k) * param.gamma;
         }
 
       // Pack the gradient into the output vector
@@ -1135,7 +1137,7 @@ public:
     if(verbose && g && f) 
       {
       printf("It = %04d  H = %8.2f  DA = %8.2f  JC = %8.2f  f = %8.2f\n",
-             iter, H, E_data * param.lambda, param.w_jacobian * E_jac, *f);
+             iter, H * param.gamma, E_data * param.lambda, E_jac * param.w_jacobian, *f);
       }
     }
 
@@ -1986,6 +1988,10 @@ int main(int argc, char *argv[])
     else if(arg == "-l")
       {
       param.lambda = cl.read_double();
+      }
+    else if(arg == "-g")
+      {
+      param.gamma = cl.read_double();
       }
     else if(arg == "-n")
       {
