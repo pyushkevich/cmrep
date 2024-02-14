@@ -201,6 +201,9 @@ protected:
     const Matrix *q, const Matrix *p, const Vector alpha[], const Vector beta[], ThreadData *tdi);
 
 
+private:
+  // Helper method used during Euler or Ralston integration
+  void UpdatePQbyHpHq(Matrix &p, Matrix &q, TFloat dt);
 };
 
 

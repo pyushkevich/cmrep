@@ -313,6 +313,22 @@ PointSetHamiltonianSystem<TFloat, VDim>
 #else
 
 template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::UpdatePQbyHpHq(Matrix &p, Matrix &q, TFloat step)
+{
+  // Euler update for the momentum (only control points)
+  for(unsigned int i = 0; i < k; i++)
+    for(unsigned int a = 0; a < VDim; a++)
+      p(i,a) -= step * Hq[a](i);
+
+  // Euler update for the points (all points)
+  for(unsigned int i = 0; i < m; i++)
+    for(unsigned int a = 0; a < VDim; a++)
+      q(i,a) += step * Hp[a](i);
+}
+
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p)
@@ -327,21 +343,39 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // The return value
   TFloat H, H0;
 
+  // What kind of update do we do
+  bool ralston_method = true;
+
+  // Allocate additional storage for Ralston
+  Matrix p_ralston, q_ralston;
+
   // Flow over time
   for(unsigned int t = 1; t < N; t++)
     {
     // Compute the hamiltonian
     H = ComputeHamiltonianAndGradientThreaded(q, p);
 
-    // Euler update for the momentum (only control points)
-    for(unsigned int i = 0; i < k; i++)
-      for(unsigned int a = 0; a < VDim; a++)
-        p(i,a) -= dt * Hq[a](i);
+    if(ralston_method)
+      {
+      // Compute the intermediate point x_i
+      p_ralston = p; q_ralston = q;
+      UpdatePQbyHpHq(p_ralston, q_ralston, 2 * dt / 3);
 
-    // Euler update for the points (all points)
-    for(unsigned int i = 0; i < m; i++)
-      for(unsigned int a = 0; a < VDim; a++)
-        q(i,a) += dt * Hp[a](i);
+      // Update p,q using the initial point gradient
+      UpdatePQbyHpHq(p, q, dt / 4);
+
+      // Evaluate the system at the mid-point position
+      ComputeHamiltonianAndGradientThreaded(q_ralston, p_ralston);
+
+      // Update using the ralston point gradient
+      UpdatePQbyHpHq(p, q, 3 * dt / 4);
+      }
+
+    else
+      {
+      // Just one update
+      UpdatePQbyHpHq(p, q, dt);
+      }
 
     // Store the flow results
     Qt[t] = q; Pt[t] = p;

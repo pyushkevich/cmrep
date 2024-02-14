@@ -775,17 +775,17 @@ public:
 
     // Initialize the z-term
     cspd_template.z = z0_template;
-    // double v0 = cspd_template.z.sum();
+    double v0 = cspd_template.z.sum();
 
     // Add the squared norm term
     this->ComputeCurrentHalfNormSquared(tcan_template, cspd_template, lab_template, grad != nullptr);
-    // double v1 = cspd_template.z.sum();
+    double v1 = cspd_template.z.sum();
 
     // Subtract twice the scalar product term
     this->ComputeCurrentScalarProduct(tcan_template, tcan_target, cspd_template, lab_template, lab_target, grad != nullptr);
-    // double v2 = cspd_template.z.sum();
+    double v2 = cspd_template.z.sum();
 
-    // printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
+    printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
 
     // Backpropagate the gradient to get gradient with respect to q1
     if(grad)
