@@ -315,7 +315,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
 template <class TFloat, unsigned int VDim>
 void
 PointSetHamiltonianSystem<TFloat, VDim>
-::UpdatePQbyHpHq(Matrix &p, Matrix &q, TFloat step)
+::UpdatePQbyHamiltonianGradient(Matrix &q, Matrix &p, TFloat step)
 {
   // Euler update for the momentum (only control points)
   for(unsigned int i = 0; i < k; i++)
@@ -343,11 +343,9 @@ PointSetHamiltonianSystem<TFloat, VDim>
   // The return value
   TFloat H, H0;
 
-  // What kind of update do we do
-  bool ralston_method = true;
-
   // Allocate additional storage for Ralston
-  Matrix p_ralston, q_ralston;
+  Qt_ralston.resize(N);
+  Pt_ralston.resize(N);
 
   // Flow over time
   for(unsigned int t = 1; t < N; t++)
@@ -355,26 +353,27 @@ PointSetHamiltonianSystem<TFloat, VDim>
     // Compute the hamiltonian
     H = ComputeHamiltonianAndGradientThreaded(q, p);
 
-    if(ralston_method)
+    if(flag_ralston_integration)
       {
       // Compute the intermediate point x_i
-      p_ralston = p; q_ralston = q;
-      UpdatePQbyHpHq(p_ralston, q_ralston, 2 * dt / 3);
+      Pt_ralston[t-1] = p; Qt_ralston[t-1] = q;
+      UpdatePQbyHamiltonianGradient(Qt_ralston[t-1], Pt_ralston[t-1], 2 * dt / 3);
 
       // Update p,q using the initial point gradient
-      UpdatePQbyHpHq(p, q, dt / 4);
+      // UpdatePQbyHamiltonianGradient(q, p, dt / 4);
 
       // Evaluate the system at the mid-point position
-      ComputeHamiltonianAndGradientThreaded(q_ralston, p_ralston);
+      ComputeHamiltonianAndGradientThreaded(Qt_ralston[t-1], Pt_ralston[t-1]);
 
       // Update using the ralston point gradient
-      UpdatePQbyHpHq(p, q, 3 * dt / 4);
+      // UpdatePQbyHamiltonianGradient(q, p, 3 * dt / 4);
+      UpdatePQbyHamiltonianGradient(q, p, dt);
       }
 
     else
       {
       // Just one update
-      UpdatePQbyHpHq(p, q, dt);
+      UpdatePQbyHamiltonianGradient(q, p, dt);
       }
 
     // Store the flow results
@@ -648,8 +647,8 @@ void
 PointSetHamiltonianSystem<TFloat, VDim>
 ::ApplyHamiltonianHessianToAlphaBetaThreaded(
     const Matrix &q, const Matrix &p,
-    const Vector alpha[], const Vector beta[],
-    Vector d_alpha[], Vector d_beta[])
+    const Vector alpha[VDim], const Vector beta[VDim],
+    Vector d_alpha[VDim], Vector d_beta[VDim])
 {
   // Initialize the arrays to be accumulated
   for(unsigned int a = 0; a < VDim; a++)
@@ -664,7 +663,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     {
     futures.push_back(
       thread_pool->push(
-        [&](int id) { this->ApplyHamiltonianHessianToAlphaBetaThreadedWorker(&q, &p, alpha, beta, &tdi); }));
+        [&](int) { this->ApplyHamiltonianHessianToAlphaBetaThreadedWorker(&q, &p, alpha, beta, &tdi); }));
     }
 
   // Wait for completion
@@ -695,26 +694,64 @@ PointSetHamiltonianSystem<TFloat, VDim>
   Vector alpha[VDim], beta[VDim];
   Vector d_alpha[VDim], d_beta[VDim];
 
+  // What kind of update do we do
+  Vector alpha_ralston[VDim], beta_ralston[VDim];
+  Vector d_alpha_ralston[VDim], d_beta_ralston[VDim];
+
   for(unsigned int a = 0; a < VDim; a++)
     {
     alpha[a] = alpha1[a];
     beta[a] = beta1[a];
     d_alpha[a].set_size(m);
     d_beta[a].set_size(k);
+
+    if(flag_ralston_integration)
+      {
+      d_alpha_ralston[a].set_size(m);
+      d_beta_ralston[a].set_size(k);
+      }
     }
 
   // Work our way backwards
   for(int t = N-1; t > 0; t--)
     {
-    // Apply Hamiltonian Hessian to get an update in alpha/beta
-    ApplyHamiltonianHessianToAlphaBetaThreaded(
-          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
-
-    // Update the vectors
-    for(unsigned int a = 0; a < VDim; a++)
+    if(flag_ralston_integration)
       {
-      alpha[a] += dt * d_alpha[a];
-      beta[a] += dt * d_beta[a];
+      // Compute the backprop at the timepoint t-1
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        alpha_ralston[a] = alpha[a] - (2 * dt / 3) * d_alpha[a];
+        beta_ralston[a] = beta[a] + (2 * dt / 3) * d_beta[a];
+        }
+
+      // Compute the backprop at the middle timepoint
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt_ralston[t - 1], Pt_ralston[t - 1], alpha_ralston, beta_ralston, d_alpha_ralston, d_beta_ralston);
+
+      // Update the vectors
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        // alpha[a] += (dt / 4) * d_alpha[a] + (3 * dt / 4) * d_alpha_ralston[a];
+        // beta[a] += (dt / 4) * d_beta[a] + (3 * dt / 4) * d_beta_ralston[a];
+        alpha[a] -= dt * d_alpha_ralston[a];
+        beta[a] += dt * d_beta_ralston[a];
+        }
+      }
+    else
+      {
+      // Apply Hamiltonian Hessian to get an update in alpha/beta
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+      // Update the vectors
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        alpha[a] += dt * d_alpha[a];
+        beta[a] += dt * d_beta[a];
+        }
       }
     }
 

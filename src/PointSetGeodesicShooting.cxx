@@ -34,6 +34,7 @@ int usage()
   cout << "Additional Options" << endl;
   cout << "  -d dim                     : problem dimension (3)" << endl;
   cout << "  -n N                       : number of time steps (100)" << endl;
+  cout << "  -R                         : use Ralston integration instead of the default Euler method" << endl;
   cout << "  -a <L|C|V>                 : data attachment term, L for landmark euclidean distance (default), " << endl;
   cout << "                               C for current metric, V for varifold metric." << endl;
   cout << "  -l lambda                  : weight of the data attachment term (1.0)" << endl;
@@ -82,6 +83,7 @@ struct ShootingParameters
   double gamma = 1.0;
   unsigned int dim = 3;
   unsigned int N = 100;
+  bool use_ralston_method = false;
   unsigned int iter_grad = 20, iter_newton = 20;
   Algorithm alg = GradDescent;
   DataAttachment attach = Euclidean;
@@ -775,17 +777,15 @@ public:
 
     // Initialize the z-term
     cspd_template.z = z0_template;
-    double v0 = cspd_template.z.sum();
+    // double v0 = cspd_template.z.sum();
 
     // Add the squared norm term
     this->ComputeCurrentHalfNormSquared(tcan_template, cspd_template, lab_template, grad != nullptr);
-    double v1 = cspd_template.z.sum();
+    // double v1 = cspd_template.z.sum();
 
     // Subtract twice the scalar product term
     this->ComputeCurrentScalarProduct(tcan_template, tcan_target, cspd_template, lab_template, lab_target, grad != nullptr);
-    double v2 = cspd_template.z.sum();
-
-    printf("0.5*S*S=%f, 0.5*T*T=%f, S*T=%f\n", v0, v1-v0, v2-v1);
+    // double v2 = cspd_template.z.sum();
 
     // Backpropagate the gradient to get gradient with respect to q1
     if(grad)
@@ -990,6 +990,9 @@ public:
       beta[a].set_size(k); beta[a].fill(0.0);
       grad_f[a].set_size(m);
       }
+
+    // Set up Ralston integration
+    this->hsys.SetRalstonIntegration(param.use_ralston_method);
 
     // Set up the currents attachment
     currents_attachment = nullptr;
@@ -1199,6 +1202,7 @@ public:
     this->k = q0.rows();
     this->p1.set_size(k,VDim);
     this->q1.set_size(k,VDim);
+    hsys.SetRalstonIntegration(param.use_ralston_method);
     }
 
   virtual double f (vnl_vector<double> const& x)
@@ -1259,6 +1263,7 @@ public:
     this->k = q0.rows();
     this->p1.set_size(k,VDim);
     this->q1.set_size(k,VDim);
+    hsys.SetRalstonIntegration(param.use_ralston_method);
 
     for(unsigned int a = 0; a < VDim; a++)
       {
@@ -1397,6 +1402,7 @@ PointSetShootingProblem<TFloat, VDim>
 
   // Create the hamiltonian system
   HSystem hsys(q0, param.sigma, param.N, 0, param.n_threads);
+  hsys.SetRalstonIntegration(param.use_ralston_method);
 
   // Where to store the results of the flow
   Matrix q1(k,VDim), p1(k,VDim), del_p0(k, VDim), grad_q[VDim][VDim], grad_p[VDim][VDim];
@@ -1891,6 +1897,7 @@ PointSetShootingProblem<TFloat, VDim>
     {
     // Create and flow a system
     HSystem hsys(q0, param.sigma, param.N, m - k, param.n_threads);
+    hsys.SetRalstonIntegration(param.use_ralston_method);
     Matrix q1, p1;
     hsys.FlowHamiltonian(p0, q1, p1);
 
@@ -1996,6 +2003,10 @@ int main(int argc, char *argv[])
     else if(arg == "-n")
       {
       param.N = (unsigned int) cl.read_integer();
+      }
+    else if(arg == "-R")
+      {
+      param.use_ralston_method = true;
       }
     else if(arg == "-d")
       {

@@ -46,6 +46,13 @@ public:
   unsigned int GetN() const { return N; }
 
   /**
+   * Turn on Ralston integration, i.e., second-order Runge-Kutta method.
+   * It is twice slower but more accurate.
+   */
+  void SetRalstonIntegration(bool flag) { flag_ralston_integration = flag; }
+  bool GetRalstonIntegration() const { return flag_ralston_integration; }
+
+  /**
    * Multi-threaded computation of the Hamiltonian and derivatives. For now it
    * does not support hessian computation
    */
@@ -169,6 +176,9 @@ protected:
   // Number of threads used
   unsigned int n_threads;
 
+  // Type of integration to use, Euler or Ralston method
+  bool flag_ralston_integration = false;
+
   // Multi-threaded quantities
   struct ThreadData 
     {
@@ -192,6 +202,9 @@ protected:
   // Streamlines - paths of the landmarks over time
   std::vector<Matrix> Qt, Pt;
 
+  // Additional intermediate points used during Raston integration
+  std::vector<Matrix> Qt_ralston, Pt_ralston;
+
   // Set up multi-threaded variables
   void SetupMultiThreaded();
 
@@ -203,7 +216,7 @@ protected:
 
 private:
   // Helper method used during Euler or Ralston integration
-  void UpdatePQbyHpHq(Matrix &p, Matrix &q, TFloat dt);
+  void UpdatePQbyHamiltonianGradient(Matrix &q, Matrix &p, TFloat step);
 };
 
 
