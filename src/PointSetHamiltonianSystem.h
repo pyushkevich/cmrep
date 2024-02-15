@@ -92,15 +92,6 @@ public:
    */
   TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p);
 
-  // TODO: this is what we are trying to do
-  // TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p, const Matrix &z0, Matrix &z);
-
-  /**
-   * Applies the flow to a set of additional points for which we are not optimizing
-   * the momentum. These extra samples are just along for the ride
-   */
-  void ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const;
-
   /**
    * Flow the Hamiltonian system with gradient computation. The gradient is 
    * strored as a VDim x VDim array of k x k matrices. This is a pretty expensive

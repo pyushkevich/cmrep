@@ -341,7 +341,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
   Pt.resize(N); Pt[0] = p0;
 
   // The return value
-  TFloat H, H0;
+  TFloat H, H0 = 0.0;
 
   // Allocate additional storage for Ralston
   Qt_ralston.resize(N);
@@ -360,14 +360,13 @@ PointSetHamiltonianSystem<TFloat, VDim>
       UpdatePQbyHamiltonianGradient(Qt_ralston[t-1], Pt_ralston[t-1], 2 * dt / 3);
 
       // Update p,q using the initial point gradient
-      // UpdatePQbyHamiltonianGradient(q, p, dt / 4);
+      UpdatePQbyHamiltonianGradient(q, p, dt / 4);
 
       // Evaluate the system at the mid-point position
       ComputeHamiltonianAndGradientThreaded(Qt_ralston[t-1], Pt_ralston[t-1]);
 
       // Update using the ralston point gradient
-      // UpdatePQbyHamiltonianGradient(q, p, 3 * dt / 4);
-      UpdatePQbyHamiltonianGradient(q, p, dt);
+      UpdatePQbyHamiltonianGradient(q, p, 3 * dt / 4);
       }
 
     else
@@ -717,27 +716,30 @@ PointSetHamiltonianSystem<TFloat, VDim>
     {
     if(flag_ralston_integration)
       {
-      // Compute the backprop at the timepoint t-1
-      ApplyHamiltonianHessianToAlphaBetaThreaded(
-            Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+      // Worked this out with PyTorch
+      // G1 = adjunct_f(x_list_r[i-1], gamma)
+      // G0 = adjunct_f(x_list[i-1], gamma + 2 * dt * G1)
+      // gamma = gamma + 0.25 * dt * G0 + 0.75 * dt * G1
 
+      // Compute G1
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt_ralston[t - 1], Pt_ralston[t - 1], alpha, beta, d_alpha_ralston, d_beta_ralston);
+
+      // Compute G0
       for(unsigned int a = 0; a < VDim; a++)
         {
-        alpha_ralston[a] = alpha[a] - (2 * dt / 3) * d_alpha[a];
-        beta_ralston[a] = beta[a] + (2 * dt / 3) * d_beta[a];
+        alpha_ralston[a] = alpha[a] + 2 * dt * d_alpha_ralston[a];
+        beta_ralston[a] = beta[a] + 2 * dt * d_beta_ralston[a];
         }
 
-      // Compute the backprop at the middle timepoint
       ApplyHamiltonianHessianToAlphaBetaThreaded(
-            Qt_ralston[t - 1], Pt_ralston[t - 1], alpha_ralston, beta_ralston, d_alpha_ralston, d_beta_ralston);
+            Qt[t - 1], Pt[t - 1], alpha_ralston, beta_ralston, d_alpha, d_beta);
 
       // Update the vectors
       for(unsigned int a = 0; a < VDim; a++)
         {
-        // alpha[a] += (dt / 4) * d_alpha[a] + (3 * dt / 4) * d_alpha_ralston[a];
-        // beta[a] += (dt / 4) * d_beta[a] + (3 * dt / 4) * d_beta_ralston[a];
-        alpha[a] -= dt * d_alpha_ralston[a];
-        beta[a] += dt * d_beta_ralston[a];
+        alpha[a] += d_alpha[a] * (0.25 * dt) +  d_alpha_ralston[a] * (0.75 * dt);
+        beta[a] += d_beta[a] * (0.25 * dt) +  d_beta_ralston[a] * (0.75 * dt);
         }
       }
     else
@@ -879,64 +881,6 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
     } // loop over i}
 }
-
-template <class TFloat, unsigned int VDim>
-void
-PointSetHamiltonianSystem<TFloat, VDim>
-::ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const
-{
-  // Allocate Zt
-  Zt.resize(N); Zt[0] = z0;
-  Matrix z = z0;
-
-  // Gaussian factor, i.e., K(z) = exp(f * z)
-  TFloat f = -0.5 / (sigma * sigma);
-  TFloat d2_cutoff = 27.63102 * sigma * sigma;
-
-
-  // Flow over time
-  for(unsigned int t = 1; t < N; t++)
-    {
-    const Matrix &q = Qt[t], &p = Pt[t];
-    for(int i = 0; i < z.rows(); i++)
-      {
-      // Current coordinate and its velocity
-      TFloat *zi = z.data_array()[i];
-      TFloat vi[VDim];
-
-      // Iterate over all the points
-      for(int j = 0; j < k; j++)
-        {
-        TFloat delta, d2 = 0;
-        for(int a = 0; a < VDim; a++)
-          {
-          delta = zi[a] - q(j,a);
-          d2 += delta * delta;
-          }
-
-        // Only proceed if distance is below cutoff
-        if(d2 < d2_cutoff)
-          {
-          // Take the exponent
-          TFloat g = exp(f * d2);
-
-          // Scale momentum by exponent
-          for(int a = 0; a < VDim; a++) 
-            vi[a] += g * p(j,a);
-          }
-        }
-
-      // Update the point
-      for(int a = 0; a < VDim; a++) 
-        zi[a] += dt * vi[a];
-      }
-
-    // Store the z timepoint
-    Zt[t] = z;
-    }
-}
-
-
 
 #ifdef _LMSHOOT_DIRECT_USE_LAPACK_
 
