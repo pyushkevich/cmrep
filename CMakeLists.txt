@@ -6,7 +6,7 @@ endif(COMMAND cmake_policy)
 
 # Project name
 PROJECT(CMREP)
-SET(CMAKE_CXX_STANDARD 11)
+SET(CMAKE_CXX_STANDARD 17)
 
 # Testing
 ENABLE_TESTING()

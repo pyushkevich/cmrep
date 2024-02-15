@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <random>
 #include <SparseMatrix.h>
 #include <vtkDijkstraGraphGeodesicPath.h>
 #include <vtkSelectEnclosedPoints.h>
@@ -1146,7 +1147,8 @@ int main(int argc, char *argv[])
     // Generate a random subset of landmarks in the image
     size_t *xLandmarks = new size_t[np];
     for(int i = 0; i < (int) np; i++) xLandmarks[i] = i;
-    random_shuffle(xLandmarks, xLandmarks+np);
+    std::mt19937 rng(std::time(nullptr));
+    std::shuffle(xLandmarks, xLandmarks+np, rng);
 
     // Compute distances between landmarks
     typedef DijkstraShortestPath<double> Dijkstra;

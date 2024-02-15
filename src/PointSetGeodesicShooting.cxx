@@ -2,10 +2,12 @@
 #include "vnl/algo/vnl_svd.h"
 #include "vnl/vnl_cost_function.h"
 #include "vnl/algo/vnl_lbfgs.h"
+#include "vnl/vnl_cross.h"
 
 #include <iostream>
 #include <algorithm>
 #include "util/ReadWriteVTK.h"
+#include "util/VTKArrays.h"
 #include "vtkPolyData.h"
 #include "vtkPointData.h"
 #include "vtkDoubleArray.h"
@@ -31,8 +33,9 @@ int usage()
   cout << "  -m template.vtk target.vtk : input meshes" << endl;
   cout << "  -o result.vtk              : output mesh (template with initial momentum)" << endl;
   cout << "  -s sigma                   : LDDMM kernel standard deviation" << endl;
-  cout << "Additional Options" << endl;
+  cout << "Additional Options:" << endl;
   cout << "  -d dim                     : problem dimension (3)" << endl;
+  cout << "  -G                         : Compute global similarity transform, not geodesic shooting" << endl;
   cout << "  -n N                       : number of time steps (100)" << endl;
   cout << "  -R                         : use Ralston integration instead of the default Euler method" << endl;
   cout << "  -a <L|C|V>                 : data attachment term, L for landmark euclidean distance (default), " << endl;
@@ -60,7 +63,7 @@ void check(bool condition, const char *format,...)
     char buffer[256];
     va_list args;
     va_start (args, format);
-    vsprintf (buffer,format, args);
+    vsnprintf (buffer, 256, format, args);
     va_end (args);
 
     cerr << buffer << endl;
@@ -91,6 +94,7 @@ struct ShootingParameters
   unsigned int n_threads = 0;
   unsigned int n_deriv_check = 0;
   bool test_currents_attachment = false;
+  bool do_similarity_matching = false;
 
   // Weight for the mesh Jacobian penalty term
   double w_jacobian = 0.0;
@@ -952,6 +956,367 @@ protected:
   Vector dE_dW;
 };
 
+/*
+template <class TFloat, unsigned int VDim>
+struct QuaternionTraits
+{
+  using Vec = vnl_vector_fixed<TFloat, VDim>;
+  static Vec cross(const Vec &v1, const Vec &v2) { throw std::exception(); }
+  static Vec dot(const Vec &v1, const Vec &v2) { throw std::exception(); }
+  static int read(const double *array, Vec &v) { throw std::exception();  }
+  static int write(const Vec &v, double *array) { throw std::exception(); }
+  static constexpr int size = VDim;
+};
+
+template <class TFloat>
+struct QuaternionTraits<TFloat, 3>
+{
+  using Vec = vnl_vector_fixed<TFloat, 3>;
+  static Vec cross(const Vec &v1, const Vec &v2) { return vnl_cross_3d(v1, v2); }
+  static Vec dot(const Vec &v1, const Vec &v2) { return dot_product(v1, v2); }
+  static int read(const double *array, Vec &v)
+    { v[0] = array[0]; v[1] = array[1]; v[2] = array[2];  return 3; }
+  static int write(const Vec &v, double *array)
+    { array[0] = v[0]; array[1] = v[1]; array[2] = v[2];  return 3; }
+  static constexpr int size = 3;
+};
+
+template <class TFloat>
+struct QuaternionTraits<TFloat, 2>
+{
+  using Vec = TFloat;
+  static Vec cross(const Vec &v1, const Vec &v2) { return v1 * v2; }
+  static Vec dot(const Vec &v1, const Vec &v2) { return 0; }
+  static int read(const double *array, Vec &v) { v = array[0]; return 1; }
+  static int write(const Vec &v, double *array) { array[0] = v; return 1; }
+  static constexpr int size = 1;
+};
+*/
+
+
+template <class TFloat>
+struct Quaternion
+{
+  using Self = Quaternion<TFloat>;
+  using Vec = vnl_vector_fixed<TFloat, 3>;
+
+  Quaternion(TFloat r, const Vec &v) : r(r), v(v) {}
+
+  Quaternion() : r(0.0), v(0.0) {}
+
+  /*
+  int read_from_array(const double *array)
+    {
+    r = array[0];
+    return 1 + Traits::read(array, v);
+    }
+
+  int write_to_array(double *array)
+    {
+    array[0] = r;
+    return 1 + Traits::write(v, array);
+    }
+
+  static constexpr int size = 1 + Traits::size;
+  */
+
+  static Self mult_q1_q2(const Self &q1, const Self &q2)
+    {
+    return Self(q1.r * q2.r - dot_product(q1.v, q2.v),
+                q1.v * q2.r + q2.v * q1.r + vnl_cross_3d(q1.v, q2.v));
+    }
+
+  static Self mult_q1_q2conj(const Self &q1, const Self &q2)
+    {
+    return Self(q1.r * q2.r + dot_product(q1.v, q2.v),
+                q1.v * q2.r - q2.v * q1.r - vnl_cross_3d(q1.v, q2.v));
+    }
+
+  TFloat r;
+  Vec v;
+};
+
+template <class TFloat, unsigned int VDim>
+struct QuaternionRotationTraits
+{
+
+};
+
+template <class TFloat>
+struct QuaternionRotationTraits<TFloat, 3>
+{
+  typedef vnl_vector_fixed<TFloat, 3> Vec;
+  typedef Quaternion<TFloat> Quaternion;
+
+  static Quaternion point_to_quaternion(const Vec &x) { return Quaternion(0, x); }
+  static Vec quaternion_to_point(const Quaternion &q) { return q.v; }
+  static Quaternion zero_rotation()
+    {
+    return Quaternion(0, typename Quaternion::Vec(0., 0., 1.0));
+    }
+  static Quaternion coeff_to_quaternion(const double  *arr)
+    {
+    return Quaternion(arr[0], typename Quaternion::Vec(arr[1], arr[2], arr[3]));
+    }
+  static void quaternion_to_coeff(const Quaternion&q, double *arr)
+    {
+    arr[0] = q.r; arr[1] = q.v[0]; arr[2] = q.v[1]; arr[3] = q.v[2];
+    }
+
+  static constexpr int size = 4;
+};
+
+template <class TFloat>
+struct QuaternionRotationTraits<TFloat, 2>
+{
+  typedef vnl_vector_fixed<TFloat, 2> Vec;
+  typedef Quaternion<TFloat> Quaternion;
+
+  static Quaternion point_to_quaternion(const Vec &x) { return Quaternion(0, typename Quaternion::Vec(x[0], x[1], 0)); }
+  static Vec quaternion_to_point(const Quaternion &q) { return Vec(q.v[0], q.v[1]); }
+  static Quaternion zero_rotation()
+    {
+    return Quaternion(0, typename Quaternion::Vec(0., 0., 1.0));
+    }
+  static Quaternion coeff_to_quaternion(const double *arr)
+    {
+    return Quaternion(arr[0], typename Quaternion::Vec(0, 0, arr[1]));
+    }
+  static void quaternion_to_coeff(const Quaternion&q, double *arr)
+    {
+    arr[0] = q.r; arr[1] = q.v[2];
+    }
+
+  static constexpr int size = 2;
+};
+
+
+
+template <class TFloat, unsigned int VDim>
+class QuaternionTransform
+{
+public:
+  typedef vnl_vector_fixed<TFloat, VDim> Vec;
+  typedef Quaternion<TFloat> Quaternion;
+  typedef QuaternionRotationTraits<TFloat, VDim> QRTraits;
+  typedef vnl_matrix<TFloat> Matrix;
+
+  // Apply transform to a set of coordiantes X
+  static void Forward(const Quaternion &q, const Vec &b, const Matrix &X, Matrix &Y)
+    {
+      // Compute the center of X, rotation will be applied to the center
+      int n = X.rows();
+      Vec center(0.0);
+      for(unsigned int i = 0; i < n; i++)
+        center += X.get_row(i);
+      center /= X.rows();
+
+      // Apply quaternion to each point
+      for(unsigned int i = 0; i < n; i++)
+        {
+        Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
+        Quaternion z_i = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q);
+        Vec y_i = QRTraits::quaternion_to_point(z_i) + center + b;
+        Y.set_row(i, y_i.as_ref());
+        }
+    }
+
+  // Backpropagate the gradient of some loss F with respect to Y onto the quaternion coefficients
+  static void Backward(const Quaternion &q, const Vec &b, const Matrix &X,
+                       const Matrix &df_dY, Quaternion &df_dq, Vec &df_db)
+    {
+    // Compute the center of X, rotation will be applied to the center
+    int n = X.rows();
+    Vec center(0.0);
+    for(unsigned int i = 0; i < n; i++)
+      center += X.get_row(i);
+    center /= X.rows();
+
+    // Initialize return values
+    df_dq = Quaternion();
+    df_db.fill(0.0);
+
+    // Apply quaternion to each point
+    for(unsigned int i = 0; i < n; i++)
+      {
+      Vec df_dY_i = df_dY.get_row(i);
+      df_db += df_dY_i;
+
+      Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
+      Quaternion q_df_dY_i = QRTraits::point_to_quaternion(df_dY_i);
+
+      auto q1 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q_df_dY_i, x_i), q);
+      auto q2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, q_df_dY_i), q_df_dY_i);
+      df_dq.r += q1.r + q2.r;
+      df_dq.v += q1.v + q2.v;
+      }
+    }
+};
+
+
+template <class TFloat, unsigned int VDim>
+class PointSetSimilarityMatchingCostFunction : public vnl_cost_function
+{
+public:
+  typedef vnl_matrix<int> Triangulation;
+
+  typedef QuaternionTransform<TFloat, VDim> QuaternionTransform;
+  typedef typename QuaternionTransform::QRTraits QRTraits;
+  typedef typename QuaternionTransform::Quaternion Quaternion;
+  typedef typename QuaternionTransform::Vec Vec;
+  typedef typename QuaternionTransform::Matrix Matrix;
+
+  // Separate type because vnl optimizer is double-only
+  typedef std::tuple<Quaternion, Vec> CoeffType;
+
+  PointSetSimilarityMatchingCostFunction(
+    const ShootingParameters &param,
+      const Matrix &q0, const Matrix &qT,
+      Triangulation tri_template,
+      Triangulation tri_target,
+      const Matrix &lab_template, const Matrix &lab_target)
+    : vnl_cost_function(QRTraits::size + VDim)
+    {
+    this->q0 = q0;
+    this->qT = qT;
+    this->param = param;
+    this->k = p0.rows();
+    this->m = q0.rows();
+    this->q1.set_size(m, VDim);
+    this->alpha.set_size(m, VDim);
+
+    // Set up the currents attachment
+    currents_attachment = nullptr;
+    if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
+      {
+      // Create the appropriate attachment term (currents or varifolds)
+      currents_attachment = new CATerm(
+            param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
+            m, qT, tri_template, tri_target, lab_template, lab_target,
+            param.currents_sigma, param.n_threads);
+      }
+    }
+
+  ~PointSetSimilarityMatchingCostFunction()
+  {
+    if(currents_attachment)
+      delete currents_attachment;
+  }
+
+  CoeffType ArrayToCoeff(const double *arr)
+    {
+    Quaternion q = QRTraits::coeff_to_quaternion(arr);
+    Vec b;
+    for(unsigned int a = 0; a < VDim; a++)
+      b[a] = arr[a + QRTraits::size];
+    return std::make_tuple(q, b);
+    }
+
+  void CoeffToArray(const CoeffType &c, double *arr)
+    {
+    QRTraits::quaternion_to_coeff(std::get<0>(c), arr);
+    for(unsigned int a = 0; a < VDim; a++)
+      arr[a + QRTraits::size] = std::get<1>(c)[a];
+    }
+
+  CoeffType InitialSolution()
+    {
+    Quaternion q = QRTraits::zero_rotation();
+    Vec b(0.0);
+    return std::make_tuple(q, b);
+    }
+
+  virtual double ComputeEuclideanAttachment()
+  {
+    // Compute the landmark errors
+    double E_data = 0.0;
+    unsigned int i_temp = (k == m) ? 0 : k;
+    alpha.fill(0.0);
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      for(unsigned int i = i_temp; i < m; i++)
+        {
+        alpha(i,a) = q1(i,a) - qT(i - i_temp, a);
+        E_data += 0.5 * alpha(i,a) * alpha(i,a);
+        }
+      }
+
+    return E_data;
+  }
+
+ virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
+    {
+    // From x, extract quaterion
+    Quaternion w; Vec b;
+    std::tie(w, b) = ArrayToCoeff(x.data_block());
+
+    // Transform the coordinates from q0 to q1
+    QuaternionTransform::Forward(w, b, q0, q1);
+
+    // Compute the data attachment term
+    double E_data = 0.0;
+    if(param.attach == ShootingParameters::Euclidean)
+      {
+      E_data = ComputeEuclideanAttachment();
+      }
+    else if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
+      {
+      static int my_iter = 0;
+      if(g)
+        E_data = currents_attachment->Compute(q1, &alpha);
+      else
+        E_data = currents_attachment->Compute(q1);
+      }
+
+    if(f)
+      *f = E_data;
+
+    if(g)
+      {
+      // Flow alpha back
+      Quaternion df_dw; Vec df_db;
+      QuaternionTransform::Backward(w, b, q0, alpha, df_dw, df_db);
+
+      // Pack the gradient into the output vector
+      CoeffToArray(std::make_tuple(df_dw, df_db), g->data_block());
+
+      // Count this as an iteration
+      ++iter;
+      }
+
+    // Print current results
+    if(verbose && g && f)
+      {
+      printf("It = %04d  f = %8.2f\n", iter, *f);
+      }
+    }
+
+ void SetVerbose(bool value)
+   {
+   this->verbose = value;
+   }
+
+protected:
+  ShootingParameters param;
+  Matrix qT, p0, q0, p1, q1;
+  Matrix alpha;
+
+  // Attachment terms
+  typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
+  CATerm *currents_attachment;
+
+  // Number of control points (k) and total points (m)
+  unsigned int k, m;
+
+  // Whether to print values at each iteration
+  bool verbose = false;
+  unsigned int iter = 0;
+};
+
+
+
+
+
 
 
 template <class TFloat, unsigned int VDim>
@@ -1380,6 +1745,12 @@ public:
       const Triangulation &tri_template, const Triangulation &tri_target,
       const Matrix &lab_template, const Matrix &lab_target);
 
+  static int similarity_matching(
+      const ShootingParameters &param,
+      const Matrix &q0, const Matrix &qT,
+      const Triangulation &tri_template, const Triangulation &tri_target,
+      const Matrix &lab_template, const Matrix &lab_target);
+
   static int minimize(const ShootingParameters &param);
 
 private:
@@ -1621,6 +1992,64 @@ PointSetShootingProblem<TFloat, VDim>
 
 
 
+
+template <class TFloat, unsigned int VDim>
+int
+PointSetShootingProblem<TFloat, VDim>
+::similarity_matching(const ShootingParameters &param,
+    const Matrix &q0, const Matrix &qT,
+    const Triangulation &tri_template, const Triangulation &tri_target,
+    const Matrix &lab_template, const Matrix &lab_target)
+{
+  // Create the minimization problem
+  typedef PointSetSimilarityMatchingCostFunction<TFloat, VDim> CostFn;
+  CostFn cost_fn(param, q0, qT, tri_template, tri_target, lab_template, lab_target);
+
+  // Create initial/final solution
+  auto coeff_init = cost_fn.InitialSolution();
+  vnl_vector<double> x(cost_fn.get_number_of_unknowns());
+  cost_fn.CoeffToArray(coeff_init, x.data_block());
+
+  // Uncomment this code to test derivative computation
+  if(param.n_deriv_check > 0)
+    {
+    TFloat eps = 1e-6;
+    vnl_vector<double> test_grad(x.size());
+    double f_test;
+    cost_fn.compute(x, &f_test, &test_grad);
+    for(unsigned int i = 0; i < std::min((unsigned int) x.size(), param.n_deriv_check); i++)
+      {
+      vnl_vector<double> xtest = x;
+      double f1, f2;
+      xtest[i] = x[i] - eps;
+      cost_fn.compute(xtest, &f1, NULL);
+
+      xtest[i] = x[i] + eps;
+      cost_fn.compute(xtest, &f2, NULL);
+
+      printf("i = %03d,  AG = %8.4f,  NG = %8.4f\n", i, test_grad[i], (f2 - f1) / (2 * eps));
+      }
+    }
+
+  // Solve the minimization problem
+  cost_fn.SetVerbose(true);
+
+  vnl_lbfgsb optimizer(cost_fn);
+  optimizer.set_f_tolerance(1e-9);
+  optimizer.set_x_tolerance(1e-4);
+  optimizer.set_g_tolerance(1e-6);
+  optimizer.set_trace(false);
+  optimizer.set_max_function_evals(param.iter_grad);
+
+  // vnl_conjugate_gradient optimizer(cost_fn);
+  // optimizer.set_trace(true);
+  optimizer.minimize(x);
+
+  // Take the optimal solution
+  auto coeff_best = cost_fn.ArrayToCoeff(x.data_block());
+}
+
+
 template <class TFloat, unsigned int VDim>
 void
 PointSetShootingProblem<TFloat, VDim>
@@ -1717,6 +2146,7 @@ PointSetShootingProblem<TFloat, VDim>
 }
 
 
+
 template <class TFloat, unsigned int VDim>
 int
 PointSetShootingProblem<TFloat, VDim>
@@ -1746,7 +2176,12 @@ PointSetShootingProblem<TFloat, VDim>
   unsigned int m = k + n_riders;
 
   // Report number of actual vertices being used
-  cout << "Performing geodesic shooting with " << k << " control points and " << m << " total landmarks." << endl;
+  if(!param.do_similarity_matching)
+    {
+    printf("Performing geodesic shooting with %d control points and %d total landmarks.\n", k, m);
+    printf("Geodesic shooting parameters: sigma = %8.4f, nt = %d, integrator = '%s'\n",
+           param.sigma, param.N, param.use_ralston_method ? "Ralston": "Euler");
+    }
 
   // Landmarks and initial momentum
   Matrix q0(m,VDim), p0(k,VDim);
@@ -1857,6 +2292,12 @@ PointSetShootingProblem<TFloat, VDim>
       }
     }
 
+  // Are we doing similarity matching - then it's a whole separate thing
+  if(param.do_similarity_matching)
+    {
+    return similarity_matching(param, q0, qT, tri_template, tri_target, lab_template, lab_target);
+    }
+
   // Run some iterations of gradient descent
   if(param.iter_grad > 0)
     {
@@ -1867,6 +2308,9 @@ PointSetShootingProblem<TFloat, VDim>
     {
     minimize_Allassonniere(param, q0, qT, p0);
     }
+
+  // Which polydata are we saving?
+  vtkPolyData *pResult = pControl ? pControl : pTemplate;
 
   // Genererate the output momentum map
   vtkDoubleArray *arr_p = vtkDoubleArray::New();
@@ -1881,16 +2325,16 @@ PointSetShootingProblem<TFloat, VDim>
     for(unsigned int i = 0; i < k; i++)
       arr_p->SetComponent(i, a, p0(i,a));
 
-  if(pControl)
-    {
-    pControl->GetPointData()->AddArray(arr_p);
-    WriteVTKData(pControl, param.fnOutput);
-    }
-  else
-    {
-    pTemplate->GetPointData()->AddArray(arr_p);
-    WriteVTKData(pTemplate, param.fnOutput);
-    }
+  // Set the momenta
+  pResult->GetPointData()->AddArray(arr_p);
+
+  // Store the shooting parameters as field data
+  vtk_set_scalar_field_data(pResult, "lddmm_nt", param.N);
+  vtk_set_scalar_field_data(pResult, "lddmm_sigma", param.sigma);
+  vtk_set_scalar_field_data(pResult, "lddmm_ralston", param.use_ralston_method ? 1.0 : 0.0);
+
+  // Save the mesh
+  WriteVTKData(pResult, param.fnOutput);
 
   // If saving paths requested
   if(param.fnOutputPaths.size())
@@ -1949,7 +2393,7 @@ PointSetShootingProblem<TFloat, VDim>
 
       // Output the intermediate mesh
       char buffer[1024];
-      sprintf(buffer, param.fnOutputPaths.c_str(), t);
+      snprintf(buffer, 1024, param.fnOutputPaths.c_str(), t);
       WriteVTKData(pTemplate, buffer);
       }
     }
@@ -1979,6 +2423,10 @@ int main(int argc, char *argv[])
     else if(arg == "-c")
       {
       param.fnControlMesh = cl.read_existing_filename();
+      }
+    else if(arg == "-G")
+      {
+      param.do_similarity_matching = true;
       }
     else if(arg == "-o")
       {
@@ -2082,10 +2530,13 @@ int main(int argc, char *argv[])
     }
 
   // Check parameters
-  check(param.sigma > 0, "Missing or negative sigma parameter");
+  if(!param.do_similarity_matching)
+    {
+    check(param.sigma > 0, "Missing or negative sigma parameter");
+    check(param.N > 0 && param.N < 10000, "Incorrect N parameter");
+    }
   check(param.attach == ShootingParameters::Euclidean || param.currents_sigma > 0,
         "Missing sigma parameter for current/varifold metric");
-  check(param.N > 0 && param.N < 10000, "Incorrect N parameter");
   check(param.dim >= 2 && param.dim <= 3, "Incorrect N parameter");
   check(param.fnTemplate.length(), "Missing template filename");
   check(param.fnTarget.length(), "Missing target filename");

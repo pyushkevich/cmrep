@@ -2,6 +2,7 @@
 #include "lddmm_data.h"
 #include <iostream>
 #include "util/ReadWriteVTK.h"
+#include "util/VTKArrays.h"
 #include "vtkPointData.h"
 #include "vtkDataArray.h"
 #include "vtkDoubleArray.h"
@@ -19,19 +20,20 @@ int usage()
   cout << "Usage:" << endl;
   cout << "  lmtowarp [options]" << endl;
   cout << "Required options:" << endl;
+  cout << "  -m mesh.vtk        : Mesh with the InitialMomentum array defined" << endl;
+  cout << "Warp generation mode:" << endl;
   cout << "  -r image.nii       : Reference image (defines warp space)" << endl;
   cout << "  -o warp.nii        : Output deformation field" << endl;
-  cout << "  -m mesh.vtk        : Mesh with the InitialMomentum array defined" << endl;
-  cout << "  -s sigma           : kernel standard deviation" << endl;
+  cout << "Mesh warping mode:" << endl;
+  cout << "  -M in.vtk out.vtk  : additional meshes to apply warp to" << endl;
   cout << "Additional options:" << endl;
   cout << "  -d dim             : problem dimension (3)" << endl;
-  cout << "  -n N               : number of time steps (100)" << endl;
+  cout << "  -n N               : number of time steps (default: read from mesh.vtk)" << endl;
+  cout << "  -s sigma           : kernel standard deviation (default: read from mesh.vtk)" << endl;
+  cout << "  -R                 : use Ralston integration (default: read from mesh.vtk)" << endl;
   cout << "  -g mask.nii        : limit warp computation to a masked region" << endl;
   cout << "  -B                 : use brute force warp computation (not approximation)" << endl;
   cout << "  -t n_threads       : limit number of concurrent threads to n_threads" << endl;
-  cout << "Mesh warping mode:" << endl;
-  cout << "  -M in.vtk out.vtk  : additional meshes to apply warp to" << endl;
-  cout << "                       when using -M, -r/-o are optional" << endl;
   cout << "Animation:" << endl;
   cout << "  -a k               : save an animation frame every k-th timepoint" << endl;
   cout << "                       output files must have %03d pattern in them" << endl;
@@ -45,9 +47,9 @@ void check(bool condition, const char *format,...)
     {
     char buffer[256];
     va_list args;
-    va_start (args, format);
-    vsprintf (buffer,format, args);
-    va_end (args);
+    va_start(args, format);
+    vsnprintf(buffer, 256, format, args);
+    va_end(args);
 
     cerr << buffer << endl;
     exit(-1);
@@ -60,17 +62,15 @@ struct WarpGenerationParameters
   typedef std::pair<string, string> MeshPair;
 
   string fnReference, fnMesh, fnOutWarp, fnMask;
-  double sigma;
-  unsigned int dim;
-  unsigned int N;
-  unsigned int anim_freq;
-  unsigned int n_threads;
-  bool brute;
+  double sigma = 0.0;
+  unsigned int dim = 3;
+  unsigned int N = 0;
+  bool use_ralston_method = false;
+  unsigned int anim_freq = 0;
+  unsigned int n_threads = 0;
+  bool brute = false;
 
   std::list<MeshPair> fnWarpMeshes;
-
-  WarpGenerationParameters():
-    sigma(0.0), dim(3), N(100), anim_freq(0), n_threads(0), brute(false) {}
 };
 
 template <class TPixel, unsigned int VDim>
@@ -310,6 +310,17 @@ PointSetGeodesicToWarp<TPixel, VDim>
     return -1;
     }
 
+  // Read parameters from mesh if they were not supplied by the user
+  double sigma = param.sigma > 0.0 ? param.sigma
+                                   : vtk_get_scalar_field_data(mesh, "lddmm_sigma", 0.0);
+  int N = param.N > 0.0 ? param.N
+                        : vtk_get_scalar_field_data(mesh, "lddmm_nt", 0);
+  bool use_ralston_method = param.use_ralston_method ? true
+                                                     : vtk_get_scalar_field_data(mesh, "lddmm_ralston", false);
+
+  check(sigma > 0, "Missing or negative sigma parameter");
+  check(N > 0 && param.N < 10000, "Incorrect N parameter");
+
   // Count the number of non-null entries
   vector<unsigned int> index;
   for(unsigned int i = 0; i < arr_p0->GetNumberOfTuples(); i++)
@@ -342,24 +353,29 @@ PointSetGeodesicToWarp<TPixel, VDim>
 
   // We have read the mesh successfully
   // Create the hamiltonian system
-  HSystem hsys(q0, param.sigma, param.N, 0, param.n_threads);
+  HSystem hsys(q0, sigma, N, 0, param.n_threads);
+  hsys.SetRalstonIntegration(use_ralston_method);
+
+  // Describe the parameters
+  printf("Geodesic shooting parameters: sigma = %8.4f, nt = %d, integrator = '%s'\n",
+         sigma, N, use_ralston_method ? "Ralston": "Euler");
 
   // Flow without gradients - we have streamlines
   hsys.FlowHamiltonian(p0, q1, p1);
 
   // Direction of interpolation
   int tdir = 1;
-  int tStart = (tdir > 0) ? 0 : param.N - 1;
-  int tEnd = (tdir > 0) ? param.N : 0;
+  int tStart = (tdir > 0) ? 0 : N - 1;
+  int tEnd = (tdir > 0) ? N : 0;
 
   // F for the Gaussian
-  double gaussian_f = -1.0 / (2 * param.sigma * param.sigma);
+  double gaussian_f = -1.0 / (2 * sigma * sigma);
 
   // Cutoff where the Gaussian is < 1e-6
-  double d2_cutoff = 27.63102 * param.sigma * param.sigma;
+  double d2_cutoff = 27.63102 * sigma * sigma;
 
   // Delta-t
-  double dt = tdir * 1.0 / (param.N - 1);
+  double dt = tdir * 1.0 / (N - 1);
 
   // Apply the warp to other meshes
   std::list<WarpGenerationParameters::MeshPair>::const_iterator it;
@@ -477,11 +493,10 @@ PointSetGeodesicToWarp<TPixel, VDim>
       double scaling = 1.0;
       for(unsigned int a = 0; a < VDim; a++)
         {
-        scaling *= sqrt(2 * vnl_math::pi) * param.sigma / imRef->GetSpacing()[a];
+        scaling *= sqrt(2 * vnl_math::pi) * sigma / imRef->GetSpacing()[a];
         }
 
       // Iterate over time
-      // for(unsigned int t = 0; t < param.N; t++)
       for(int t = tStart; t != tEnd; t+=tdir)
         {
         // Get all landmarks
@@ -525,7 +540,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
           }
 
         // Now all the momenta have been splatted. The next step is to smooth with a Gaussian
-        typename LDDMM::Vec vec_sigma; vec_sigma.Fill(param.sigma);
+        typename LDDMM::Vec vec_sigma; vec_sigma.Fill(sigma);
         LDDMM::vimg_smooth(imSplat, imVelocity, vec_sigma);
 
         // Accumulate the velocity into phi - using imSplat as a temporary
@@ -533,7 +548,7 @@ PointSetGeodesicToWarp<TPixel, VDim>
 
         // Euler interpolation
         LDDMM::interp_vimg(imVelocity, imPhi, 1.0, imSplat, false, true);
-        LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (param.N - 1));
+        LDDMM::vimg_add_scaled_in_place(imPhi, imSplat, tdir * 1.0 / (N - 1));
 
         cout << "." << flush;
 
@@ -594,6 +609,10 @@ int main(int argc, char *argv[])
       {
       param.N = (unsigned int) atoi(argv[++i]);
       }
+    else if(arg == "-R")
+      {
+      param.use_ralston_method = true;
+      }
     else if(arg == "-a" && i < argc-1)
       {
       param.anim_freq = (unsigned int) atoi(argv[++i]);
@@ -624,8 +643,6 @@ int main(int argc, char *argv[])
       }
     }
 
-  check(param.sigma > 0, "Missing or negative sigma parameter");
-  check(param.N > 0 && param.N < 10000, "Incorrect N parameter");
   check(param.dim >= 2 && param.dim <= 3, "Incorrect N parameter");
   check(param.fnMesh.length(), "Missing target filename");
 

@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <random>
 
 #include <vtksys/SystemTools.hxx>
 
@@ -2194,7 +2195,8 @@ int meshcluster(Parameters &p, bool isPolyData)
         for(unsigned int ip = ip_start; ip < ip_end; ip++)
           {
           // Shuffle the permutation
-          random_shuffle(permutation.begin(), permutation.end());
+          std::mt19937 rng(std::time(nullptr));
+          std::shuffle(permutation.begin(), permutation.end(), rng);
 
           // Initialize the histogram at zero
           hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
