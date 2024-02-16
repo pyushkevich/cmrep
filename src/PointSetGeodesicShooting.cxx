@@ -1052,7 +1052,7 @@ struct QuaternionRotationTraits<TFloat, 3>
   static Vec quaternion_to_point(const Quaternion &q) { return q.v; }
   static Quaternion zero_rotation()
     {
-    return Quaternion(0, typename Quaternion::Vec(0., 0., 1.0));
+    return Quaternion(1.0, typename Quaternion::Vec(0., 0., 0.));
     }
   static Quaternion coeff_to_quaternion(const double  *arr)
     {
@@ -1076,7 +1076,7 @@ struct QuaternionRotationTraits<TFloat, 2>
   static Vec quaternion_to_point(const Quaternion &q) { return Vec(q.v[0], q.v[1]); }
   static Quaternion zero_rotation()
     {
-    return Quaternion(0, typename Quaternion::Vec(0., 0., 1.0));
+    return Quaternion(1.0, typename Quaternion::Vec(0., 0., 0.));
     }
   static Quaternion coeff_to_quaternion(const double *arr)
     {
@@ -1112,10 +1112,17 @@ public:
       center /= X.rows();
 
       // Apply quaternion to each point
+      auto v = q.v;
+      auto r = q.r;
       for(unsigned int i = 0; i < n; i++)
         {
         Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
-        Quaternion z_i = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q);
+        auto p = x_i.v;
+        // Quaternion z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
+
+        Quaternion z_i(0, v * dot_product(v, p) + r * r * p);
+
+        // Quaternion z_i_2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q);
         Vec y_i = QRTraits::quaternion_to_point(z_i) + center + b;
         Y.set_row(i, y_i.as_ref());
         }
@@ -1137,6 +1144,8 @@ public:
     df_db.fill(0.0);
 
     // Apply quaternion to each point
+    auto v = q.v;
+    auto r = q.r;
     for(unsigned int i = 0; i < n; i++)
       {
       Vec df_dY_i = df_dY.get_row(i);
@@ -1144,11 +1153,18 @@ public:
 
       Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
       Quaternion q_df_dY_i = QRTraits::point_to_quaternion(df_dY_i);
+      auto p = x_i.v, dp = q_df_dY_i.v;
 
-      auto q1 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q_df_dY_i, x_i), q);
-      auto q2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, q_df_dY_i), q_df_dY_i);
-      df_dq.r += q1.r + q2.r;
-      df_dq.v += q1.v + q2.v;
+      // df_dq.r += dot_product(dp, 2 * r * (p + vnl_cross_3d(v, p)));
+      df_dq.r += dot_product(dp, 2 * r * p);
+      df_dq.v += v * dot_product(dp, p) + dp * dot_product(v, p) + v * dot_product(dp, p);
+      // df_dq.v += 2 * r * vnl_cross_3d(dp, p);
+      // df_dq.v -= vnl_cross_3d(vnl_cross_3d(dp, p), v) + vnl_cross_3d(vnl_cross_3d(v, p), dp);
+
+      // auto q1 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q_df_dY_i, x_i), q);
+      // auto q2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q_df_dY_i);
+      // df_dq.r -= q1.r - q2.r;
+      // df_dq.v -= q1.v - q2.v;
       }
     }
 };
@@ -1288,6 +1304,7 @@ public:
     if(verbose && g && f)
       {
       printf("It = %04d  f = %8.2f\n", iter, *f);
+      std::cout << x << std::endl;
       }
     }
 
@@ -2009,6 +2026,9 @@ PointSetShootingProblem<TFloat, VDim>
   auto coeff_init = cost_fn.InitialSolution();
   vnl_vector<double> x(cost_fn.get_number_of_unknowns());
   cost_fn.CoeffToArray(coeff_init, x.data_block());
+  vnl_random rnd;
+  for(unsigned int i = 0; i < x.size(); i++)
+    x[i] = x[i] + rnd.normal() * 0.01;
 
   // Uncomment this code to test derivative computation
   if(param.n_deriv_check > 0)
@@ -2047,6 +2067,7 @@ PointSetShootingProblem<TFloat, VDim>
 
   // Take the optimal solution
   auto coeff_best = cost_fn.ArrayToCoeff(x.data_block());
+  std::cout << "Best coeff: q = " << std::get<0>(coeff_init).r << ", " << std::get<0>(coeff_init).v << ", b = " << std::get<1>(coeff_init) << std::endl;
 }
 
 
