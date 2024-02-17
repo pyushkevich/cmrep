@@ -1101,16 +1101,26 @@ public:
   typedef QuaternionRotationTraits<TFloat, VDim> QRTraits;
   typedef vnl_matrix<TFloat> Matrix;
 
-  // Apply transform to a set of coordiantes X
-  static void Forward(const Quaternion &q, const Vec &b, const Matrix &X, Matrix &Y)
-    {
-      // Compute the center of X, rotation will be applied to the center
-      int n = X.rows();
-      Vec center(0.0);
-      for(unsigned int i = 0; i < n; i++)
-        center += X.get_row(i);
-      center /= X.rows();
+  QuaternionTransform(const Matrix &X)
+  {
+    // Store the fixed coordinates
+    this->X = X;
+    n = X.rows();
 
+    // Compute the center and the extents of the coordinates for centering/scaling
+    Vec extent;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      auto col = X.get_column(a);
+      center[a] = col.mean();
+      extent[a] = col.max_value() - col.min_value();
+      }
+    diameter = extent.max_value();
+  }
+
+  // Apply transform to a set of coordiantes X
+  void Forward(const Quaternion &q, const Vec &b, Matrix &Y)
+    {
       // Apply quaternion to each point
       auto v = q.v;
       auto r = q.r;
@@ -1120,25 +1130,18 @@ public:
         auto p = x_i.v;
         // Quaternion z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
 
-        Quaternion z_i(0, v * dot_product(v, p) + r * r * p);
+        Quaternion z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
 
         // Quaternion z_i_2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q);
-        Vec y_i = QRTraits::quaternion_to_point(z_i) + center + b;
+        Vec y_i = QRTraits::quaternion_to_point(z_i) + center + b * diameter;
         Y.set_row(i, y_i.as_ref());
         }
     }
 
   // Backpropagate the gradient of some loss F with respect to Y onto the quaternion coefficients
-  static void Backward(const Quaternion &q, const Vec &b, const Matrix &X,
+  void Backward(const Quaternion &q, const Vec &b,
                        const Matrix &df_dY, Quaternion &df_dq, Vec &df_db)
     {
-    // Compute the center of X, rotation will be applied to the center
-    int n = X.rows();
-    Vec center(0.0);
-    for(unsigned int i = 0; i < n; i++)
-      center += X.get_row(i);
-    center /= X.rows();
-
     // Initialize return values
     df_dq = Quaternion();
     df_db.fill(0.0);
@@ -1149,24 +1152,24 @@ public:
     for(unsigned int i = 0; i < n; i++)
       {
       Vec df_dY_i = df_dY.get_row(i);
-      df_db += df_dY_i;
+      df_db += df_dY_i * diameter;
 
       Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
       Quaternion q_df_dY_i = QRTraits::point_to_quaternion(df_dY_i);
       auto p = x_i.v, dp = q_df_dY_i.v;
 
-      // df_dq.r += dot_product(dp, 2 * r * (p + vnl_cross_3d(v, p)));
-      df_dq.r += dot_product(dp, 2 * r * p);
-      df_dq.v += v * dot_product(dp, p) + dp * dot_product(v, p) + v * dot_product(dp, p);
-      // df_dq.v += 2 * r * vnl_cross_3d(dp, p);
-      // df_dq.v -= vnl_cross_3d(vnl_cross_3d(dp, p), v) + vnl_cross_3d(vnl_cross_3d(v, p), dp);
-
-      // auto q1 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q_df_dY_i, x_i), q);
-      // auto q2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q_df_dY_i);
-      // df_dq.r -= q1.r - q2.r;
-      // df_dq.v -= q1.v - q2.v;
+      df_dq.r += dot_product(dp, 2 * r * p) + 2 * dot_product(dp, vnl_cross_3d(v, p));
+      df_dq.v += dp * dot_product(v, p) + p * dot_product(dp, v);
+      df_dq.v += 2 * r * vnl_cross_3d(p, dp);
+      df_dq.v -= vnl_cross_3d(vnl_cross_3d(dp, v), p) + vnl_cross_3d(vnl_cross_3d(p, v), dp);
       }
     }
+
+private:
+  unsigned int n;
+  Matrix X;
+  Vec center;
+  TFloat diameter;
 };
 
 
@@ -1191,7 +1194,7 @@ public:
       Triangulation tri_template,
       Triangulation tri_target,
       const Matrix &lab_template, const Matrix &lab_target)
-    : vnl_cost_function(QRTraits::size + VDim)
+    : vnl_cost_function(QRTraits::size + VDim), qtran(q0)
     {
     this->q0 = q0;
     this->qT = qT;
@@ -1260,14 +1263,23 @@ public:
     return E_data;
   }
 
- virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
+  virtual void ComputeTransformedPoints(const CoeffType &c, Matrix &q1)
+    {
+    // From x, extract quaterion
+    Quaternion w; Vec b;
+    std::tie(w, b) = c;
+    q1.set_size(q0.rows(), q0.columns());
+    qtran.Forward(w, b, q1);
+    }
+
+  virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
     {
     // From x, extract quaterion
     Quaternion w; Vec b;
     std::tie(w, b) = ArrayToCoeff(x.data_block());
 
     // Transform the coordinates from q0 to q1
-    QuaternionTransform::Forward(w, b, q0, q1);
+    qtran.Forward(w, b, q1);
 
     // Compute the data attachment term
     double E_data = 0.0;
@@ -1291,7 +1303,7 @@ public:
       {
       // Flow alpha back
       Quaternion df_dw; Vec df_db;
-      QuaternionTransform::Backward(w, b, q0, alpha, df_dw, df_db);
+      qtran.Backward(w, b, alpha, df_dw, df_db);
 
       // Pack the gradient into the output vector
       CoeffToArray(std::make_tuple(df_dw, df_db), g->data_block());
@@ -1317,6 +1329,9 @@ protected:
   ShootingParameters param;
   Matrix qT, p0, q0, p1, q1;
   Matrix alpha;
+
+  // Quaternion math
+  QuaternionTransform qtran;
 
   // Attachment terms
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
@@ -2058,15 +2073,20 @@ PointSetShootingProblem<TFloat, VDim>
   optimizer.set_f_tolerance(1e-9);
   optimizer.set_x_tolerance(1e-4);
   optimizer.set_g_tolerance(1e-6);
-  optimizer.set_trace(false);
+  optimizer.set_trace(true);
   optimizer.set_max_function_evals(param.iter_grad);
 
   // vnl_conjugate_gradient optimizer(cost_fn);
   // optimizer.set_trace(true);
   optimizer.minimize(x);
+  std::cout << "Best X: " << x << std::endl;
 
   // Take the optimal solution
   auto coeff_best = cost_fn.ArrayToCoeff(x.data_block());
+  Matrix q1;
+  cost_fn.ComputeTransformedPoints(coeff_best, q1);
+
+
   std::cout << "Best coeff: q = " << std::get<0>(coeff_init).r << ", " << std::get<0>(coeff_init).v << ", b = " << std::get<1>(coeff_init) << std::endl;
 }
 
