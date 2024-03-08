@@ -2365,7 +2365,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     double p_uncorr = std::get<0>(p_sorted[k]);
     double p_fdr = std::get<3>(p_sorted[k]);
     unsigned int i_mesh = std::get<1>(p_sorted[k]), i_elt = std::get<2>(p_sorted[k]);
-    printf("Tuple %f, %f, %d, %d   thresh %f \n", p_uncorr, p_fdr, i_mesh, i_elt, k * 0.05 / p_sorted.size());
+    // printf("Tuple %f, %f, %d, %d   thresh %f \n", p_uncorr, p_fdr, i_mesh, i_elt, k * 0.05 / p_sorted.size());
     fdr_arr[i_mesh]->SetTuple1(i_elt, p_fdr);
     }
 
