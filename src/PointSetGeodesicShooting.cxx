@@ -1100,6 +1100,7 @@ public:
   typedef Quaternion<TFloat> Quaternion;
   typedef QuaternionRotationTraits<TFloat, VDim> QRTraits;
   typedef vnl_matrix<TFloat> Matrix;
+  typedef QuaternionTransform<TFloat, VDim> Self;
 
   QuaternionTransform(const Matrix &X)
   {
@@ -1117,6 +1118,12 @@ public:
       }
     diameter = extent.max_value();
   }
+
+  void CopyCenterAndDiameter(const Self &other)
+    {
+    this->center = other.center;
+    this->diameter = other.diameter;
+    }
 
   // Apply transform to a set of coordiantes X
   void Forward(const Quaternion &q, const Vec &b, Matrix &Y)
@@ -1194,7 +1201,7 @@ public:
       Triangulation tri_template,
       Triangulation tri_target,
       const Matrix &lab_template, const Matrix &lab_target)
-    : vnl_cost_function(QRTraits::size + VDim), qtran(q0)
+    : vnl_cost_function(QRTraits::size + VDim), qtran(q0), qtran_inv(qT)
     {
     this->q0 = q0;
     this->qT = qT;
@@ -1204,22 +1211,30 @@ public:
     this->q1.set_size(m, VDim);
     this->alpha.set_size(m, VDim);
 
-    // Set up the currents attachment
-    currents_attachment = nullptr;
+    // Set up the currents attachment terms in both directions
+    ca_temp_to_targ = nullptr;
+    ca_targ_to_temp = nullptr;
     if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
       {
-      // Create the appropriate attachment term (currents or varifolds)
-      currents_attachment = new CATerm(
+      // Create the appropriate attachment terms (currents or varifolds)
+      ca_temp_to_targ = new CATerm(
             param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
             m, qT, tri_template, tri_target, lab_template, lab_target,
+            param.currents_sigma, param.n_threads);
+
+      ca_targ_to_temp = new CATerm(
+            param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
+            qT.rows(), q0, tri_target, tri_template, lab_target, lab_template,
             param.currents_sigma, param.n_threads);
       }
     }
 
   ~PointSetSimilarityMatchingCostFunction()
   {
-    if(currents_attachment)
-      delete currents_attachment;
+    if(ca_temp_to_targ)
+      delete ca_temp_to_targ;
+    if(ca_targ_to_temp)
+      delete ca_targ_to_temp;
   }
 
   CoeffType ArrayToCoeff(const double *arr)
@@ -1278,8 +1293,13 @@ public:
     Quaternion w; Vec b;
     std::tie(w, b) = ArrayToCoeff(x.data_block());
 
+    // Compute the inverse transform parameters from w and b
+    Quaternion w_inv = q_scale(q_conj(q), 1.0 / q_norm(q)**2)
+
     // Transform the coordinates from q0 to q1
     qtran.Forward(w, b, q1);
+
+    // Transform the coordinates from q1 to q0 by computing the corresponding transform
 
     // Compute the data attachment term
     double E_data = 0.0;
@@ -1331,11 +1351,11 @@ protected:
   Matrix alpha;
 
   // Quaternion math
-  QuaternionTransform qtran;
+  QuaternionTransform qtran, qtran_inv;
 
   // Attachment terms
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
-  CATerm *currents_attachment;
+  CATerm *ca_targ_to_temp, *ca_temp_to_targ;
 
   // Number of control points (k) and total points (m)
   unsigned int k, m;
