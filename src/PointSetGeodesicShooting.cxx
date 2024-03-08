@@ -1779,7 +1779,7 @@ public:
 
   static int similarity_matching(
       const ShootingParameters &param,
-      const Matrix &q0, const Matrix &qT,
+      const Matrix &q0, const Matrix &qT, Matrix &q0_sim, Matrix &qT_sim,
       const Triangulation &tri_template, const Triangulation &tri_target,
       const Matrix &lab_template, const Matrix &lab_target);
 
@@ -2029,7 +2029,7 @@ template <class TFloat, unsigned int VDim>
 int
 PointSetShootingProblem<TFloat, VDim>
 ::similarity_matching(const ShootingParameters &param,
-    const Matrix &q0, const Matrix &qT,
+    const Matrix &q0, const Matrix &qT, Matrix &q0_sim, Matrix &qT_sim,
     const Triangulation &tri_template, const Triangulation &tri_target,
     const Matrix &lab_template, const Matrix &lab_target)
 {
@@ -2083,11 +2083,23 @@ PointSetShootingProblem<TFloat, VDim>
 
   // Take the optimal solution
   auto coeff_best = cost_fn.ArrayToCoeff(x.data_block());
-  Matrix q1;
-  cost_fn.ComputeTransformedPoints(coeff_best, q1);
+  cost_fn.ComputeTransformedPoints(coeff_best, q0_sim);
 
+  std::cout << "Best coeff: q = " << std::get<0>(coeff_best).r << ", " << std::get<0>(coeff_best).v << ", b = " << std::get<1>(coeff_best) << std::endl;
 
-  std::cout << "Best coeff: q = " << std::get<0>(coeff_init).r << ", " << std::get<0>(coeff_init).v << ", b = " << std::get<1>(coeff_init) << std::endl;
+  // CostFn cost_fn_inv(param, qT, q0, tri_target, tri_template, lab_target, lab_template);
+  // auto coeff_inv = coeff_best;
+
+  CostFn cost_fn_inv(param, q0_sim, qT, tri_template, tri_target, lab_template, lab_target);
+
+  // From x, extract quaterion
+  typename CostFn::Quaternion w, w_inv;
+  typename CostFn::Vec b, b_inv;
+  std::tie(w, b) = coeff_best;
+  TFloat normsq = w.r*w.r + w.v.squared_magnitude();
+  w_inv = typename CostFn::Quaternion(w.r / normsq, -w.v / normsq);
+  b_inv = -b;
+  cost_fn_inv.ComputeTransformedPoints(std::tuple(w_inv, b_inv), qT_sim);
 }
 
 
@@ -2336,7 +2348,18 @@ PointSetShootingProblem<TFloat, VDim>
   // Are we doing similarity matching - then it's a whole separate thing
   if(param.do_similarity_matching)
     {
-    return similarity_matching(param, q0, qT, tri_template, tri_target, lab_template, lab_target);
+    // Perform similarity matching
+    Matrix q_fit(m,VDim);
+    Matrix q_fit_inv(m,VDim);
+    similarity_matching(param, q0, qT, q_fit, q_fit_inv, tri_template, tri_target, lab_template, lab_target);
+    vtkNew<vtkPolyData> pTran; pTran->DeepCopy(pTemplate);
+    for(unsigned int i = 0; i < m; i++)
+      pTran->GetPoints()->SetPoint(i, q_fit.get_row(i).data_block());
+    WriteVTKData(pTran, param.fnOutput);
+    vtkNew<vtkPolyData> pTranTarg; pTranTarg->DeepCopy(pTemplate);
+    for(unsigned int i = 0; i < m; i++)
+      pTranTarg->GetPoints()->SetPoint(i, q_fit_inv.get_row(i).data_block());
+    WriteVTKData(pTranTarg, "test_inv.vtk");
     }
 
   // Run some iterations of gradient descent
