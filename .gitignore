@@ -16,3 +16,6 @@ CTestConfig.cmake.user*
 
 # Sphinx
 docs/build
+
+# Jupyter
+scripts/jupyter/.ipynb_checkpoints

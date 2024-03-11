@@ -1032,6 +1032,27 @@ struct Quaternion
                 q1.v * q2.r - q2.v * q1.r - vnl_cross_3d(q1.v, q2.v));
     }
 
+  static Self mult_q1conj_q2(const Self &q1, const Self &q2)
+    {
+    return Self(q1.r * q2.r + dot_product(q1.v, q2.v),
+                - q1.v * q2.r + q2.v * q1.r - vnl_cross_3d(q1.v, q2.v));
+    }
+
+  static Self mult_q1_x_q2conj(const Self &q1, const Self &x, const Self &q2)
+    {
+    return mult_q1_q2conj(mult_q1_q2(q1, x), q2);
+    }
+
+  static Self mult_q1conj_x_q2(const Self &q1, const Self &x, const Self &q2)
+    {
+    return mult_q1_q2(mult_q1conj_q2(q1, x), q2);
+    }
+
+  static Self scale(const Self &q, TFloat a)
+    {
+    return Self(q.r * a, q.v * a);
+    }
+
   TFloat r;
   Vec v;
 };
@@ -1179,6 +1200,121 @@ private:
   TFloat diameter;
 };
 
+/**
+ * @brief Bidirectional similarity transform of two point sets based on quaternions.
+ * See quat.ipynb for the computation of these transformations and their derivatives.
+ */
+template <class TFloat, unsigned int VDim>
+class BidirectionalQuaternionTransform
+{
+public:
+  typedef vnl_vector_fixed<TFloat, VDim> Vec;
+  typedef Quaternion<TFloat> Q;
+  typedef QuaternionRotationTraits<TFloat, VDim> QRTraits;
+  typedef vnl_matrix<TFloat> Matrix;
+  typedef BidirectionalQuaternionTransform<TFloat, VDim> Self;
+
+  BidirectionalQuaternionTransform(const Matrix &X0, const Matrix &XT)
+  {
+    // Store the fixed coordinates
+    this->X0 = X0;
+    this->XT = XT;
+    n0 = X0.rows();
+    nT = XT.rows();
+
+    // Compute the center and the extents of the template's coordinates
+    Vec extent;
+    for(unsigned int a = 0; a < VDim; a++)
+      {
+      auto col = X0.get_column(a);
+      center[a] = col.mean();
+      extent[a] = col.max_value() - col.min_value();
+      }
+    diameter = extent.max_value();
+  }
+
+  // Transform a single point from template to target
+  Vec TransformPoint(const Q &q, const Vec &b, const Vec &X)
+  {
+    Q qx_i = QRTraits::point_to_quaternion(X - center);
+    Q qy_i = Q::mult_q1_x_q2conj(q, qx_i, q);
+    Vec y_i = QRTraits::quaternion_to_point(qy_i) + center + b * diameter;
+    return y_i;
+  }
+
+  // Apply transform to a set of coordiantes X
+  void Forward(const Q &q, const Vec &b, Matrix &Y0, Matrix &YT)
+    {
+      // Transform the template towards the target
+      for(unsigned int i = 0; i < n0; i++)
+        {
+        Vec y_i = TransformPoint(q, b, X0.get_row(i));
+        Y0.set_row(i, y_i.as_ref());
+        }
+
+      // Get the squared norm of the quaternion
+      TFloat q_norm_sq = Q::mult_q1_q2conj(q, q).r;
+
+      // Transform the target towards the template
+      for(unsigned int i = 0; i < nT; i++)
+        {
+        Q qx_i = QRTraits::point_to_quaternion(XT.get_row(i) - center - b * diameter);
+        Q qy_i = Q::scale(Q::mult_q1conj_x_q2(q, qx_i, q), 1.0 / (q_norm_sq * q_norm_sq));
+        Vec y_i = QRTraits::quaternion_to_point(qy_i) + center;
+        YT.set_row(i, y_i.as_ref());
+        }
+    }
+
+  // Backpropagate the gradient of some loss F with respect to Y onto the quaternion coefficients
+  void Backward(const Q &q, const Vec &b,
+                const Matrix &df_dY0, const Matrix &df_dYT,
+                Q &df_dq, Vec &df_db)
+    {
+    // Initialize return values
+    df_dq = Q();
+    df_db.fill(0.0);
+
+    // Backprop the forward transform
+    for(unsigned int i = 0; i < n0; i++)
+      {
+      Vec gamma = df_dY0.get_row(i);
+      df_db += gamma * diameter;
+
+      Q x_i = QRTraits::point_to_quaternion(X0.get_row(i) - center);
+      Q q_gamma = QRTraits::point_to_quaternion(gamma);
+      Q grad_q = Q::scale(Q::mult_q1_x_q2conj(q_gamma, q, x_i), 2.0);
+      df_dq.r += grad_q.r; df_dq.v += grad_q.v;
+      }
+
+    // Get the squared norm of the quaternion
+    TFloat q_norm_sq = Q::mult_q1_q2conj(q, q).r;
+    TFloat q_norm_4 = q_norm_sq * q_norm_sq;
+    TFloat q_norm_6 = q_norm_4 * q_norm_sq;
+
+    // Backprop the backward transform
+    for(unsigned int i = 0; i < nT; i++)
+      {
+      Vec gamma = df_dYT.get_row(i);
+      Q q_gamma = QRTraits::point_to_quaternion(gamma);
+      Q x_i = QRTraits::point_to_quaternion(XT.get_row(i) - center - b * diameter);
+
+      df_db -= QRTraits::quaternion_to_point(Q::mult_q1_x_q2conj(q, q_gamma, q)) * (diameter / q_norm_4);
+
+      Q grad_q_t1 = Q::scale(Q::mult_q1_x_q2conj(x_i, q, q_gamma), 2.0 / q_norm_4);
+      Vec z = QRTraits::quaternion_to_point(Q::mult_q1conj_x_q2(q, x_i, q));
+      Q grad_q_t2 = Q::scale(q, -4.0 * dot_product(z, gamma) / q_norm_6);
+      df_dq.r += grad_q_t1.r + grad_q_t2.r;
+      df_dq.v += grad_q_t1.v + grad_q_t2.v;
+      }
+    }
+
+private:
+  unsigned int n0, nT;
+  Matrix X0, XT;
+  Vec center;
+  TFloat diameter;
+};
+
 
 template <class TFloat, unsigned int VDim>
 class PointSetSimilarityMatchingCostFunction : public vnl_cost_function
@@ -1201,15 +1337,18 @@ public:
       Triangulation tri_template,
       Triangulation tri_target,
       const Matrix &lab_template, const Matrix &lab_target)
-    : vnl_cost_function(QRTraits::size + VDim), qtran(q0), qtran_inv(qT)
+    : vnl_cost_function(QRTraits::size + VDim), qtran(q0, qT)
     {
     this->q0 = q0;
     this->qT = qT;
     this->param = param;
     this->k = p0.rows();
-    this->m = q0.rows();
-    this->q1.set_size(m, VDim);
-    this->alpha.set_size(m, VDim);
+    this->m0 = q0.rows();
+    this->mT = qT.rows();
+    this->q1.set_size(m0, VDim);
+    this->qT_1.set_size(mT, VDim);
+    this->gamma0.set_size(m0, VDim);
+    this->gammaT.set_size(mT, VDim);
 
     // Set up the currents attachment terms in both directions
     ca_temp_to_targ = nullptr;
@@ -1219,12 +1358,12 @@ public:
       // Create the appropriate attachment terms (currents or varifolds)
       ca_temp_to_targ = new CATerm(
             param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
-            m, qT, tri_template, tri_target, lab_template, lab_target,
+            m0, qT, tri_template, tri_target, lab_template, lab_target,
             param.currents_sigma, param.n_threads);
 
       ca_targ_to_temp = new CATerm(
             param.attach == ShootingParameters::Current ? CATerm::CURRENTS : CATerm::VARIFOLD,
-            qT.rows(), q0, tri_target, tri_template, lab_target, lab_template,
+            mT, q0, tri_target, tri_template, lab_target, lab_template,
             param.currents_sigma, param.n_threads);
       }
     }
@@ -1264,14 +1403,14 @@ public:
   {
     // Compute the landmark errors
     double E_data = 0.0;
-    unsigned int i_temp = (k == m) ? 0 : k;
-    alpha.fill(0.0);
+    unsigned int i_temp = (k == m0) ? 0 : k;
+    gamma0.fill(0.0);
     for(unsigned int a = 0; a < VDim; a++)
       {
-      for(unsigned int i = i_temp; i < m; i++)
+      for(unsigned int i = i_temp; i < m0; i++)
         {
-        alpha(i,a) = q1(i,a) - qT(i - i_temp, a);
-        E_data += 0.5 * alpha(i,a) * alpha(i,a);
+        gamma0(i,a) = q1(i,a) - qT(i - i_temp, a);
+        E_data += 0.5 * gamma0(i,a) * gamma0(i,a);
         }
       }
 
@@ -1284,8 +1423,35 @@ public:
     Quaternion w; Vec b;
     std::tie(w, b) = c;
     q1.set_size(q0.rows(), q0.columns());
-    qtran.Forward(w, b, q1);
+
+    Matrix qT_1(qT.rows(), qT.columns());
+    qtran.Forward(w, b, q1, qT_1);
     }
+
+  virtual Matrix ComputeAffineMatrix(const CoeffType &c)
+  {
+    // From x, extract quaterion
+    Quaternion w; Vec b;
+    std::tie(w, b) = c;
+
+    // Initialize the affine matrix
+    Matrix A(VDim+1, VDim+1);
+    A.set_identity();
+
+    // Apply the transform to the first VDim columns, this will give us b in the last row,
+    // and Rx+b in the other rows.
+    Matrix X = A.extract(VDim+1, VDim);
+    auto b_aff = qtran.TransformPoint(w, b, X.get_row(VDim));
+    for(unsigned int i = 0; i < VDim; i++)
+      {
+      auto y = qtran.TransformPoint(w, b, X.get_row(i));
+      for(unsigned int j = 0; j < VDim; j++)
+        A(j,i) =  y[j] - b_aff[j];
+      A(i,VDim) = b_aff[i];
+      }
+
+    return A;
+  }
 
   virtual void compute(vnl_vector<double> const& x, double *f, vnl_vector<double>* g)
     {
@@ -1293,37 +1459,37 @@ public:
     Quaternion w; Vec b;
     std::tie(w, b) = ArrayToCoeff(x.data_block());
 
-    // Compute the inverse transform parameters from w and b
-    Quaternion w_inv = q_scale(q_conj(q), 1.0 / q_norm(q)**2)
-
-    // Transform the coordinates from q0 to q1
-    qtran.Forward(w, b, q1);
-
-    // Transform the coordinates from q1 to q0 by computing the corresponding transform
+    // Transform the coordinates from q0 to q1 and from qT to qT_1
+    qtran.Forward(w, b, q1, qT_1);
 
     // Compute the data attachment term
-    double E_data = 0.0;
+    double E_temp_to_targ = 0.0, E_targ_to_temp = 0.0;
     if(param.attach == ShootingParameters::Euclidean)
       {
-      E_data = ComputeEuclideanAttachment();
+      E_temp_to_targ = ComputeEuclideanAttachment();
       }
     else if(param.attach == ShootingParameters::Current || param.attach == ShootingParameters::Varifold)
       {
-      static int my_iter = 0;
       if(g)
-        E_data = currents_attachment->Compute(q1, &alpha);
+        {
+        E_temp_to_targ = this->ca_temp_to_targ->Compute(q1, &gamma0);
+        E_targ_to_temp = this->ca_targ_to_temp->Compute(qT_1, &gammaT);
+        }
       else
-        E_data = currents_attachment->Compute(q1);
+        {
+        E_temp_to_targ = this->ca_temp_to_targ->Compute(q1);
+        E_targ_to_temp = this->ca_targ_to_temp->Compute(qT_1);
+        }
       }
 
     if(f)
-      *f = E_data;
+      *f = E_temp_to_targ + E_targ_to_temp;
 
     if(g)
       {
       // Flow alpha back
       Quaternion df_dw; Vec df_db;
-      qtran.Backward(w, b, alpha, df_dw, df_db);
+      qtran.Backward(w, b, gamma0, gammaT, df_dw, df_db);
 
       // Pack the gradient into the output vector
       CoeffToArray(std::make_tuple(df_dw, df_db), g->data_block());
@@ -1335,8 +1501,7 @@ public:
     // Print current results
     if(verbose && g && f)
       {
-      printf("It = %04d  f = %8.2f\n", iter, *f);
-      std::cout << x << std::endl;
+      printf("It = %04d  tmp_2_trg = %8.2f  trg_2_tmp = %8.2f  total = %8.2f\n", iter, E_temp_to_targ, E_targ_to_temp, *f);
       }
     }
 
@@ -1347,18 +1512,18 @@ public:
 
 protected:
   ShootingParameters param;
-  Matrix qT, p0, q0, p1, q1;
-  Matrix alpha;
+  Matrix qT, p0, q0, p1, q1, qT_1;
+  Matrix gamma0, gammaT;
 
   // Quaternion math
-  QuaternionTransform qtran, qtran_inv;
+  BidirectionalQuaternionTransform<TFloat, VDim> qtran;
 
   // Attachment terms
   typedef CurrentsAttachmentTerm<TFloat, VDim> CATerm;
   CATerm *ca_targ_to_temp, *ca_temp_to_targ;
 
   // Number of control points (k) and total points (m)
-  unsigned int k, m;
+  unsigned int k, m0, mT;
 
   // Whether to print values at each iteration
   bool verbose = false;
@@ -2103,23 +2268,19 @@ PointSetShootingProblem<TFloat, VDim>
 
   // Take the optimal solution
   auto coeff_best = cost_fn.ArrayToCoeff(x.data_block());
-  cost_fn.ComputeTransformedPoints(coeff_best, q0_sim);
-
   std::cout << "Best coeff: q = " << std::get<0>(coeff_best).r << ", " << std::get<0>(coeff_best).v << ", b = " << std::get<1>(coeff_best) << std::endl;
 
-  // CostFn cost_fn_inv(param, qT, q0, tri_target, tri_template, lab_target, lab_template);
-  // auto coeff_inv = coeff_best;
+  // Compute the transform matrix
+  vnl_matrix<TFloat> A = cost_fn.ComputeAffineMatrix(coeff_best);
+  std::ofstream matrixFile;
+  matrixFile.open(param.fnOutput.c_str());
+  matrixFile << A;
+  matrixFile.close();
 
-  CostFn cost_fn_inv(param, q0_sim, qT, tri_template, tri_target, lab_template, lab_target);
+  // Apply transformation to the template
+  cost_fn.ComputeTransformedPoints(coeff_best, q0_sim);
 
-  // From x, extract quaterion
-  typename CostFn::Quaternion w, w_inv;
-  typename CostFn::Vec b, b_inv;
-  std::tie(w, b) = coeff_best;
-  TFloat normsq = w.r*w.r + w.v.squared_magnitude();
-  w_inv = typename CostFn::Quaternion(w.r / normsq, -w.v / normsq);
-  b_inv = -b;
-  cost_fn_inv.ComputeTransformedPoints(std::tuple(w_inv, b_inv), qT_sim);
+  return 0;
 }
 
 
@@ -2371,15 +2532,23 @@ PointSetShootingProblem<TFloat, VDim>
     // Perform similarity matching
     Matrix q_fit(m,VDim);
     Matrix q_fit_inv(m,VDim);
-    similarity_matching(param, q0, qT, q_fit, q_fit_inv, tri_template, tri_target, lab_template, lab_target);
-    vtkNew<vtkPolyData> pTran; pTran->DeepCopy(pTemplate);
-    for(unsigned int i = 0; i < m; i++)
-      pTran->GetPoints()->SetPoint(i, q_fit.get_row(i).data_block());
-    WriteVTKData(pTran, param.fnOutput);
-    vtkNew<vtkPolyData> pTranTarg; pTranTarg->DeepCopy(pTemplate);
-    for(unsigned int i = 0; i < m; i++)
-      pTranTarg->GetPoints()->SetPoint(i, q_fit_inv.get_row(i).data_block());
-    WriteVTKData(pTranTarg, "test_inv.vtk");
+    int rc = similarity_matching(param, q0, qT, q_fit, q_fit_inv, tri_template, tri_target, lab_template, lab_target);
+
+    // This code will save transformed mesh
+    /*
+    if(rc == 0)
+      {
+      vtkNew<vtkPolyData> pTran; pTran->DeepCopy(pTemplate);
+      for(unsigned int i = 0; i < m; i++)
+        pTran->GetPoints()->SetPoint(i, q_fit.get_row(i).data_block());
+      WriteVTKData(pTran, "test_fwd.vtk");
+      vtkNew<vtkPolyData> pTranTarg; pTranTarg->DeepCopy(pTemplate);
+      for(unsigned int i = 0; i < m; i++)
+        pTranTarg->GetPoints()->SetPoint(i, q_fit_inv.get_row(i).data_block());
+      WriteVTKData(pTranTarg, "test_inv.vtk");
+      }
+    */
+    return rc;
     }
 
   // Run some iterations of gradient descent
@@ -2581,7 +2750,6 @@ int main(int argc, char *argv[])
     else if(arg == "-a")
       {
       std::string mode = cl.read_string();
-      cout << mode << endl;
       if(mode == "L")
         param.attach = ShootingParameters::Euclidean;
       else if(mode == "C")
