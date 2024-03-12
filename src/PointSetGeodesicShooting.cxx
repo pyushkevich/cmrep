@@ -1067,19 +1067,19 @@ template <class TFloat>
 struct QuaternionRotationTraits<TFloat, 3>
 {
   typedef vnl_vector_fixed<TFloat, 3> Vec;
-  typedef Quaternion<TFloat> Quaternion;
+  typedef Quaternion<TFloat> Q;
 
-  static Quaternion point_to_quaternion(const Vec &x) { return Quaternion(0, x); }
-  static Vec quaternion_to_point(const Quaternion &q) { return q.v; }
-  static Quaternion zero_rotation()
+  static Q point_to_quaternion(const Vec &x) { return Q(0, x); }
+  static Vec quaternion_to_point(const Q &q) { return q.v; }
+  static Q zero_rotation()
     {
-    return Quaternion(1.0, typename Quaternion::Vec(0., 0., 0.));
+    return Q(1.0, typename Q::Vec(0., 0., 0.));
     }
-  static Quaternion coeff_to_quaternion(const double  *arr)
+  static Q coeff_to_quaternion(const double  *arr)
     {
-    return Quaternion(arr[0], typename Quaternion::Vec(arr[1], arr[2], arr[3]));
+    return Q(arr[0], typename Q::Vec(arr[1], arr[2], arr[3]));
     }
-  static void quaternion_to_coeff(const Quaternion&q, double *arr)
+  static void quaternion_to_coeff(const Q&q, double *arr)
     {
     arr[0] = q.r; arr[1] = q.v[0]; arr[2] = q.v[1]; arr[3] = q.v[2];
     }
@@ -1091,19 +1091,19 @@ template <class TFloat>
 struct QuaternionRotationTraits<TFloat, 2>
 {
   typedef vnl_vector_fixed<TFloat, 2> Vec;
-  typedef Quaternion<TFloat> Quaternion;
+  typedef Quaternion<TFloat> Q;
 
-  static Quaternion point_to_quaternion(const Vec &x) { return Quaternion(0, typename Quaternion::Vec(x[0], x[1], 0)); }
-  static Vec quaternion_to_point(const Quaternion &q) { return Vec(q.v[0], q.v[1]); }
-  static Quaternion zero_rotation()
+  static Q point_to_quaternion(const Vec &x) { return Q(0, typename Q::Vec(x[0], x[1], 0)); }
+  static Vec quaternion_to_point(const Q &q) { return Vec(q.v[0], q.v[1]); }
+  static Q zero_rotation()
     {
-    return Quaternion(1.0, typename Quaternion::Vec(0., 0., 0.));
+    return Q(1.0, typename Q::Vec(0., 0., 0.));
     }
-  static Quaternion coeff_to_quaternion(const double *arr)
+  static Q coeff_to_quaternion(const double *arr)
     {
-    return Quaternion(arr[0], typename Quaternion::Vec(0, 0, arr[1]));
+    return Q(arr[0], typename Q::Vec(0, 0, arr[1]));
     }
-  static void quaternion_to_coeff(const Quaternion&q, double *arr)
+  static void quaternion_to_coeff(const Q&q, double *arr)
     {
     arr[0] = q.r; arr[1] = q.v[2];
     }
@@ -1118,7 +1118,7 @@ class QuaternionTransform
 {
 public:
   typedef vnl_vector_fixed<TFloat, VDim> Vec;
-  typedef Quaternion<TFloat> Quaternion;
+  typedef Quaternion<TFloat> Q;
   typedef QuaternionRotationTraits<TFloat, VDim> QRTraits;
   typedef vnl_matrix<TFloat> Matrix;
   typedef QuaternionTransform<TFloat, VDim> Self;
@@ -1147,31 +1147,31 @@ public:
     }
 
   // Apply transform to a set of coordiantes X
-  void Forward(const Quaternion &q, const Vec &b, Matrix &Y)
+  void Forward(const Q &q, const Vec &b, Matrix &Y)
     {
       // Apply quaternion to each point
       auto v = q.v;
       auto r = q.r;
       for(unsigned int i = 0; i < n; i++)
         {
-        Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
+        Q x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
         auto p = x_i.v;
-        // Quaternion z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
+        // Q z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
 
-        Quaternion z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
+        Q z_i(0, v * dot_product(v, p) + r * r * p + 2 * r * vnl_cross_3d(v, p) - vnl_cross_3d(vnl_cross_3d(v, p), v));
 
-        // Quaternion z_i_2 = Quaternion::mult_q1_q2conj(Quaternion::mult_q1_q2(q, x_i), q);
+        // Q z_i_2 = Q::mult_q1_q2conj(Q::mult_q1_q2(q, x_i), q);
         Vec y_i = QRTraits::quaternion_to_point(z_i) + center + b * diameter;
         Y.set_row(i, y_i.as_ref());
         }
     }
 
   // Backpropagate the gradient of some loss F with respect to Y onto the quaternion coefficients
-  void Backward(const Quaternion &q, const Vec &b,
-                       const Matrix &df_dY, Quaternion &df_dq, Vec &df_db)
+  void Backward(const Q &q, const Vec &b,
+                       const Matrix &df_dY, Q &df_dq, Vec &df_db)
     {
     // Initialize return values
-    df_dq = Quaternion();
+    df_dq = Q();
     df_db.fill(0.0);
 
     // Apply quaternion to each point
@@ -1182,8 +1182,8 @@ public:
       Vec df_dY_i = df_dY.get_row(i);
       df_db += df_dY_i * diameter;
 
-      Quaternion x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
-      Quaternion q_df_dY_i = QRTraits::point_to_quaternion(df_dY_i);
+      Q x_i = QRTraits::point_to_quaternion(X.get_row(i) - center);
+      Q q_df_dY_i = QRTraits::point_to_quaternion(df_dY_i);
       auto p = x_i.v, dp = q_df_dY_i.v;
 
       df_dq.r += dot_product(dp, 2 * r * p) + 2 * dot_product(dp, vnl_cross_3d(v, p));
@@ -1322,11 +1322,11 @@ class PointSetSimilarityMatchingCostFunction : public vnl_cost_function
 public:
   typedef vnl_matrix<int> Triangulation;
 
-  typedef QuaternionTransform<TFloat, VDim> QuaternionTransform;
-  typedef typename QuaternionTransform::QRTraits QRTraits;
-  typedef typename QuaternionTransform::Quaternion Quaternion;
-  typedef typename QuaternionTransform::Vec Vec;
-  typedef typename QuaternionTransform::Matrix Matrix;
+  typedef QuaternionTransform<TFloat, VDim> QT;
+  typedef typename QT::QRTraits QRTraits;
+  typedef typename QT::Q Quaternion;
+  typedef typename QT::Vec Vec;
+  typedef typename QT::Matrix Matrix;
 
   // Separate type because vnl optimizer is double-only
   typedef std::tuple<Quaternion, Vec> CoeffType;
