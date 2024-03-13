@@ -1222,23 +1222,33 @@ public:
     n0 = X0.rows();
     nT = XT.rows();
 
-    // Compute the center and the extents of the template's coordinates
+    // Compute the centers and the extents of the template's coordinates
     Vec extent;
     for(unsigned int a = 0; a < VDim; a++)
       {
+      // Template
       auto col = X0.get_column(a);
-      center[a] = col.mean();
+      C0[a] = col.mean();
       extent[a] = col.max_value() - col.min_value();
+
+      // Target
+      CT[a] = XT.get_column(a).mean();
       }
     diameter = extent.max_value();
   }
 
+  // Get translation that matches centers
+  Vec GetCenterMatrchTranslation()
+    {
+    return (CT - C0) / diameter;
+    }
+
   // Transform a single point from template to target
   Vec TransformPoint(const Q &q, const Vec &b, const Vec &X)
   {
-    Q qx_i = QRTraits::point_to_quaternion(X - center);
+    Q qx_i = QRTraits::point_to_quaternion(X - C0);
     Q qy_i = Q::mult_q1_x_q2conj(q, qx_i, q);
-    Vec y_i = QRTraits::quaternion_to_point(qy_i) + center + b * diameter;
+    Vec y_i = QRTraits::quaternion_to_point(qy_i) + C0 + b * diameter;
     return y_i;
   }
 
@@ -1258,9 +1268,9 @@ public:
       // Transform the target towards the template
       for(unsigned int i = 0; i < nT; i++)
         {
-        Q qx_i = QRTraits::point_to_quaternion(XT.get_row(i) - center - b * diameter);
+        Q qx_i = QRTraits::point_to_quaternion(XT.get_row(i) - C0 - b * diameter);
         Q qy_i = Q::scale(Q::mult_q1conj_x_q2(q, qx_i, q), 1.0 / (q_norm_sq * q_norm_sq));
-        Vec y_i = QRTraits::quaternion_to_point(qy_i) + center;
+        Vec y_i = QRTraits::quaternion_to_point(qy_i) + C0;
         YT.set_row(i, y_i.as_ref());
         }
     }
@@ -1280,7 +1290,7 @@ public:
       Vec gamma = df_dY0.get_row(i);
       df_db += gamma * diameter;
 
-      Q x_i = QRTraits::point_to_quaternion(X0.get_row(i) - center);
+      Q x_i = QRTraits::point_to_quaternion(X0.get_row(i) - C0);
       Q q_gamma = QRTraits::point_to_quaternion(gamma);
       Q grad_q = Q::scale(Q::mult_q1_x_q2conj(q_gamma, q, x_i), 2.0);
       df_dq.r += grad_q.r; df_dq.v += grad_q.v;
@@ -1296,7 +1306,7 @@ public:
       {
       Vec gamma = df_dYT.get_row(i);
       Q q_gamma = QRTraits::point_to_quaternion(gamma);
-      Q x_i = QRTraits::point_to_quaternion(XT.get_row(i) - center - b * diameter);
+      Q x_i = QRTraits::point_to_quaternion(XT.get_row(i) - C0 - b * diameter);
 
       df_db -= QRTraits::quaternion_to_point(Q::mult_q1_x_q2conj(q, q_gamma, q)) * (diameter / q_norm_4);
 
@@ -1311,7 +1321,7 @@ public:
 private:
   unsigned int n0, nT;
   Matrix X0, XT;
-  Vec center;
+  Vec C0, CT;
   TFloat diameter;
 };
 
@@ -1395,7 +1405,7 @@ public:
   CoeffType InitialSolution()
     {
     Quaternion q = QRTraits::zero_rotation();
-    Vec b(0.0);
+    Vec b = qtran.GetCenterMatrchTranslation();
     return std::make_tuple(q, b);
     }
 
