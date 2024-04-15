@@ -1,11 +1,14 @@
 #ifndef _VTKMeshHalfEdgeWrapper_h_
 #define _VTKMeshHalfEdgeWrapper_h_
 
+#include <limits>
 #include "vtkPolyData.h"
 
 class VTKMeshHalfEdgeWrapper
 {
 public:
+  static constexpr unsigned int NA = std::numeric_limits<unsigned int>::max();
+
   VTKMeshHalfEdgeWrapper(vtkPolyData *mesh)
     {
     // Prepare the mesh
@@ -40,6 +43,11 @@ public:
     xFlipEdge = new unsigned int[nHalfEdges];
     xNextEdge = new unsigned int[nHalfEdges];
     xFaceEdges = new unsigned int[nFaces];
+
+    // Fill the xFace array with NA values, because not every half-edge
+    // may have a face, right?
+    for(unsigned int i = 0; i < nHalfEdges; i++)
+      xFace[i] = NA;
 
     // Allocate an additional array that keeps track of how many half-edges
     // have been added for each vertex
@@ -121,6 +129,10 @@ public:
   /** Get the number of vertices in the graph */
   unsigned int GetNumberOfVertices() const 
     { return nVertices; }
+
+  /** Get the number of vertices in the graph */
+  unsigned int GetNumberOfFaces() const
+    { return nFaces; }
 
   /** Get the number of edges in the graph. This returns the number of
    * bidirectional edges, which is twice the number of directional edges.

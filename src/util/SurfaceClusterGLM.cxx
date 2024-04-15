@@ -29,6 +29,7 @@
 #include "vnl/vnl_rank.h"
 #include "vnl/vnl_math.h"
 #include "vnl/algo/vnl_matrix_inverse.h"
+#include "VTKMeshHalfEdgeWrapper.h"
 
 #include <string>
 #include <iostream>
@@ -37,6 +38,7 @@
 #include <map>
 #include <set>
 #include <random>
+#include <deque>
 
 #include <vtksys/SystemTools.hxx>
 
@@ -62,7 +64,7 @@ public:
     char buffer[1024];
     va_list parg;
     va_start(parg, fmt);
-    vsprintf(buffer, fmt, parg);
+    vsnprintf(buffer, 1024, fmt, parg );
     va_end(parg);
     message=buffer;
     }
@@ -148,6 +150,12 @@ const char *usage_text =
   "                 the design matrix, with 1 meaning the subject should be included in the \n"
   "                 analysis, 0 meaning excluded. This makes it easier to run analysis on \n"
   "                 different subsets of subjects without generating separate input meshes \n"
+  "  --tfce <del_h> Perform threshold-free cluster enhancement (TFCE). This will compute a \n"
+  "                 TFCE map (Smith and Nichols, 2009) using the statistic selected with -s \n"
+  "                 and step size delta. Parameter del_h (step size in cluster height) should be\n"
+  "                 order of magnitude smaller than the range of the statistic, e.g., 0.1 for t-maps\n"
+  "  --tfce-h <val> Set the value of the exponent applied to the cluster height, default 2.0\n"
+  "  --tfce-e <val> Set the value of the exponent applied to the cluster extent, default 0.5\n"
   "  --threads <n>  Set the number of threads used in parallel\n";
 
 int usage()
@@ -181,7 +189,7 @@ typedef std::vector<Cluster> ClusterArray;
 
 // Templated IO classes to read mesh data
 template <class TMeshType>
-TMeshType * ReadMesh(const char *fname)
+TMeshType * ReadMesh(const char *)
 { return NULL; }
 
 template <>
@@ -614,13 +622,253 @@ void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *arr
     }
 }
 
-template <class TMeshType>
-ClusterArray ComputeClusters(
-  TMeshType *mesh,
-  Domain dom,
-  double thresh, 
-  TMeshType **mout = NULL)
-{ ClusterArray ca(1) ; return ca; }
+template <class TDataset>
+class TFCEComputer
+{
+public:
+  TFCEComputer(TDataset *mesh, const char *arr_name, Domain dom, double dh, double E, double H)
+  {
+  }
+
+  void Compute(vtkDataArray *tfce)
+  {
+    std::cerr << "TFCE not implemented for this mesh type" << std::endl;
+    tfce->Fill(0.0);
+  }
+};
+
+template <>
+class TFCEComputer<vtkPolyData>
+{
+public:
+  TFCEComputer(vtkPolyData *mesh, const char *arr_name, Domain dom, double dh, double E, double H)
+    : mesh(mesh), he(mesh), dom(dom), dh(dh), E(E), H(H),
+      triangle_queue(he.GetNumberOfFaces())
+  {
+    // Get the right array
+    arr = dom == POINT ? mesh->GetPointData()->GetArray(arr_name) : mesh->GetCellData()->GetArray(arr_name);
+
+    // Triangles are assigned a cluster index
+    tri_cluster_idx.set_size(he.GetNumberOfFaces());
+
+    // Initialize the per-triangle tfce map
+    cluster_f.set_size(he.GetNumberOfFaces());
+    tri_tfce.set_size(he.GetNumberOfFaces());
+
+    // Compute the area of each triangle
+    tri_area.set_size(he.GetNumberOfFaces());
+    for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+      {
+      // Compute the area of the triangle
+      double p0[3], p1[3], p2[3];
+      vtkCell *cell = mesh->GetCell(i);
+      vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
+      mesh->GetPoint(a0, p0); mesh->GetPoint(a1, p1); mesh->GetPoint(a2, p2);
+      tri_area[i] = std::abs(vtkTriangle::TriangleArea(p0, p1, p2));
+      }
+
+    // Initialize the partial area array
+    tri_supra_thresh_area.set_size(he.GetNumberOfFaces());
+
+    // Initialize the queue
+    triangle_queue.clear();
+  }
+
+  void Compute(vtkDataArray *tfce)
+  {
+    // Reset the per-triangle TFCE map
+    tri_tfce.fill(0.0);
+
+    // Iterate over the levels
+    for(double h = dh; true; h += dh)
+      {
+      // Mark triangles as visitable (0) or not visitable (1) based on whether they
+      // are partially or fully above the threshold h
+      tri_cluster_idx.fill(-1);
+      unsigned int n_above = 0;
+
+      // Initialize the suprathreshold area array to the full area array
+      tri_supra_thresh_area.copy_in(tri_area.data_block());
+
+      if(dom == POINT)
+        {
+        // Iterate over the half-edges. If one of the vertices in a half-edge is above
+        // the threshold, then the face associated with this half-edge should be
+        // assigned 0, i.e., it will be assigned to a cluster.
+        // Also compute the suprathreshold area of each face. This can be computed by
+        // scaling the area of the triangle by the proportion of each edge that is
+        // above the threshold.
+        for(unsigned int i = 0; i < he.GetNumberOfHalfEdges(); i++)
+          {
+          int v1 = he.GetHalfEdgeVertex(i), v0 = he.GetHalfEdgeTailVertex(i);
+          int f = he.GetHalfEdgeFace(i);
+          double h0 = arr->GetTuple1(v0), h1 = arr->GetTuple1(v1);
+          if(h0 >= h || h1 >= h)
+            {
+            tri_cluster_idx[he.GetHalfEdgeFace(i)] = 0;
+            n_above++;
+            if(h0 < h)
+              {
+              double t = (h - h0) / (h1 - h0);
+              tri_supra_thresh_area[f] *= 1 - t;
+              }
+            else if(h1 < h)
+              {
+              double t = (h - h0) / (h1 - h0);
+              tri_supra_thresh_area[f] *= t;
+              }
+            }
+          }
+        }
+      else
+        {
+        // Just check each face - no need to check vertices
+        for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+          if(arr->GetTuple1(i) >= h)
+            {
+            tri_cluster_idx[i] = 0;
+            n_above++;
+            }
+        }
+
+      // Zero out the area of faced that are not visited
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        if(tri_cluster_idx[i] < 0)
+          tri_supra_thresh_area[i] = 0.0;
+
+      // Check if any triangles are above the threshold, if not, quit
+      if(n_above == 0)
+        break;
+
+      // Initialize the per-cluster function f (h^H * area^E) for each cluster
+      cluster_f.fill(0.0);
+
+      // Now we need to perform fast marching over the triangles, grouping them into
+      // clusters and accumulating cluster areas. For this, we need some kind of a heap
+      // to keep track of all the "active" triangles, i.e., triangles that could be
+      // added to the current cluster.
+      int curr_cluster = 1;
+      double area = 0;
+      triangle_queue.clear();
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        {
+        // If a triangle is not on the candidate list, skip it, it has already been visited
+        // or it should not be visited (-1)
+        if(tri_cluster_idx[i] != 0) continue;
+
+        // Add the current vertex to the queue
+        triangle_queue.push_back(i);
+        while(triangle_queue.size() > 0)
+          {
+          // Look at the front of the queue, mark as part of current cluster, add area
+          unsigned int f = triangle_queue.front();
+          tri_cluster_idx[f] = curr_cluster;
+          area += tri_supra_thresh_area[f];
+
+          // Look at the neighbors of this triangle, add them to the queue if not visited
+          int he_start = he.GetFaceHalfEdge(f), he_curr = he_start;
+          for(unsigned int j = 0; j < 3; j++)
+            {
+            unsigned int f_nbr = he.GetHalfEdgeFace(he.GetHalfEdgeOpposite(he_curr));
+            if(f_nbr == f)
+              throw std::string("wrong logic");
+            if(f_nbr != VTKMeshHalfEdgeWrapper::NA && tri_cluster_idx[f_nbr] == 0)
+              {
+              tri_cluster_idx[f_nbr] = curr_cluster;
+              triangle_queue.push_back(f_nbr);
+              }
+
+            he_curr = he.GetHalfEdgeNext(he_curr);
+            }
+
+          // Pop the current triangle off the queue
+          triangle_queue.pop_front();
+          }
+
+        // Record the area of this cluster -> send it to the vertices.
+        cluster_f[curr_cluster] = std::pow(h, H) * std::pow(area, E);
+        // printf("h = %8.6f  cluster %03d  area = %8.6f  f = %8.6f\n", h, curr_cluster, area, cluster_f[curr_cluster]);
+
+        // Increase the cluster number, reset the area
+        curr_cluster++;
+        area = 0.0;
+        }
+
+      // Iterate over the triangles. Each triangle should be assigned a cluster,
+      // except for triangles that are below the current height h, which will be
+      // given cluster value -1. We initialize the cluster array to 0, which means
+      // no triangle has been assigned yet
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        if(tri_cluster_idx[i] >= 0)
+          tri_tfce[i] += cluster_f[tri_cluster_idx[i]];
+
+      // Generate an output mesh
+      /*
+      char buffer[256];
+      snprintf(buffer, 256, "tfve_cluster_index_%6.4f", h);
+      vtkSmartPointer<vtkFloatArray> a_idx = AddArrayToMesh(mesh, CELL, buffer, 1, 0.0);
+      snprintf(buffer, 256, "tfve_cluster_parea_%6.4f", h);
+      vtkSmartPointer<vtkFloatArray> a_area = AddArrayToMesh(mesh, CELL, buffer, 1, 0.0);
+      snprintf(buffer, 256, "tfve_cluster_aratio_%6.4f", h);
+      vtkSmartPointer<vtkFloatArray> a_area_ratio = AddArrayToMesh(mesh, CELL, buffer, 1, 0.0);
+      snprintf(buffer, 256, "tfve_cluster_f_%6.4f", h);
+      vtkSmartPointer<vtkFloatArray> a_f = AddArrayToMesh(mesh, CELL, buffer, 1, 0.0);
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        {
+        a_idx->SetTuple1(i, tri_cluster_idx[i]);
+        a_area->SetTuple1(i, tri_supra_thresh_area[i]);
+        a_area_ratio->SetTuple1(i, tri_supra_thresh_area[i] / tri_area[i]);
+        a_f->SetTuple1(i, cluster_f[tri_cluster_idx[i]]);
+        }
+        */
+      }
+
+    // Assign the tfce value to vertices or cells depending on what the use wants
+    if(dom == POINT)
+      {
+      tfce->SetNumberOfComponents(1);
+      tfce->SetNumberOfTuples(he.GetNumberOfVertices());
+      tfce->Fill(0.0);
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        {
+        // Split the tFCE between the vertices
+        vtkCell *cell = mesh->GetCell(i);
+        for(unsigned int j = 0; j < 3; j++)
+          {
+          auto pid = cell->GetPointId(j);
+          tfce->SetTuple1(pid, tfce->GetTuple1(pid) + tri_tfce[i] / 3.0);
+          }
+        }
+      }
+    else
+      {
+      tfce->SetNumberOfComponents(1);
+      tfce->SetNumberOfTuples(he.GetNumberOfFaces());
+      for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+        tfce->SetTuple1(i, tri_tfce[i]);
+      }
+  }
+
+private:
+  vtkPolyData *mesh;
+  VTKMeshHalfEdgeWrapper he;
+  Domain dom;
+  double dh, E, H;
+
+  // Active data array
+  vtkDataArray *arr;
+
+  // For every triangle in the mesh, we need to keep track of a cluster index
+  // assigned to it.
+  vnl_vector<int> tri_cluster_idx;
+  vnl_vector<double> tri_area, tri_supra_thresh_area;
+
+  // For every vertex, associate it with a cluster
+  vnl_vector<double> cluster_f, tri_tfce;
+
+  // A queue used to manage the current cluster
+  std::deque<int> triangle_queue;
+};
 
 class ClusterComputer
 {
@@ -878,310 +1126,6 @@ ClusterComputer::ComputeClusters(bool build_combo_mesh)
         mout->GetCellData()->SetActiveScalars(scalar_name);
         }
       }
-    }
-
-  // Return the cluster array
-  return ca;
-}
-
-template <>
-ClusterArray ComputeClusters(
-  vtkPolyData *mesh,
-  Domain dom,
-  double thresh, 
-  vtkPolyData **mout)
-{
-  // This is the thresholded out / clipped out region
-  vtkSmartPointer<vtkDataSet> fin = NULL, fout = NULL; 
-
-  if (dom == POINT)
-	{
-    // Initialize mesh
-    vtkSmartPointer<vtkClipPolyData> fContour = vtkClipPolyData::New();
-
-    // Clip the data field at the threshold
-    fContour->SetInputData(mesh);
-    fContour->SetValue(thresh);
-
-    // Generate the background too 
-    if(mout)
-      fContour->GenerateClippedOutputOn();
-
-    // Run the filter
-    fContour->Update();
-    fin = fContour->GetOutput();
-
-    if(mout)
-      fout = fContour->GetClippedOutput();
-    } 
-  else
-    {  
-    // Initialize mesh
-    vtkSmartPointer<vtkThreshold> fThresh = vtkThreshold::New();
-
-    // Threshold the cell data field
-    fThresh->SetInputData(mesh);
-    fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-    fThresh->SetUpperThreshold(thresh);
-    fThresh->SetThresholdFunction(vtkThreshold::THRESHOLD_UPPER);
-    fThresh->Update();
-    fin = fThresh->GetOutput();
-    } 
-
-  // Get the connected components
-  vtkSmartPointer<vtkConnectivityFilter> fConnect = vtkConnectivityFilter::New();
-  fConnect->SetInputData(fin);
-  fConnect->SetExtractionModeToAllRegions();
-  fConnect->ColorRegionsOn();
-  fConnect->Update();
-
-  // Convert the result to polydata (why?)
-  vtkSmartPointer<vtkGeometryFilter> geo = vtkGeometryFilter::New();
-  geo->SetInputData(fConnect->GetOutput());
-  geo->Update();
-  
-  vtkSmartPointer<vtkPolyData> p = geo->GetOutput();
-
-  // Number of elements to process
-  int nelt = (dom == POINT) ? 
-    p->GetNumberOfPoints() : p->GetNumberOfCells();
-
-  // Create output data arrays for computing area element
-  vtkFloatArray * daArea = AddArrayToMesh(p, dom, "area_element", 1, 0.0);
-
-  // Compute the area of each triangle in the cluster set
-  for(int k = 0; k < p->GetNumberOfCells(); k++)
-    {
-    vtkCell *cell = p->GetCell(k);
-    if(cell->GetCellType() != VTK_TRIANGLE)
-      throw MCException("Wrong cell type, should be VTK_TRIANGLE");
-
-    // Compute the area of the triangle
-    double p0[3], p1[3], p2[3];
-    vtkIdType a0 = cell->GetPointId(0), a1 = cell->GetPointId(1), a2 = cell->GetPointId(2);
-    p->GetPoint(a0, p0); p->GetPoint(a1, p1); p->GetPoint(a2, p2); 
-    double area = vtkTriangle::TriangleArea(p0, p1, p2);
-
-    if(dom == POINT)
-      {  
-      // Split the volume between neighbors
-      daArea->SetTuple1(a0, area / 3.0 + daArea->GetTuple1(a0));
-      daArea->SetTuple1(a1, area / 3.0 + daArea->GetTuple1(a1));
-      daArea->SetTuple1(a2, area / 3.0 + daArea->GetTuple1(a2));
-      }
-    else
-      {
-      // No need to split, working with cells
-      daArea->SetTuple1(k, area);
-      }
-    }
-
-  // The scalars in fin are the input statistic
-  vtkDataArray * daStat = GetScalarsFromMesh(fin, dom);
-
-  // The scalars in p are the region IDs
-  vtkDataArray * daRegion = GetScalarsFromMesh(p, dom);
-
-  // Build up the cluster array
-  ClusterArray ca(fConnect->GetNumberOfExtractedRegions());
-  for(int i = 0; i < nelt; i++)
-    {
-    size_t region = (size_t) (daRegion->GetTuple1(i));
-    double x = daStat->GetTuple1(i);
-    double a = daArea->GetTuple1(i);
-    ca[region].n++;
-    ca[region].area += a;
-    ca[region].power += a * x;
-    ca[region].tvalue += x;
-    }
-
-  // Get the output if needed
-  if(mout != NULL)
-    {
-    if(dom == POINT)
-      {
-      // Assign each cell in cut away piece a ClusterId of -1
-      AddArrayToMesh(fout, CELL, "RegionId", 1, -1.0);
-
-      // Assign a RegionId to each cell in the thresholded part
-      vtkFloatArray * prid = AddArrayToMesh(p, CELL, "RegionId", 1, 0.0);
-
-      for(int i = 0; i < p->GetNumberOfCells(); i++)
-        {
-        vtkCell *cell = p->GetCell(i);
-        double c1 = daRegion->GetTuple1(cell->GetPointId(0));
-        double c2 = daRegion->GetTuple1(cell->GetPointId(1));
-        double c3 = daRegion->GetTuple1(cell->GetPointId(2));
-        if(c1 != c2 || c1 != c3 || c2 != c3)
-          throw MCException("Inconsistent RegionID mapping");
-
-        prid->SetTuple1(i, c1);
-        }
-
-      // Merge the two arrays
-      *mout = vtkPolyData::New();
-      MergeMeshPieces(p, fout, *mout);
-      (*mout)->GetPointData()->SetActiveScalars(daStat->GetName());
-      }
-    else
-      {
-      // Apply an inverted threshold
-      vtkThreshold *fThreshInv = vtkThreshold::New();
-
-      // Threshold the cell data field
-      fThreshInv->SetInputData(mesh);
-      fThreshInv->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-      fThreshInv->SetLowerThreshold(thresh - 1.e-6);
-      fThreshInv->SetThresholdFunction(vtkThreshold::THRESHOLD_LOWER);
-      fThreshInv->Update();
-      vtkUnstructuredGrid *cut = fThreshInv->GetOutput();
-      fThreshInv->Delete();
-
-      // Each cell in p already has a region id. Just need to add regionids to the cut
-      AddArrayToMesh(cut, CELL, "RegionId", 1, -1);
-
-      // Merge the pieces
-      *mout = vtkPolyData::New();
-      MergeMeshPieces(p, cut, *mout);
-      (*mout)->GetCellData()->SetActiveScalars(daStat->GetName());
-      }
-    }
-
-  // Return the cluster array
-  return ca;
-}
-
-template <>
-ClusterArray ComputeClusters(
-  vtkUnstructuredGrid *mesh,
-  Domain dom,
-  double thresh, 
-  vtkUnstructuredGrid **mout )
-{
-  vtkClipDataSet *fContour = NULL;
-  vtkThreshold *fThresh = NULL;
-
-  vtkUnstructuredGrid *f;
-  if(dom == POINT)
-    {  
-    // Initialize mesh
-    fContour = vtkClipDataSet::New();
-
-    // Clip the data field at the threshold
-    fContour->SetInputData(mesh);
-    fContour->SetValue(thresh);
-    fContour->Update();
-    f = fContour->GetOutput();
-    }
-  else
-    {  
-     // Initialize mesh
-     fThresh = vtkThreshold::New();
-
-     // Threshold the cell data field
-     fThresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, vtkDataSetAttributes::SCALARS); 
-     fThresh->SetInputData(mesh);
-     fThresh->SetUpperThreshold(thresh);
-     fThresh->SetThresholdFunction(vtkThreshold::THRESHOLD_UPPER);
-     fThresh->Update();
-     f = fThresh->GetOutput();
-  }
-
-  vtkDataSetAttributes *fdata = (dom == POINT) ? 
-    (vtkDataSetAttributes *) f->GetPointData() : 
-    (vtkDataSetAttributes *) f->GetCellData();
-
-  // Get the connected components
-  vtkConnectivityFilter * fConnect = vtkConnectivityFilter::New();
-  fConnect->SetInputData(f);
-  fConnect->SetExtractionModeToAllRegions();
-  fConnect->ColorRegionsOn();
-  fConnect->Update();
-  vtkUnstructuredGrid *p = dynamic_cast<vtkUnstructuredGrid *>(fConnect->GetOutput());
-
-  vtkDataSetAttributes *pdata = (dom == POINT) ? 
-    (vtkDataSetAttributes *) p->GetPointData() : 
-    (vtkDataSetAttributes *) p->GetCellData();
-
-  // Number of elements to process
-  int nelt = (dom == POINT) ? 
-    p->GetNumberOfPoints() : p->GetNumberOfCells();
-
-  // Create output data arrays for computing volume element
-  vtkFloatArray *daArea = vtkFloatArray::New();
-  daArea->SetName("volume_element");
-  daArea->SetNumberOfComponents(1);
-  daArea->SetNumberOfTuples(nelt);
-  daArea->FillComponent(0, 0.0);
-
-  // Compute the volume of each tetra in the cluster set
-  for(int k = 0; k < p->GetNumberOfCells(); k++)
-    {
-    vtkCell *cell = p->GetCell(k);
-
-    // Do this, otherwise output is meaningless
-    if(cell->GetCellType() != VTK_TETRA)
-      throw MCException("Wrong cell type");
-
-    // Compute the volume of the tetra
-    vtkIdType a0 = cell->GetPointId(0);
-    vtkIdType a1 = cell->GetPointId(1);
-    vtkIdType a2 = cell->GetPointId(2);
-    vtkIdType a3 = cell->GetPointId(3);
-    double p0[3], p1[3], p2[3], p3[3];
-    p->GetPoint(a0, p0);
-    p->GetPoint(a1, p1);
-    p->GetPoint(a2, p2);
-    p->GetPoint(a3, p3);
-
-    double area = vtkTetra::ComputeVolume(p0, p1, p2, p3);
-
-    if(dom == POINT)
-      {  
-      // Split the volume between neighbors
-      daArea->SetTuple1(a0, abs(area) / 4.0 + daArea->GetTuple1(a0));
-      daArea->SetTuple1(a1, abs(area) / 4.0 + daArea->GetTuple1(a1));
-      daArea->SetTuple1(a2, abs(area) / 4.0 + daArea->GetTuple1(a2));
-      daArea->SetTuple1(a3, abs(area) / 4.0 + daArea->GetTuple1(a3));
-      }
-    else
-      {
-      // No need to split, working with cells
-      daArea->SetTuple1(k, abs(area));
-      }
-    }
-
-  vtkDataArray *daRegion = pdata->GetScalars();
-  vtkDataArray *daData = fdata->GetScalars();
-
-  // Build up the cluster array
-  ClusterArray ca(fConnect->GetNumberOfExtractedRegions());
-  for(int i = 0; i < nelt; i++)
-    {
-    size_t region = (size_t) (daRegion->GetTuple1(i));
-    double x = daData->GetTuple1(i);
-    double a = daArea->GetTuple1(i);
-    ca[region].n++;
-    ca[region].area += a;
-    ca[region].power += a * x;
-    ca[region].tvalue += x;
-    }
-
-  // Get the output if needed
-  if(mout != NULL)
-    {
-    pdata->AddArray(daArea);
-    *mout = p;
-    }
-  else
-    {
-    // Delete the intermediates
-    daArea->Delete();
-    fConnect->Delete();
-    if (dom==POINT)
-       fContour->Delete();
-    else
-       fThresh->Delete();
     }
 
   // Return the cluster array
@@ -1684,6 +1628,9 @@ struct Parameters
   // What is the threshold on
   ThresholdType ttype;
 
+  // TFCE config
+  double tfce_delta_h = 0.0, tfce_H = 2.0, tfce_E = 0.5;
+
   // Max threads
   int max_threads;
 
@@ -1927,6 +1874,7 @@ int meshcluster(Parameters &p, bool isPolyData)
   string an_pval = "P-value (uncorr)", an_pcorr = "P-value (FWER corrected)", an_fdr = "P-value (FDR corrected)";
   string an_beta = "Beta", an_res = "Residuals", an_betan = "Beta_Nuissance", an_dfarray="DOF";
   string an_cluster_array = "ClusterVariable";
+  string an_tfce = "tfce", an_tfce_pcorr = "tfce P-value (FWER corrected)";
 
   // Create an array of GLM objects
   vector<GeneralLinearModel *> glm;
@@ -2035,7 +1983,7 @@ int meshcluster(Parameters &p, bool isPolyData)
       {
       vtkDataArray *rawData = data;
       char newName[1024];
-      sprintf(newName,"MissingRows_%s", p.array_name.c_str());
+      snprintf(newName,1024,"MissingRows_%s", p.array_name.c_str());
       rawData->SetName(newName);
 
       data = AddArrayToMesh(mesh[i], p.dom, p.array_name, rows_kept.size(), 0, false);
@@ -2088,6 +2036,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * fdr = AddArrayToMesh(mesh[i], p.dom, an_fdr, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
+    vtkFloatArray * tfce_array = AddArrayToMesh(mesh[i], p.dom, an_tfce, 1, 0, false);
     vtkFloatArray * cluster_array = AddArrayToMesh(mesh[i], p.dom, an_cluster_array, 1, 0, true);
     vtkFloatArray * residual {0} ;
     vtkFloatArray * beta_nuiss {0};
@@ -2129,7 +2078,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     }
 
   // Run permutation analysis
-  vector<double> hArea(p.np), hPower(p.np), hStat(p.np);
+  vector<double> hArea(p.np), hPower(p.np), hStat(p.np), hTFCE(p.np);
 
   // Name of the array that is involved in thresholding for permutation testing
   string an_ttype;
@@ -2170,6 +2119,7 @@ int meshcluster(Parameters &p, bool isPolyData)
         vector<MeshPointer> mesh_t;
         vector<GeneralLinearModel *> glm_t;
         vector<ClusterComputer *> clustcomp_t;
+        vector<TFCEComputer<TMeshType> *> tfcecomp_t;
         for(auto &m : mesh)
           {
           // Create a copy of the mesh
@@ -2188,7 +2138,14 @@ int meshcluster(Parameters &p, bool isPolyData)
                             vtkArrayDownCast<vtkFloatArray>(GetArrayFromMesh(m_copy, p.dom, an_dfarray)),
                             mat, con));
 
+          // Create a cluster computer
           clustcomp_t.push_back(new ClusterComputer(m_copy, p.dom, p.threshold));
+
+          // Create a TFCE computer
+          if(p.tfce_delta_h > 0.0)
+            {
+            tfcecomp_t.push_back(new TFCEComputer<TMeshType>(m_copy, an_ttype.c_str(), p.dom, p.tfce_delta_h, p.tfce_E, p.tfce_H));
+            }
           }
 
         // Perform permutations for this thread
@@ -2199,7 +2156,7 @@ int meshcluster(Parameters &p, bool isPolyData)
           std::shuffle(permutation.begin(), permutation.end(), rng);
 
           // Initialize the histogram at zero
-          hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0;
+          hArea[ip] = 0; hPower[ip] = 0; hStat[ip] = 0; hTFCE[ip] = 0;
 
           // Build up the histogram of cluster areas (and powers)
           for(size_t i = 0; i < mesh_t.size(); i++)
@@ -2260,9 +2217,22 @@ int meshcluster(Parameters &p, bool isPolyData)
                 }
               }
 
+            // Compute TFCE if requested
+            if(p.tfce_delta_h > 0.0)
+              {
+              // Compute TFCE
+              vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], p.dom, an_tfce);
+              tfcecomp_t[i]->Compute(arr_tfce);
+              double tfce_stat_max = arr_tfce->GetMaxNorm();
+              if(tfce_stat_max > hTFCE[ip])
+                hTFCE[ip] = tfce_stat_max;
+              }
+
             // Likewise, find the largest scalar
             vtkDataArray *stat = GetScalarsFromMesh(mesh_t[i], p.dom);
-            hStat[ip] = stat->GetMaxNorm();
+            double stat_max = stat->GetMaxNorm();
+            if(stat_max > hStat[ip])
+              hStat[ip] = stat_max;
             }
 
           std::lock_guard<std::mutex> guard(critical);
@@ -2281,6 +2251,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     sort(hArea.begin(), hArea.end());
     sort(hPower.begin(), hPower.end());
     sort(hStat.begin(), hStat.end());
+    sort(hTFCE.begin(), hTFCE.end());
 
     } // End permutation conditional
 
@@ -2315,6 +2286,24 @@ int meshcluster(Parameters &p, bool isPolyData)
     else
       glm[i]->Compute(glm[i]->Y, true, true, false);
     }
+
+
+  // ------------------------------------
+  // Compute TFCE for the original meshes
+  // ------------------------------------
+  if(p.tfce_delta_h > 0.0)
+    {
+    for(size_t i = 0; i < mesh.size(); i++)
+      {
+      // Create a TFCE computer for this mesh
+      TFCEComputer<TMeshType> tfce(mesh[i], an_ttype.c_str(), p.dom, p.tfce_delta_h, p.tfce_E, p.tfce_H);
+
+      // Compute TFCE
+      vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], p.dom, an_tfce);
+      tfce.Compute(arr_tfce);
+      }
+    }
+
 
   // ------------------------------
   // Compute FDR corrected p-values
@@ -2493,6 +2482,19 @@ int meshcluster(Parameters &p, bool isPolyData)
         double pc = 1.0 - (lower_bound(hStat.begin(), hStat.end(), su) - hStat.begin()) / ((double) p.np);
         pcorr->SetTuple1(j, pc);
         }
+
+      // Compute the corrected TFCE p-value
+      if(p.tfce_delta_h > 0.0)
+        {
+        vtkDataArray *tfce = GetArrayFromMesh(mout, p.dom, an_tfce);
+        vtkFloatArray *tfce_pcorr = AddArrayToMesh(mout, p.dom, an_tfce_pcorr, 1, 0);
+        for(int j = 0; j < pcorr->GetNumberOfTuples(); j++)
+          {
+          double su = tfce->GetTuple1(j);
+          double pc = 1.0 - (lower_bound(hTFCE.begin(), hTFCE.end(), su) - hTFCE.begin()) / ((double) p.np);
+          tfce_pcorr->SetTuple1(j, pc);
+          }
+        }
       }
     else
       {
@@ -2603,6 +2605,18 @@ int main(int argc, char *argv[])
           p.ttype = PVALUE;
         else
           throw MCException("Unknown parameter to --stat command (%s)", stat.c_str());
+        }
+      else if(arg == "--tfce")
+        {
+        p.tfce_delta_h = atof(argv[++i]);
+        }
+      else if(arg == "--tfce-h")
+        {
+        p.tfce_H = atof(argv[++i]);
+        }
+      else if(arg == "--tfce-e")
+        {
+        p.tfce_E = atof(argv[++i]);
         }
       else if(arg == "--threads")
         {
