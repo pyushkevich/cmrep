@@ -823,6 +823,14 @@ public:
         */
       }
 
+    // The final TFCE array is on cells - it does not really make so much sense to
+    // project back to vertex space based on how we compute it
+    tfce->SetNumberOfComponents(1);
+    tfce->SetNumberOfTuples(he.GetNumberOfFaces());
+    for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
+      tfce->SetTuple1(i, tri_tfce[i]);
+
+    /*
     // Assign the tfce value to vertices or cells depending on what the use wants
     if(dom == POINT)
       {
@@ -847,6 +855,7 @@ public:
       for(unsigned int i = 0; i < he.GetNumberOfFaces(); i++)
         tfce->SetTuple1(i, tri_tfce[i]);
       }
+    */
   }
 
 private:
@@ -2036,7 +2045,7 @@ int meshcluster(Parameters &p, bool isPolyData)
     vtkFloatArray * pval = AddArrayToMesh(mesh[i], p.dom, an_pval, 1, 0, false);
     vtkFloatArray * fdr = AddArrayToMesh(mesh[i], p.dom, an_fdr, 1, 0, false);
     vtkFloatArray * beta = AddArrayToMesh(mesh[i], p.dom, an_beta, mat.cols(), 0, false);
-    vtkFloatArray * tfce_array = AddArrayToMesh(mesh[i], p.dom, an_tfce, 1, 0, false);
+    vtkFloatArray * tfce_array = AddArrayToMesh(mesh[i], CELL, an_tfce, 1, 0, false);
     vtkFloatArray * cluster_array = AddArrayToMesh(mesh[i], p.dom, an_cluster_array, 1, 0, true);
     vtkFloatArray * residual {0} ;
     vtkFloatArray * beta_nuiss {0};
@@ -2221,7 +2230,7 @@ int meshcluster(Parameters &p, bool isPolyData)
             if(p.tfce_delta_h > 0.0)
               {
               // Compute TFCE
-              vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], p.dom, an_tfce);
+              vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], CELL, an_tfce);
               tfcecomp_t[i]->Compute(arr_tfce);
               double tfce_stat_max = arr_tfce->GetMaxNorm();
               if(tfce_stat_max > hTFCE[ip])
@@ -2299,7 +2308,7 @@ int meshcluster(Parameters &p, bool isPolyData)
       TFCEComputer<TMeshType> tfce(mesh[i], an_ttype.c_str(), p.dom, p.tfce_delta_h, p.tfce_E, p.tfce_H);
 
       // Compute TFCE
-      vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], p.dom, an_tfce);
+      vtkDataArray *arr_tfce = GetArrayFromMesh(mesh[i], CELL, an_tfce);
       tfce.Compute(arr_tfce);
       }
     }
@@ -2486,9 +2495,9 @@ int meshcluster(Parameters &p, bool isPolyData)
       // Compute the corrected TFCE p-value
       if(p.tfce_delta_h > 0.0)
         {
-        vtkDataArray *tfce = GetArrayFromMesh(mout, p.dom, an_tfce);
-        vtkFloatArray *tfce_pcorr = AddArrayToMesh(mout, p.dom, an_tfce_pcorr, 1, 0);
-        for(int j = 0; j < pcorr->GetNumberOfTuples(); j++)
+        vtkDataArray *tfce = GetArrayFromMesh(mout, CELL, an_tfce);
+        vtkFloatArray *tfce_pcorr = AddArrayToMesh(mout, CELL, an_tfce_pcorr, 1, 0);
+        for(int j = 0; j < tfce->GetNumberOfTuples(); j++)
           {
           double su = tfce->GetTuple1(j);
           double pc = 1.0 - (lower_bound(hTFCE.begin(), hTFCE.end(), su) - hTFCE.begin()) / ((double) p.np);
