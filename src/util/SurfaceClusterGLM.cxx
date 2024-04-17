@@ -156,7 +156,8 @@ const char *usage_text =
   "                 order of magnitude smaller than the range of the statistic, e.g., 0.1 for t-maps\n"
   "  --tfce-h <val> Set the value of the exponent applied to the cluster height, default 2.0\n"
   "  --tfce-e <val> Set the value of the exponent applied to the cluster extent, default 0.5\n"
-  "  --threads <n>  Set the number of threads used in parallel\n";
+  "  --threads <n>  Set the number of threads used in parallel\n"
+  "  -z             Z-transform the dependent variable before GLM\n";
 
 int usage()
 {
@@ -1640,6 +1641,9 @@ struct Parameters
   // TFCE config
   double tfce_delta_h = 0.0, tfce_H = 2.0, tfce_E = 0.5;
 
+  // Z-transform
+  bool flag_z_transform = false;
+
   // Max threads
   int max_threads;
 
@@ -2035,6 +2039,35 @@ int meshcluster(Parameters &p, bool isPolyData)
           }
         }
       cout << "Excluded " << n_excluded << " vertices with fewer than " << min_not_nan << " valid observations" << endl;
+      }
+
+    // Perform z-transformation
+    if(p.flag_z_transform)
+      {
+      for(unsigned int j = 0; j < data->GetNumberOfTuples(); j++)
+        {
+        int n = 0;
+        double sum = 0, sum_sq = 0;
+        for(int k = 0; k < data->GetNumberOfComponents(); k++)
+          {
+          double x = data->GetComponent(j, k);
+          if(!std::isnan(x))
+            {
+            sum += x;
+            sum_sq += x * x;
+            n++;
+            }
+          }
+        double x_bar = n > 0 ? sum / n : 0;
+        double var = n > 1 ? sum_sq / n - x_bar * x_bar : 0;
+        double sq = sqrt(var);
+        for(int k = 0; k < data->GetNumberOfComponents(); k++)
+          {
+          double x = data->GetComponent(j, k);
+          if(!std::isnan(x))
+            data->SetComponent(j, k, (x - x_bar) / sq);
+          }
+        }
       }
 
     // Add the statistics array for output. The actual permutation testing always uses
