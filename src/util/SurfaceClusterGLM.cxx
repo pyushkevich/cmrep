@@ -157,7 +157,8 @@ const char *usage_text =
   "  --tfce-h <val> Set the value of the exponent applied to the cluster height, default 2.0\n"
   "  --tfce-e <val> Set the value of the exponent applied to the cluster extent, default 0.5\n"
   "  --threads <n>  Set the number of threads used in parallel\n"
-  "  -z             Z-transform the dependent variable before GLM\n";
+  "  -z             Standardize the dependent variable and predictors before running GLM\n"
+  "                 This way standardized betas can be obtained from the model\n";
 
 int usage()
 {
@@ -1873,6 +1874,42 @@ int meshcluster(Parameters &p, bool isPolyData)
   if(con.rows() != 1)
     throw MCException("Contrast vector must have one row");
 
+  // Standardize the design matrix if requested
+  if(p.flag_z_transform)
+    {
+    for(size_t i = 0; i < mat.columns(); i++)
+      {
+      int n = 0;
+      double sum = 0, sum_sq = 0;
+      std::set<double> uniq_val;
+      for(size_t j = 0; j < mat.rows(); j++)
+        {
+        double x = mat(j,i);
+        if(!std::isnan(x))
+          {
+          sum += x;
+          sum_sq += x * x;
+          n++;
+          uniq_val.insert(x);
+          }
+        }
+      if(uniq_val.size() > 2)
+        {
+        // This is not a categorical variable
+        double x_bar = sum / n;
+        double var = sum_sq / n - x_bar * x_bar;
+        double sq = sqrt(var);
+        printf("Standardized predictor %02d, µ = %6.4f  σ = %6.4f\n", (int) i, x_bar, sq);
+        for(size_t j = 0; j < mat.rows(); j++)
+          {
+          double x = mat(j,i);
+          if(!std::isnan(x))
+            mat(j,i) = (x - x_bar) / sq;
+          }
+        }
+      }
+    }
+
   // Create the shuffle arrays
   vector<int> true_order;
   for(size_t i = 0; i < mat.rows(); i++)
@@ -2044,6 +2081,8 @@ int meshcluster(Parameters &p, bool isPolyData)
     // Perform z-transformation
     if(p.flag_z_transform)
       {
+      // Standardize the dependent variable
+      int n_standardized = 0;
       for(unsigned int j = 0; j < data->GetNumberOfTuples(); j++)
         {
         int n = 0;
@@ -2058,16 +2097,21 @@ int meshcluster(Parameters &p, bool isPolyData)
             n++;
             }
           }
-        double x_bar = n > 0 ? sum / n : 0;
-        double var = n > 1 ? sum_sq / n - x_bar * x_bar : 0;
-        double sq = sqrt(var);
-        for(int k = 0; k < data->GetNumberOfComponents(); k++)
+        if(n > 1)
           {
-          double x = data->GetComponent(j, k);
-          if(!std::isnan(x))
-            data->SetComponent(j, k, (x - x_bar) / sq);
+          n_standardized++;
+          double x_bar = sum / n;
+          double var = sum_sq / n - x_bar * x_bar;
+          double sq = sqrt(var);
+          for(int k = 0; k < data->GetNumberOfComponents(); k++)
+            {
+            double x = data->GetComponent(j, k);
+            if(!std::isnan(x))
+              data->SetComponent(j, k, (x - x_bar) / sq);
+            }
           }
         }
+      printf("Standardized %d of %d dependent variables\n", n_standardized, (int) data->GetNumberOfTuples());
       }
 
     // Add the statistics array for output. The actual permutation testing always uses
@@ -2659,6 +2703,10 @@ int main(int argc, char *argv[])
       else if(arg == "--tfce-e")
         {
         p.tfce_E = atof(argv[++i]);
+        }
+      else if(arg == "-z")
+        {
+        p.flag_z_transform = true;
         }
       else if(arg == "--threads")
         {
