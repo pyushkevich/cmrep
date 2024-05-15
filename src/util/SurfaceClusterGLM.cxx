@@ -473,12 +473,29 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
       f_upd->SetComponent(i, j, f->GetComponent(i, j));
 
   // Iterate
+  printf("Before diffusion: f[1000,10]=%8.4f\n", f->GetComponent(1000,10));
+  unsigned int ncomp = f->GetNumberOfComponents();
   unsigned int jt = 0;
   for(double t = 0; t < time - dt/2; t+=dt)
     {
     // Update f_upd
     for(EdgeSet::iterator it = edges.begin(); it!=edges.end(); ++it)
       {
+      double wa = dt / nbr[it->first];
+      double wb = dt / nbr[it->second];
+      int ia = it->first;
+      int ib = it->second;
+      float *val_a = f_upd->GetPointer(ia * ncomp);
+      float *val_b = f_upd->GetPointer(ib * ncomp);
+      for(int j = 0; j < ncomp; j++)
+        {
+        if(!vnl_math::isnan(val_b[j]))
+          val_a[j] += wa * (val_b[j] - val_a[j]);
+
+        if(!vnl_math::isnan(val_a[j]))
+          val_b[j] += wb * (val_a[j] - val_b[j]);
+        }
+      /*
       double wa = dt / nbr[it->first];
       double wb = dt / nbr[it->second];
       int ia = it->first;
@@ -495,6 +512,7 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
         if(!vnl_math::isnan(val_a_j))
           f_upd->SetComponent(ib, j, f_upd->GetComponent(ib, j) + wb * (val_a_j - val_b_j));
         }
+      */
       }
 
     // Copy f_upd to f
@@ -506,6 +524,7 @@ void PointDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *ar
     if((++jt) % 100 == 0 || t+dt >= time - 0.5 * dt)
       cout << " t = " << t+dt << endl;
     }
+  printf("After diffusion: f[1000,10]=%8.4f\n", f->GetComponent(1000,10));
 }
 
 void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *array)
@@ -582,6 +601,9 @@ void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *arr
       f_upd->SetComponent(i, j, f->GetComponent(i, j));
 
   // Iterate
+  printf("Before diffusion: f[1000,10]=%8.4f\n", f->GetComponent(1000,10));
+
+  unsigned int ncomp = f->GetNumberOfComponents();
   unsigned int jt = 0;
   for(double t = 0; t < time - dt/2; t+=dt)
     {
@@ -592,24 +614,15 @@ void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *arr
       double wb = dt / nbr[it->second];
       int ia = it->first;
       int ib = it->second;
-
-      for(int j = 0; j < f->GetNumberOfComponents(); j++)
+      float *val_a = f_upd->GetPointer(ia * ncomp);
+      float *val_b = f_upd->GetPointer(ib * ncomp);
+      for(int j = 0; j < ncomp; j++)
         {
-        double val_a_j = f->GetComponent(ia,j);
-        double val_b_j = f->GetComponent(ib,j);
+        if(!vnl_math::isnan(val_b[j]))
+          val_a[j] += wa * (val_b[j] - val_a[j]);
 
-        if(!vnl_math::isnan(val_b_j))
-          f_upd->SetComponent(ia, j, f_upd->GetComponent(ia, j) + wa * (val_b_j - val_a_j));
-
-        if(!vnl_math::isnan(val_a_j))
-          f_upd->SetComponent(ib, j, f_upd->GetComponent(ib, j) + wb * (val_a_j - val_b_j));
-
-        /*
-        f_upd->SetComponent(ia, j, 
-          f_upd->GetComponent(ia, j) + wa * (f->GetComponent(ib,j) - f->GetComponent(ia, j)));
-        f_upd->SetComponent(ib, j, 
-          f_upd->GetComponent(ib, j) + wb * (f->GetComponent(ia,j) - f->GetComponent(ib, j)));
-          */
+        if(!vnl_math::isnan(val_a[j]))
+          val_b[j] += wb * (val_a[j] - val_b[j]);
         }
       }
 
@@ -622,6 +635,8 @@ void CellDataDiffusion(vtkDataSet *mesh, double time, double dt, const char *arr
     if((++jt) % 100 == 0 || t+dt >= time - 0.5 * dt)
       cout << " t = " << t+dt << endl;
     }
+  printf("After diffusion: f[1000,10]=%8.4f\n", f->GetComponent(1000,10));
+
 }
 
 template <class TDataset>
@@ -1495,7 +1510,8 @@ void GeneralLinearModel::CommonInit()
   nelt = data->GetNumberOfTuples();
 
   // Rank and degrees of freedom
-  rank = vnl_rank(X.transpose() * X, vnl_rank_row);
+  // rank = vnl_rank(X.transpose() * X, vnl_rank_row);
+  rank = X.columns();
   df = X.rows() - rank;
 
   // Y matrix
