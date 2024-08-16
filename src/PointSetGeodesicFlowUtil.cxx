@@ -117,7 +117,7 @@ PointSetFlow<TPixel, VDim>
 
   // We have read the mesh successfully
   // Create the hamiltonian system
-  HSystem hsys(q0, param.sigma, param.N);
+  HSystem hsys(q0, param.sigma, param.N, 0, 0);
 
   // Flow without gradients - we have streamlines
   if(param.N > 0)

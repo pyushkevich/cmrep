@@ -1,11 +1,14 @@
 #ifndef _VTKMeshHalfEdgeWrapper_h_
 #define _VTKMeshHalfEdgeWrapper_h_
 
+#include <limits>
 #include "vtkPolyData.h"
 
 class VTKMeshHalfEdgeWrapper
 {
 public:
+  static constexpr unsigned int NA = std::numeric_limits<unsigned int>::max();
+
   VTKMeshHalfEdgeWrapper(vtkPolyData *mesh)
     {
     // Prepare the mesh
@@ -23,7 +26,7 @@ public:
     for(unsigned int iVtx=0; iVtx < nVertices; iVtx++)
       {
       // Get the number of cells for this point
-      unsigned short nCells;
+      vtkIdType nCells;
       vtkIdType *xDummy = NULL;
       xMesh->GetPointCells(iVtx, nCells, xDummy);
 
@@ -41,6 +44,11 @@ public:
     xNextEdge = new unsigned int[nHalfEdges];
     xFaceEdges = new unsigned int[nFaces];
 
+    // Fill the xFace array with NA values, because not every half-edge
+    // may have a face, right?
+    for(unsigned int i = 0; i < nHalfEdges; i++)
+      xFace[i] = NA;
+
     // Allocate an additional array that keeps track of how many half-edges
     // have been added for each vertex
     unsigned int *xTemp = new unsigned int[nVertices];
@@ -51,7 +59,8 @@ public:
     for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
-      vtkIdType nPoints, *xPoints;
+      vtkIdType nPoints;
+      const vtkIdType *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points
@@ -120,6 +129,10 @@ public:
   /** Get the number of vertices in the graph */
   unsigned int GetNumberOfVertices() const 
     { return nVertices; }
+
+  /** Get the number of vertices in the graph */
+  unsigned int GetNumberOfFaces() const
+    { return nFaces; }
 
   /** Get the number of edges in the graph. This returns the number of
    * bidirectional edges, which is twice the number of directional edges.

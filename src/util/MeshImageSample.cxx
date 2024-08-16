@@ -11,6 +11,7 @@
 #include <vtkUnstructuredGridWriter.h>
 #include <vtkPolyDataReader.h>
 #include <vtkPolyDataWriter.h>
+#include "vtkCellData.h"
 #include "vtkPointData.h"
 #include "vtkFloatArray.h"
 #include "itkVectorImage.h"
@@ -20,6 +21,8 @@
 #include "vtkGeometryFilter.h"
 #include "ReadWriteVTK.h"
 #include <iostream>
+#include <limits>
+#include "vtkPointDataToCellData.h"
 
 using namespace std;
 
@@ -35,6 +38,9 @@ int usage()
   cout << "   -C n           : After trimming, retain n largest connected components" << endl;
   cout << "   -V             : Voting mode - each vertex gets the label of the closest " << endl;
   cout << "                    voxel with a non-zero label " << endl;
+  cout << "   -B             : Write VTK files as binary" << endl;
+  cout << "   -b <value>     : Background value (when vertex falls outside of the image)" << endl;
+  cout << "                    defaults to NaN" << endl;
   return -1;
 }
 
@@ -62,24 +68,28 @@ vtkPolyData *ReadMesh<>(const char *fname)
 
 
 template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname)
+void WriteMesh(TMeshType *mesh, const char *fname, bool vtk_binary)
 { }
 
 template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
+void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool vtk_binary)
 {
   vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
 template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
+void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool vtk_binary)
 {
   vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
   writer->SetFileName(fname);
   writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
   writer->Update();
 }
 
@@ -89,7 +99,10 @@ vtkSmartPointer<vtkUnstructuredGrid> ThresholdMesh(
   vtkSmartPointer<vtkThreshold> thresh = vtkThreshold::New();
   thresh->SetInputData(mesh);
   thresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, arrname);
-  thresh->ThresholdBetween(trim_min, trim_max);
+  thresh->SetLowerThreshold(trim_min);
+  thresh->SetUpperThreshold(trim_max);
+  thresh->SetThresholdFunction(vtkThreshold::THRESHOLD_BETWEEN);
+  thresh->Update();
   vtkSmartPointer<vtkUnstructuredGrid> result = thresh->GetOutput();
 
   if(trim_comp)
@@ -110,7 +123,9 @@ vtkSmartPointer<vtkPolyData> ThresholdMesh(
   vtkSmartPointer<vtkThreshold> thresh = vtkThreshold::New();
   thresh->SetInputData(mesh);
   thresh->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, arrname);
-  thresh->ThresholdBetween(trim_min, trim_max);
+  thresh->SetLowerThreshold(trim_min);
+  thresh->SetUpperThreshold(trim_max);
+  thresh->SetThresholdFunction(vtkThreshold::THRESHOLD_BETWEEN);
   thresh->Update();
   vtkSmartPointer<vtkUnstructuredGrid> grid = thresh->GetOutput();
   std::cout << "After thresholding " 
@@ -144,10 +159,10 @@ vtkSmartPointer<vtkPolyData> ThresholdMesh(
 
 template <class TMeshType>
 int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp_mode,
-  bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode)
+  bool flag_trim, float trim_min, float trim_max, bool trim_comp, bool voting_mode, bool vtk_binary, float background_value)
 {
   // Read the input mesh
-  TMeshType *mesh = ReadMesh<TMeshType>(argv[argc-4]);
+  vtkSmartPointer<TMeshType> mesh = ReadMesh<TMeshType>(argv[argc-4]);
   size_t n = mesh->GetNumberOfPoints();
 
   // Create an array to hold the output
@@ -232,7 +247,9 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
         pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
 
         imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
-        double pix = interp->EvaluateAtContinuousIndex(idx);
+        double pix = background_value;
+        if(interp->IsInsideBuffer(idx)) 
+          pix = interp->EvaluateAtContinuousIndex(idx);
 
         if(first_label || vote->GetComponent(i, 0) > pix)
           {
@@ -279,9 +296,17 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
       pt[0] = -x[0]; pt[1] = -x[1]; pt[2] = x[2];
 
       imgInput->TransformPhysicalPointToContinuousIndex(pt, idx);
-      typename ImageType::PixelType pix = interp->EvaluateAtContinuousIndex(idx);
-      for(int j = 0; j < c; j++)
-        array->SetComponent(i, j, pix[j]);
+      if(interp->IsInsideBuffer(idx))
+        {
+        typename ImageType::PixelType pix = interp->EvaluateAtContinuousIndex(idx);
+        for(int j = 0; j < c; j++)
+          array->SetComponent(i, j, pix[j]);
+        }
+      else
+        {
+        for(int j = 0; j < c; j++)
+          array->SetComponent(i, j, background_value);
+        }
       }
     }
 
@@ -329,8 +354,23 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
     mesh = ThresholdMesh(mesh, trim_min, trim_max, arrname, trim_comp);
     }
 
+  // Also generate cell labels
+  vtkNew<vtkPointDataToCellData> pdcd;
+  pdcd->SetInputData(mesh);
+  pdcd->SetProcessAllArrays(false);
+  pdcd->AddPointDataArray(arrname);
+
+  if(voting_mode)
+    {
+    mesh->GetPointData()->SetScalars(mesh->GetPointData()->GetArray(arrname));
+    pdcd->SetCategoricalData(true);
+    }
+
+  pdcd->Update();
+  mesh->GetCellData()->AddArray(pdcd->GetOutput()->GetCellData()->GetArray(arrname));
+
   // Write the output
-  WriteMesh<TMeshType>(mesh, argv[argc - 2]);
+  WriteMesh<TMeshType>(mesh, argv[argc - 2], vtk_binary);
   return EXIT_SUCCESS;
 }
 
@@ -345,7 +385,8 @@ int main(int argc, char *argv[])
 
   // Optional trimming parameters
   float trim_min, trim_max;
-  bool flag_trim = false, trim_comp = false, voting_mode = false;
+  bool flag_trim = false, trim_comp = false, voting_mode = false, vtk_binary = false;
+  double background_value = std::numeric_limits<double>::quiet_NaN();
 
   for(int ip = 1; ip < argc-4; ip++)
     {
@@ -397,6 +438,14 @@ int main(int argc, char *argv[])
       {
       voting_mode = true;
       }
+    else if(strcmp(argv[ip], "-B") == 0)
+      {
+      vtk_binary = true;
+      }
+    else if(strcmp(argv[ip], "-b") == 0)
+      {
+      background_value = atof(argv[++ip]);
+      }
     else
       {
       cerr << "error: unrecognized parameter " << argv[ip] << endl;
@@ -418,13 +467,13 @@ int main(int argc, char *argv[])
     reader->Delete();
     isPolyData = false;
     return MeshImageSample<vtkUnstructuredGrid>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode, vtk_binary, background_value);
     }
   else if(reader->IsFilePolyData())
     {
     reader->Delete();
     return MeshImageSample<vtkPolyData>( argc, argv, irms, nrms, interp_mode,
-      flag_trim, trim_min, trim_max, trim_comp, voting_mode);
+      flag_trim, trim_min, trim_max, trim_comp, voting_mode, vtk_binary, background_value);
 
     }
   else

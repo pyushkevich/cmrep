@@ -21,11 +21,21 @@
 #include <vtkDiscreteMarchingCubes.h>
 #include <vtkUnsignedShortArray.h>
 #include <vtkAppendPolyData.h>
+#include <vtkPolyDataNormals.h>
 
 #include "MeshTraversal.h"
 
 #include "itk_to_nifti_xform.h"
 #include <vnl/vnl_inverse.h>
+
+#ifdef CMREP_USE_VCG
+// stuff to define the mesh
+#include "VCGTriMesh.h"
+
+// local optimization
+#include <vcg/complex/algorithms/local_optimization.h>
+#include <vcg/complex/algorithms/local_optimization/tri_edge_collapse_quadric.h>
+#endif
 
 using namespace std;
 
@@ -39,6 +49,10 @@ int usage()
   cout << "  -d                 : perform Delaunay edge flipping" << endl;
   cout << "  -2                 : use 2D algorithm" << endl;
   cout << "  -pl                : preserve labels" << endl; // issue #4: added label preserving option
+  cout << "  -r <factor|num>    : reduce the size of the final mesh via quadric edge collapse" << endl;
+  cout << "                       algorithm from MeshLab by a factor (e.g., 0.1) or to given " << endl;
+  cout << "                       number of vertices " << endl;
+  cout << "  -f                 : make sure that normal vectors are facing outward" << endl;
   return -1;
 }
 
@@ -92,7 +106,8 @@ int main(int argc, char *argv[])
   const char *imClip = NULL;
   bool voxelSpace = false;
   bool preserveLabels = false;
-  bool flag_clean = false, flag_delaunay = false, flag_2d = false;
+  bool flag_clean = false, flag_delaunay = false, flag_2d = false, flag_fix_normals = false;
+  double reduction_factor = 1.0;
   for(int i = 1; i < argc - 3; i++)
     {
     if(!strcmp(argv[i], "-c"))
@@ -118,6 +133,14 @@ int main(int argc, char *argv[])
     else if(!strcmp(argv[i], "-pl"))
       {
       preserveLabels = true;
+      }
+    else if(!strcmp(argv[i], "-r"))
+      {
+      reduction_factor = atof(argv[++i]);
+      }
+    else if(!strcmp(argv[i], "-f"))
+      {
+      flag_fix_normals = true;
       }
     else
       { 
@@ -293,7 +316,7 @@ int main(int argc, char *argv[])
   typedef vnl_matrix_fixed<double, 4, 4> Mat44;
   Mat44 vtk2out;
   Mat44 vtk2nii = ConstructVTKtoNiftiTransform(
-    imgInput->GetDirection().GetVnlMatrix(),
+    imgInput->GetDirection().GetVnlMatrix().as_ref(),
     imgInput->GetOrigin().GetVnlVector(),
     imgInput->GetSpacing().GetVnlVector());
 
@@ -301,7 +324,7 @@ int main(int argc, char *argv[])
   if(voxelSpace)
     {
     Mat44 vox2nii = ConstructNiftiSform(
-      imgInput->GetDirection().GetVnlMatrix(),
+      imgInput->GetDirection().GetVnlMatrix().as_ref(),
       imgInput->GetOrigin().GetVnlVector(),
       imgInput->GetSpacing().GetVnlVector());
     
@@ -320,17 +343,58 @@ int main(int argc, char *argv[])
   fltTransform->Update();
 
   // Get final output
-  vtkPolyData *mesh = fltTransform->GetOutput();
+  vtkSmartPointer<vtkPolyData> mesh = fltTransform->GetOutput();
 
-  // Flip normals if determinant of SFORM is negative
-  if(transform->GetMatrix()->Determinant() < 0)
+  // If the user asked us to fix the normals, or the transform has negative
+  // determinant, apply the normals filter
+  if(flag_fix_normals || transform->GetMatrix()->Determinant() < 0)
     {
-    vtkPointData *pd = mesh->GetPointData();
-    vtkDataArray *nrm = pd->GetNormals();
-    for(size_t i = 0; i < (size_t)nrm->GetNumberOfTuples(); i++)
-      for(size_t j = 0; j < (size_t)nrm->GetNumberOfComponents(); j++)
-        nrm->SetComponent(i,j,-nrm->GetComponent(i,j));
-    nrm->Modified();
+    vtkNew<vtkPolyDataNormals> normals_filter;
+    normals_filter->SetInputData(mesh);
+    if(flag_fix_normals)
+      {
+      cout << "vtkPolyDataNormals: automatically orienting normal vectors" << endl;
+      normals_filter->SetAutoOrientNormals(true);
+      }
+    else
+      {
+      cout << "vtkPolyDataNormals: inverting normal vectors due to sform" << endl;
+      normals_filter->SetFlipNormals(true);
+      }
+    normals_filter->Update();
+    mesh = normals_filter->GetOutput();
+    }
+
+  if(reduction_factor != 1.0)
+    {
+#ifdef CMREP_USE_VCG
+    // Convert to a VCG complex
+    VCGTriMesh tri_mesh;
+    tri_mesh.ImportFromVTK(mesh);
+    tri_mesh.CleanMesh();
+
+    vcg::tri::TriEdgeCollapseQuadricParameter qparams;
+    qparams.QualityThr = 0.3;
+    qparams.PreserveBoundary=true;
+    qparams.BoundaryQuadricWeight=1.0;
+    qparams.PreserveTopology=true;
+    qparams.QualityWeight=false;
+    qparams.NormalCheck=true;
+    qparams.OptimalPlacement=true;
+    qparams.QualityQuadric=true;
+    qparams.QualityQuadricWeight=0.001;
+
+    // Perform decimation
+    tri_mesh.QuadricEdgeCollapseRemeshing(reduction_factor, qparams);
+
+    // Postprocess by cleaning and fixing normals
+    tri_mesh.CleanMesh();
+    tri_mesh.RecomputeNormals();
+    tri_mesh.ExportToVTK(mesh);
+#else
+    cout << "Mesh reduction is not implemented - need to compile with VCG" << endl;
+    return -1;
+#endif
     }
 
   // Write the output

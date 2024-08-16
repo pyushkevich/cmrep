@@ -10,22 +10,38 @@ SET(TEST_IMAGE_CAUDATE  ${CMREP_SOURCE_DIR}/testing/caudate_target.nii.gz)
 SET(TEST_PARAM_FILE     ${CMREP_BINARY_DIR}/testing/t001_param.txt)
 
 # Define the tests
-ADD_TEST(TestSparseSolver      ${CMREP_BINARY_DIR}/cmrep_test SPARSE)
+IF(CMREP_BUILD_PDE)
+    ADD_TEST(TestSparseSolver      ${CMREP_BINARY_DIR}/cmrep_test SPARSE)
+    ADD_TEST(TestPDENoImage        ${CMREP_BINARY_DIR}/cmrep_test DERIV1 ${TEST_SUBJECT_PDE})
+    ADD_TEST(TestPDEWithImage      ${CMREP_BINARY_DIR}/cmrep_test DERIV2 ${TEST_SUBJECT_PDE} ${TEST_IMAGE_CAUDATE})
+ENDIF()
+
 ADD_TEST(TestBruteNoImage      ${CMREP_BINARY_DIR}/cmrep_test DERIV1 ${TEST_SUBJECT_BRUTE})
 ADD_TEST(TestBruteWithImage    ${CMREP_BINARY_DIR}/cmrep_test DERIV2 ${TEST_SUBJECT_BRUTE} ${TEST_IMAGE_BINARY} ${TEST_PARAM_FILE})
-ADD_TEST(TestPDENoImage        ${CMREP_BINARY_DIR}/cmrep_test DERIV1 ${TEST_SUBJECT_PDE})
-ADD_TEST(TestPDEWithImage      ${CMREP_BINARY_DIR}/cmrep_test DERIV2 ${TEST_SUBJECT_PDE} ${TEST_IMAGE_CAUDATE})
 
 # Geodesic shooting tests
-SET(TEST_GSHOOT_DIR ${CMREP_SOURCE_DIR}/testing/shooting)
-ADD_TEST(ShootingRegression    ${CMREP_BINARY_DIR}/shooting_test ${TEST_GSHOOT_DIR}/shoot_regression.mat)
-ADD_TEST(ShootingA             ${CMREP_BINARY_DIR}/lmshoot 
-                                 -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
-                                    ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
-                                 -o ${CMREP_BINARY_DIR}/res.vtk 
-                                 -s 0.2 -l 20 -d 2 -i 0 20)
-ADD_TEST(ShootingG             ${CMREP_BINARY_DIR}/lmshoot 
-                                 -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk 
-                                    ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk 
-                                 -o ${CMREP_BINARY_DIR}/res.vtk 
-                                 -s 0.2 -l 20 -d 2 -i 20 0)
+IF(CMREP_BUILD_GSHOOT)
+    SET(TEST_GSHOOT_DIR ${CMREP_SOURCE_DIR}/testing/shooting)
+    ADD_TEST(ShootingRegression    ${CMREP_BINARY_DIR}/shooting_test ${TEST_GSHOOT_DIR}/shoot_regression.mat)
+    ADD_TEST(ShootingA             ${CMREP_BINARY_DIR}/lmshoot
+                                     -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk
+                                        ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk
+                                     -o ${CMREP_BINARY_DIR}/res.vtk
+                                     -s 0.2 -l 20 -d 2 -i 0 20)
+    ADD_TEST(ShootingG             ${CMREP_BINARY_DIR}/lmshoot
+                                     -m ${TEST_GSHOOT_DIR}/shooting_test_2d_template.vtk
+                                        ${TEST_GSHOOT_DIR}/shooting_test_2d_target.vtk
+                                     -o ${CMREP_BINARY_DIR}/res.vtk
+                                     -s 0.2 -l 20 -d 2 -i 20 0)
+    ADD_TEST(ShootingVarifold      ${CMREP_BINARY_DIR}/lmshoot
+                                     -m ${TEST_GSHOOT_DIR}/shooting_test_3d_sphere.vtk
+                                        ${TEST_GSHOOT_DIR}/shooting_test_3d_box.vtk
+                                     -o ${CMREP_BINARY_DIR}/res.vtk
+                                     -s 0.2 -l 20 -d 3 -i 20 0 -D 5 -a V -S 1.0 -J 0.1)
+    ADD_TEST(ShootingVarifoldCtl   ${CMREP_BINARY_DIR}/lmshoot
+                                     -m ${TEST_GSHOOT_DIR}/shooting_test_3d_sphere.vtk
+                                        ${TEST_GSHOOT_DIR}/shooting_test_3d_box.vtk
+                                     -c ${TEST_GSHOOT_DIR}/shooting_test_3d_sphere_reduced.vtk
+                                     -o ${CMREP_BINARY_DIR}/res.vtk
+                                     -s 0.2 -l 20 -d 3 -i 20 0 -D 5 -a V -S 1.0 -J 0.1)
+ENDIF()

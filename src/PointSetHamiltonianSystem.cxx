@@ -313,6 +313,22 @@ PointSetHamiltonianSystem<TFloat, VDim>
 #else
 
 template <class TFloat, unsigned int VDim>
+void
+PointSetHamiltonianSystem<TFloat, VDim>
+::UpdatePQbyHamiltonianGradient(Matrix &q, Matrix &p, TFloat step)
+{
+  // Euler update for the momentum (only control points)
+  for(unsigned int i = 0; i < k; i++)
+    for(unsigned int a = 0; a < VDim; a++)
+      p(i,a) -= step * Hq[a](i);
+
+  // Euler update for the points (all points)
+  for(unsigned int i = 0; i < m; i++)
+    for(unsigned int a = 0; a < VDim; a++)
+      q(i,a) += step * Hp[a](i);
+}
+
+template <class TFloat, unsigned int VDim>
 TFloat
 PointSetHamiltonianSystem<TFloat, VDim>
 ::FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p)
@@ -325,7 +341,11 @@ PointSetHamiltonianSystem<TFloat, VDim>
   Pt.resize(N); Pt[0] = p0;
 
   // The return value
-  TFloat H, H0;
+  TFloat H, H0 = 0.0;
+
+  // Allocate additional storage for Ralston
+  Qt_ralston.resize(N);
+  Pt_ralston.resize(N);
 
   // Flow over time
   for(unsigned int t = 1; t < N; t++)
@@ -333,15 +353,27 @@ PointSetHamiltonianSystem<TFloat, VDim>
     // Compute the hamiltonian
     H = ComputeHamiltonianAndGradientThreaded(q, p);
 
-    // Euler update for the momentum (only control points)
-    for(unsigned int i = 0; i < k; i++)
-      for(unsigned int a = 0; a < VDim; a++)
-        p(i,a) -= dt * Hq[a](i);
+    if(flag_ralston_integration)
+      {
+      // Compute the intermediate point x_i
+      Pt_ralston[t-1] = p; Qt_ralston[t-1] = q;
+      UpdatePQbyHamiltonianGradient(Qt_ralston[t-1], Pt_ralston[t-1], 2 * dt / 3);
 
-    // Euler update for the points (all points)
-    for(unsigned int i = 0; i < m; i++)
-      for(unsigned int a = 0; a < VDim; a++)
-        q(i,a) += dt * Hp[a](i);
+      // Update p,q using the initial point gradient
+      UpdatePQbyHamiltonianGradient(q, p, dt / 4);
+
+      // Evaluate the system at the mid-point position
+      ComputeHamiltonianAndGradientThreaded(Qt_ralston[t-1], Pt_ralston[t-1]);
+
+      // Update using the ralston point gradient
+      UpdatePQbyHamiltonianGradient(q, p, 3 * dt / 4);
+      }
+
+    else
+      {
+      // Just one update
+      UpdatePQbyHamiltonianGradient(q, p, dt);
+      }
 
     // Store the flow results
     Qt[t] = q; Pt[t] = p;
@@ -614,8 +646,8 @@ void
 PointSetHamiltonianSystem<TFloat, VDim>
 ::ApplyHamiltonianHessianToAlphaBetaThreaded(
     const Matrix &q, const Matrix &p,
-    const Vector alpha[], const Vector beta[],
-    Vector d_alpha[], Vector d_beta[])
+    const Vector alpha[VDim], const Vector beta[VDim],
+    Vector d_alpha[VDim], Vector d_beta[VDim])
 {
   // Initialize the arrays to be accumulated
   for(unsigned int a = 0; a < VDim; a++)
@@ -630,7 +662,7 @@ PointSetHamiltonianSystem<TFloat, VDim>
     {
     futures.push_back(
       thread_pool->push(
-        [&](int id) { this->ApplyHamiltonianHessianToAlphaBetaThreadedWorker(&q, &p, alpha, beta, &tdi); }));
+        [&](int) { this->ApplyHamiltonianHessianToAlphaBetaThreadedWorker(&q, &p, alpha, beta, &tdi); }));
     }
 
   // Wait for completion
@@ -661,26 +693,67 @@ PointSetHamiltonianSystem<TFloat, VDim>
   Vector alpha[VDim], beta[VDim];
   Vector d_alpha[VDim], d_beta[VDim];
 
+  // What kind of update do we do
+  Vector alpha_ralston[VDim], beta_ralston[VDim];
+  Vector d_alpha_ralston[VDim], d_beta_ralston[VDim];
+
   for(unsigned int a = 0; a < VDim; a++)
     {
     alpha[a] = alpha1[a];
     beta[a] = beta1[a];
     d_alpha[a].set_size(m);
     d_beta[a].set_size(k);
+
+    if(flag_ralston_integration)
+      {
+      d_alpha_ralston[a].set_size(m);
+      d_beta_ralston[a].set_size(k);
+      }
     }
 
   // Work our way backwards
   for(int t = N-1; t > 0; t--)
     {
-    // Apply Hamiltonian Hessian to get an update in alpha/beta
-    ApplyHamiltonianHessianToAlphaBetaThreaded(
-          Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
-
-    // Update the vectors
-    for(unsigned int a = 0; a < VDim; a++)
+    if(flag_ralston_integration)
       {
-      alpha[a] += dt * d_alpha[a];
-      beta[a] += dt * d_beta[a];
+      // Worked this out with PyTorch
+      // G1 = adjunct_f(x_list_r[i-1], gamma)
+      // G0 = adjunct_f(x_list[i-1], gamma + 2 * dt * G1)
+      // gamma = gamma + 0.25 * dt * G0 + 0.75 * dt * G1
+
+      // Compute G1
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt_ralston[t - 1], Pt_ralston[t - 1], alpha, beta, d_alpha_ralston, d_beta_ralston);
+
+      // Compute G0
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        alpha_ralston[a] = alpha[a] + 2 * dt * d_alpha_ralston[a];
+        beta_ralston[a] = beta[a] + 2 * dt * d_beta_ralston[a];
+        }
+
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt[t - 1], Pt[t - 1], alpha_ralston, beta_ralston, d_alpha, d_beta);
+
+      // Update the vectors
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        alpha[a] += d_alpha[a] * (0.25 * dt) +  d_alpha_ralston[a] * (0.75 * dt);
+        beta[a] += d_beta[a] * (0.25 * dt) +  d_beta_ralston[a] * (0.75 * dt);
+        }
+      }
+    else
+      {
+      // Apply Hamiltonian Hessian to get an update in alpha/beta
+      ApplyHamiltonianHessianToAlphaBetaThreaded(
+            Qt[t - 1], Pt[t - 1], alpha, beta, d_alpha, d_beta);
+
+      // Update the vectors
+      for(unsigned int a = 0; a < VDim; a++)
+        {
+        alpha[a] += dt * d_alpha[a];
+        beta[a] += dt * d_beta[a];
+        }
       }
     }
 
@@ -808,64 +881,6 @@ PointSetHamiltonianSystem<TFloat, VDim>
 
     } // loop over i}
 }
-
-template <class TFloat, unsigned int VDim>
-void
-PointSetHamiltonianSystem<TFloat, VDim>
-::ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const
-{
-  // Allocate Zt
-  Zt.resize(N); Zt[0] = z0;
-  Matrix z = z0;
-
-  // Gaussian factor, i.e., K(z) = exp(f * z)
-  TFloat f = -0.5 / (sigma * sigma);
-  TFloat d2_cutoff = 27.63102 * sigma * sigma;
-
-
-  // Flow over time
-  for(unsigned int t = 1; t < N; t++)
-    {
-    const Matrix &q = Qt[t], &p = Pt[t];
-    for(int i = 0; i < z.rows(); i++)
-      {
-      // Current coordinate and its velocity
-      TFloat *zi = z.data_array()[i];
-      TFloat vi[VDim];
-
-      // Iterate over all the points
-      for(int j = 0; j < k; j++)
-        {
-        TFloat delta, d2 = 0;
-        for(int a = 0; a < VDim; a++)
-          {
-          delta = zi[a] - q(j,a);
-          d2 += delta * delta;
-          }
-
-        // Only proceed if distance is below cutoff
-        if(d2 < d2_cutoff)
-          {
-          // Take the exponent
-          TFloat g = exp(f * d2);
-
-          // Scale momentum by exponent
-          for(int a = 0; a < VDim; a++) 
-            vi[a] += g * p(j,a);
-          }
-        }
-
-      // Update the point
-      for(int a = 0; a < VDim; a++) 
-        zi[a] += dt * vi[a];
-      }
-
-    // Store the z timepoint
-    Zt[t] = z;
-    }
-}
-
-
 
 #ifdef _LMSHOOT_DIRECT_USE_LAPACK_
 

@@ -35,8 +35,8 @@ public:
     const Matrix &q0, 
     TFloat sigma,
     unsigned int Nt,
-    unsigned int Nr = 0,
-    unsigned int n_threads = 0);
+    unsigned int Nr,
+    unsigned int n_threads);
 
   ~PointSetHamiltonianSystem();
 
@@ -44,6 +44,13 @@ public:
    * Get the number of time steps
    */
   unsigned int GetN() const { return N; }
+
+  /**
+   * Turn on Ralston integration, i.e., second-order Runge-Kutta method.
+   * It is twice slower but more accurate.
+   */
+  void SetRalstonIntegration(bool flag) { flag_ralston_integration = flag; }
+  bool GetRalstonIntegration() const { return flag_ralston_integration; }
 
   /**
    * Multi-threaded computation of the Hamiltonian and derivatives. For now it
@@ -84,15 +91,6 @@ public:
    * be preserved over the time evolution). 
    */
   TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p);
-
-  // TODO: this is what we are trying to do
-  // TFloat FlowHamiltonian(const Matrix &p0, Matrix &q, Matrix &p, const Matrix &z0, Matrix &z);
-
-  /**
-   * Applies the flow to a set of additional points for which we are not optimizing
-   * the momentum. These extra samples are just along for the ride
-   */
-  void ApplyFlowToPoints(const Matrix &z0, std::vector<Matrix> &Zt) const;
 
   /**
    * Flow the Hamiltonian system with gradient computation. The gradient is 
@@ -169,6 +167,9 @@ protected:
   // Number of threads used
   unsigned int n_threads;
 
+  // Type of integration to use, Euler or Ralston method
+  bool flag_ralston_integration = false;
+
   // Multi-threaded quantities
   struct ThreadData 
     {
@@ -192,6 +193,9 @@ protected:
   // Streamlines - paths of the landmarks over time
   std::vector<Matrix> Qt, Pt;
 
+  // Additional intermediate points used during Raston integration
+  std::vector<Matrix> Qt_ralston, Pt_ralston;
+
   // Set up multi-threaded variables
   void SetupMultiThreaded();
 
@@ -201,6 +205,9 @@ protected:
     const Matrix *q, const Matrix *p, const Vector alpha[], const Vector beta[], ThreadData *tdi);
 
 
+private:
+  // Helper method used during Euler or Ralston integration
+  void UpdatePQbyHamiltonianGradient(Matrix &q, Matrix &p, TFloat step);
 };
 
 

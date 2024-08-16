@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <random>
 #include <SparseMatrix.h>
 #include <vtkDijkstraGraphGeodesicPath.h>
 #include <vtkSelectEnclosedPoints.h>
@@ -177,7 +178,8 @@ double ComputeAverageEdgeLength(vtkPolyData *poly)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
 
     for(vtkIdType j = 0; j < nPoints; j++)
@@ -205,7 +207,8 @@ void ComputeAreaElement(vtkPolyData *poly, vnl_vector<double> &elt)
   for(vtkIdType iCell = 0; iCell < nCells; iCell++)
     {
     // Get the points in this cell
-    vtkIdType nPoints, *xPoints;
+    vtkIdType nPoints;
+    const vtkIdType *xPoints;
     poly->GetCellPoints(iCell, nPoints, xPoints);
     
     // Only triangles are admitted
@@ -292,6 +295,16 @@ struct SamplingStruct {
 };
 
 enum SubMode { LINEAR = 0, LOOP };
+
+// Volume of a tetrahedron
+inline double TetrahedronVolume(vtkPoints *pts, vtkIdType ids[])
+{
+  vnl_vector<double> X1(pts->GetPoint(ids[0]), 3);
+  vnl_vector<double> X2(pts->GetPoint(ids[1]), 3);
+  vnl_vector<double> X3(pts->GetPoint(ids[2]), 3);
+  vnl_vector<double> X4(pts->GetPoint(ids[3]), 3);
+  return dot_product(vnl_cross_3d(X2 - X1, X3 - X1), X4 - X1);
+}
 
 int main(int argc, char *argv[])
 {
@@ -690,6 +703,11 @@ int main(int argc, char *argv[])
     tetra_ctr->SetName("VoronoiCenter");
     testtet->GetCellData()->AddArray(tetra_ctr);
 
+    vtkDoubleArray *tetra_vol = vtkDoubleArray::New();
+    tetra_vol->SetNumberOfComponents(1);
+    tetra_vol->SetName("TetraVolume");
+    testtet->GetCellData()->AddArray(tetra_vol);
+
     for(unsigned int i = 0; i < nv; i++)
       {
       if(hedra[i].size() == 4)
@@ -698,8 +716,20 @@ int main(int argc, char *argv[])
         Hedron::const_iterator hit = hedra[i].begin();
         for(unsigned int j = 0; j < 4; j++, hit++)
           tetids[j] = *hit;
+
+        // Check that the winding of the tetrahedron is correct
+        double vol = TetrahedronVolume(bnd->GetPoints(), tetids);
+        if(vol < 0)
+          {
+          // Swap first and second vertices
+          vtkIdType tmp = tetids[0];
+          tetids[0] = tetids[1];
+          tetids[1] = tmp;
+          }
+
         testtet->InsertNextCell(VTK_TETRA, 4, tetids);
         tetrad->InsertNextTuple1(daPointRadius->GetComponent(i, 0));
+        tetra_vol->InsertNextTuple1(TetrahedronVolume(bnd->GetPoints(), tetids));
 
         double *ctr = pts->GetPoint(i);
         tetra_ctr->InsertNextTuple3(ctr[0], ctr[1], ctr[2]);
@@ -1089,7 +1119,8 @@ int main(int argc, char *argv[])
     for(unsigned int iCell = 0; iCell < (unsigned int) xMesh->GetNumberOfCells(); iCell++)
       {
       // Get the points for this cell
-      vtkIdType nPoints, *xPoints;
+      vtkIdType nPoints;
+      const vtkIdType *xPoints;
       xMesh->GetCellPoints(iCell, nPoints, xPoints);
 
       // Walk around the list of points
@@ -1116,7 +1147,8 @@ int main(int argc, char *argv[])
     // Generate a random subset of landmarks in the image
     size_t *xLandmarks = new size_t[np];
     for(int i = 0; i < (int) np; i++) xLandmarks[i] = i;
-    random_shuffle(xLandmarks, xLandmarks+np);
+    std::mt19937 rng(std::time(nullptr));
+    std::shuffle(xLandmarks, xLandmarks+np, rng);
 
     // Compute distances between landmarks
     typedef DijkstraShortestPath<double> Dijkstra;
