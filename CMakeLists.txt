@@ -62,12 +62,6 @@ IF(CMREP_BUILD_AUGLAG)
     SET(NEED_NLOPT ON)
 ENDIF()
 
-# Building GSHOOT requires Eigen
-OPTION(CMREP_BUILD_GSHOOT "Build geodesic shooting routines" OFF)
-IF(CMREP_BUILD_GSHOOT)
-    SET(NEED_EIGEN ON)
-ENDIF()
-
 # Build tet-gen utilities
 OPTION(CMREP_BUILD_TETGEN_UTILS "Build utility programs for mesh tetrahedralization" OFF)
 IF(CMREP_BUILD_TETGEN_UTILS)
@@ -361,39 +355,6 @@ SET(CMREP_BCMREP_LIBS ${CMREP_BCMREP_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} tom
 SET(CMREP_AUGLAG_LIBS ${CMREP_AUGLAG_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES} toms611)
 SET(CMREP_UTIL_LIBS ${CMREP_UTIL_LIBS} ${ITK_LIBRARIES} ${VTK_LIBRARIES})
 
-# Geodesic shooting
-IF(CMREP_BUILD_GSHOOT)
-    SET(CMREP_LMSHOOT_LIBS Eigen3::Eigen ${ITK_LIBRARIES} ${VTK_LIBRARIES} ${LAPACK_LIBRARIES})
-
-    ADD_EXECUTABLE(shooting_test
-        src/PointSetHamiltonianSystem.cxx
-        src/TestGeodesicShooting.cxx)
-    TARGET_LINK_LIBRARIES(shooting_test ${CMREP_LMSHOOT_LIBS})
-
-    ADD_EXECUTABLE(lmshoot
-        src/PointSetHamiltonianSystem.cxx
-        src/PointSetGeodesicShooting.cxx
-        src/util/ReadWriteVTK.cxx)
-    TARGET_LINK_LIBRARIES(lmshoot ${CMREP_LMSHOOT_LIBS})
-
-    ADD_EXECUTABLE(lmflow
-        src/PointSetHamiltonianSystem.cxx
-        src/util/ReadWriteVTK.cxx
-        src/PointSetGeodesicFlowUtil.cxx)
-    TARGET_LINK_LIBRARIES(lmflow ${CMREP_LMSHOOT_LIBS})
-
-    INCLUDE_DIRECTORIES(submodules/greedy/src/ITKFilters/include submodules/greedy/src)
-    ADD_EXECUTABLE(lmtowarp
-        src/PointSetHamiltonianSystem.cxx
-        src/util/ReadWriteVTK.cxx
-        src/PointSetGeodesicToWarp.cxx
-        submodules/greedy/src/lddmm_data.cxx)
-    TARGET_LINK_LIBRARIES(lmtowarp ${CMREP_LMSHOOT_LIBS})
-
-    # Update the list of binaries
-    SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} shooting_test lmshoot lmflow lmtowarp)
-ENDIF()
-
 # Augmented Lagrangean cm-rep
 IF(CMREP_BUILD_AUGLAG)
     SET(CMREP_LMSHOOT_LIBS Eigen3::Eigen ${ITK_LIBRARIES} ${VTK_LIBRARIES} ${LAPACK_LIBRARIES} ${NLOPT_LIBRARIES})
@@ -402,7 +363,7 @@ IF(CMREP_BUILD_AUGLAG)
         src/TestAugLagCMRep.cxx
         src/MeshTraversal.cxx
         src/PointSetOptimalControlSystem.cxx
-        src/PointSetHamiltonianSystem.cxx
+        submodules/greedy/src/lmshoot/PointSetHamiltonianSystem.cxx
         src/VTKMeshBuilder.cxx)
     TARGET_LINK_LIBRARIES(alcmrep_test cmrep ${CMREP_AUGLAG_LIBS})
     SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} alcmrep_test)
