@@ -643,9 +643,13 @@ install(FILES
 
 INSTALL(DIRECTORY ${CMREP_SOURCE_DIR}/examples DESTINATION "share/cmrep/")
 
+
+OPTION(CMREP_FIXUP_BUNDLE "Whether to run FixupBundle code at install/package time" ON)
+
 # INCLUDE(BundleUtilities)
 
 # Fixup bundle on MACOS
+IF(CMREP_FIXUP_BUNDLE)
 IF(APPLE)
 SET(APPS "\${CMAKE_INSTALL_PREFIX}/bin/cmrep_fit")
 INSTALL(CODE "
@@ -670,6 +674,7 @@ INSTALL(CODE "
   " COMPONENT Runtime)
 
 ENDIF(UNIX AND NOT APPLE)
+ENDIF()
 
 
 # Add package support
