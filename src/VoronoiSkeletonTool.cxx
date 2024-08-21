@@ -248,7 +248,6 @@ int usage()
   cout << "    boundary.vtk         Boundary mesh to skeletonize" << endl;
   cout << "    output.vtk           Where to output the skeleton" << endl;
   cout << "General Options:         " << endl;
-  cout << "    -Q PATH              Path to the qvoronoi executable" << endl;
   cout << "    -z <level> <mode>    Subdivide input mesh prior to skeletonization" << endl;
   cout << "                         mode is either 'loop' or 'linear'" << endl;
   cout << "Pruning Options:" << endl;
@@ -310,11 +309,11 @@ inline double TetrahedronVolume(vtkPoints *pts, vtkIdType ids[])
   return dot_product(vnl_cross_3d(X2 - X1, X3 - X1), X4 - X1);
 }
 
-int main(int argc, char *argv[])
+int cmrep_vskel_main(int argc, char *argv[])
 {
 
   // Command line arguments
-  string fnMesh, fnOutput, fnSkel, fnQVoronoi="qvoronoi", fnOutThickness;
+  string fnMesh, fnOutput, fnSkel, fnOutThickness;
   string fnImgRef, fnImgThick, fnImgDepth;
   string fnTetraMesh;
   double xPrune = 2.0, xSearchTol = 1e-6;
@@ -353,10 +352,6 @@ int main(int argc, char *argv[])
     else if(arg == "-c")
       {
       nComp = atoi(argv[++iArg]);
-      }
-    else if(arg == "-Q")
-      {
-      fnQVoronoi = argv[++iArg];
       }
     else if(arg == "-T")
       {
@@ -1221,5 +1216,7 @@ int main(int argc, char *argv[])
     delete[] row_index;
     delete[] col_index;
     }
+
+  return 0;
 }
 
