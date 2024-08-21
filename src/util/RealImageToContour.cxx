@@ -145,7 +145,7 @@ int main(int argc, char *argv[])
   // Compute the transform from VTK coordinates to NIFTI/RAS coordinates
   vnl_matrix_fixed<double, 4, 4> vtk2nii = 
     ConstructVTKtoNiftiTransform(
-      imgInput->GetDirection().GetVnlMatrix(),
+      imgInput->GetDirection().GetVnlMatrix().as_ref(),
       imgInput->GetOrigin().GetVnlVector(),
       imgInput->GetSpacing().GetVnlVector());
   

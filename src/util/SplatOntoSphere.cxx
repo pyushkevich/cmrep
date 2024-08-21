@@ -133,7 +133,7 @@ int main(int argc, char *argv[])
       }
 
     char buffer[256];
-    sprintf(buffer,"mesh%04d.vtk", i);
+    snprintf(buffer, 256, "mesh%04d.vtk", i);
     vtkSmartPointer<vtkPolyDataWriter> writer = vtkPolyDataWriter::New();
     writer->SetFileName(buffer);
     writer->SetInputData(sphereCopy);

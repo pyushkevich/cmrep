@@ -27,6 +27,7 @@ SET(NEED_NLOPT OFF)
 SET(NEED_PARDISO OFF)
 SET(NEED_TETGEN OFF)
 SET(NEED_VCG OFF)
+SET(NEED_QHULL OFF)
 
 # Set of options that users can select to build different components of cm-rep
 # Building PDE requires a sparse solver
@@ -74,6 +75,12 @@ IF(CMREP_BUILD_VCG_UTILS)
     SET(NEED_VCG ON)
 ENDIF()
 
+# Build Voronoi skeletonization tool
+OPTION(CMREP_BUILD_VSKEL "Build Voronoi skeletonization tool" ON)
+IF(CMREP_BUILD_VSKEL)
+  SET(NEED_QHULL ON)
+ENDIF()
+
 # Print the current configuration
 MESSAGE(STATUS "Libraries required by the current configuration:")
 MESSAGE(STATUS "  EIGEN: ${NEED_EIGEN}")
@@ -82,6 +89,7 @@ MESSAGE(STATUS "  LAPACK: ${NEED_LAPACK}")
 MESSAGE(STATUS "  MKL: ${NEED_MKL}")
 MESSAGE(STATUS "  NLOPT: ${NEED_NLOPT}")
 MESSAGE(STATUS "  PARDISO: ${NEED_PARDISO}")
+MESSAGE(STATUS "  QHULL: ${NEED_QHULL}")
 MESSAGE(STATUS "  TETGEN: ${NEED_TETGEN}")
 MESSAGE(STATUS "  VCG: ${NEED_VCG}")
 
@@ -264,6 +272,15 @@ IF(NEED_VCG)
   ENDIF(VCGLIB_DIR)
 ENDIF()
 
+# Qhull
+IF(NEED_QHULL)
+  INCLUDE(CMake/FindQhull.cmake)
+  #FIND_PACKAGE(Qhull REQUIRED)
+  #message(STATUS "Found Qhull version ${Qhull_VERSION}")
+  #add_library(QHULL::QHULL INTERFACE IMPORTED)
+  message(STATUS "include: ${QHULL_INCLUDE_DIR}")
+ENDIF()
+
 # Include subdirectories
 SUBDIRS(extras/toms611)
 SUBDIRS(testing)
@@ -403,8 +420,13 @@ TARGET_LINK_LIBRARIES(cmrep_warpimage cmrep ${CMREP_FIT_LIBS})
 ADD_EXECUTABLE(cmrep_afftran src/CMRepToAffineTransform.cxx)
 TARGET_LINK_LIBRARIES(cmrep_afftran cmrep ${CMREP_FIT_LIBS})
 
+get_cmake_property(_variableNames VARIABLES)
+foreach (_variableName ${_variableNames})
+    message(STATUS "${_variableName}=${${_variableName}}")
+endforeach()
+
 ADD_EXECUTABLE(cmrep_vskel src/VoronoiSkeletonTool.cxx src/util/ReadWriteVTK.cxx)
-TARGET_LINK_LIBRARIES(cmrep_vskel cmrep cmrep_dijkstra ${CMREP_FIT_LIBS})
+TARGET_LINK_LIBRARIES(cmrep_vskel cmrep cmrep_dijkstra ${CMREP_FIT_LIBS} QHULL::QHULL)
 
 # Update the list of binaries
 SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} 

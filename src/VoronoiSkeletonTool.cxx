@@ -48,11 +48,15 @@
 
 #include "util/ReadWriteVTK.h"
 
+#include <libqhull_r/libqhull_r.h>
+
 using namespace std;
 
 typedef std::pair<vtkIdType, vtkIdType> VertexPair;
 typedef std::set< std::pair<vtkIdType, vtkIdType> > VertexPairSet;
 typedef std::vector<VertexPair> VertexPairArray;
+
+
 
 void WriteVTKData(vtkUnstructuredGrid *data, string fn)
 {
@@ -451,45 +455,53 @@ int main(int argc, char *argv[])
   vtkBoundingBox fBoundBox;
   fBoundBox.SetBounds(bbBnd);
 
-  // Create a temporary file where to store the points
-#ifndef WIN32
-  char fnTemplate[] = "/tmp/voronoi_pts.XXXXXX";
-  char *fnPoints = mktemp(fnTemplate);
-#else
-  char *fnPoints = tmpnam(NULL);
-#endif
-  cout << "Storing mesh point coordinates in " << fnPoints << endl;
-  FILE *f = fopen(fnPoints, "wt");
-  fprintf(f, "%d\n3\n", (int) bnd->GetNumberOfPoints());
-  for(vtkIdType i = 0; i < bnd->GetNumberOfPoints(); i++)
-    fprintf(f, "%f %f %f\n", bnd->GetPoint(i)[0], bnd->GetPoint(i)[1], bnd->GetPoint(i)[2]);
-  fclose(f);
+  // Create temporary files for the points and for the output
+  FILE *f_qh_in = std::tmpfile();
+  FILE *f_qh_out = std::tmpfile();
 
-  // Call Qvoronoi 
-  // qvoronoi p Fv < $WORK/$ID.boundary_points.txt > $WORK/$ID.voronoi.txt
-  string fnVoronoiOutput = string(fnPoints) + "_voronoi.txt";
-  char command[1024];
-  sprintf(command, "%s p Fv < %s > %s", fnQVoronoi.c_str(), fnPoints, fnVoronoiOutput.c_str());
-  cout << "Executing system command \"" << command << "\"" << endl;
-  if(system(command) < 0)
-    {
-    cerr << "Call to QVoronoi failed" << endl;
-    return -1;
-    }
+  fprintf(f_qh_in, "%d\n3\n", (int) bnd->GetNumberOfPoints());
+  for(vtkIdType i = 0; i < bnd->GetNumberOfPoints(); i++)
+    fprintf(f_qh_in, "%f %f %f\n", bnd->GetPoint(i)[0], bnd->GetPoint(i)[1], bnd->GetPoint(i)[2]);
+  rewind(f_qh_in);
+
+  // Compute the Voronoi diagram with QHull
+  qhT qh;
+  const char *qh_argv[] = {"", "p", "Fv"};
+  qh_init_A(&qh, f_qh_in, f_qh_out, stderr, 3, (char **) qh_argv);
+  qh.DELAUNAY = true;
+  qh.VORONOI = true;
+  qh.NOerrexit= False;
+  qh.SCALElast= True;
+  char hidden_options[]=" d n m v H U Qb QB Qc Qf Qg Qi Qm Qr Qv Qx TR E V Fa FA FC FM Fp FS Ft FV Gt Pv Q0 Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10 Q11 Q17 ";
+  qh_checkflags(&qh, qh.qhull_command, hidden_options);
+  qh_initflags(&qh, qh.qhull_command);
+  qh_option(&qh, "voronoi  _bbound-last  _coplanar-keep", NULL, NULL);
+  qh_option(&qh, "Fpoint-intersect", NULL, NULL);
+
+  int numpoints, dim;
+  boolT ismalloc;
+  auto *points = qh_readpoints(&qh, &numpoints, &dim, &ismalloc);
+  qh_init_B(&qh, points, numpoints, dim, ismalloc);
+
+  // Run Qhull
+  cout << "Using Qhull to compute Voronoi diagram from " << numpoints << " input points." << endl;
+  qh_qhull(&qh);
+  qh_check_output(&qh);
+  qh_produce_output(&qh);
+  qh_freeqhull(&qh, qh_ALL);
+
+  // Done with input, rewind output
+  fclose(f_qh_in);
+  rewind(f_qh_out);
 
   // Array of generating points for each cell
   VertexPairArray pgen;
 
-  // Load the file
-  ifstream fin(fnVoronoiOutput.c_str());
-
-  // Load the numbers
-  size_t nv, np, junk;
+  // Number of points in Voronoi mesh
+  int nv, np, junk;
+  fscanf(f_qh_out, "%d\n", &junk);
+  fscanf(f_qh_out, "%d\n", &nv);
   
-  // First two lines
-  fin >> junk;
-  fin >> nv; 
-
   vtkSelectEnclosedPoints *sel = vtkSelectEnclosedPoints::New();
   sel->SetTolerance(xSearchTol);
   sel->Initialize(bnd);
@@ -522,9 +534,7 @@ int main(int argc, char *argv[])
   for(size_t i = 0; i < nv; i++)
     {
     double x,y,z;
-    fin >> x;
-    fin >> y;
-    fin >> z;
+    fscanf(f_qh_out, "%lf %lf %lf\n", &x, &y, &z);
     pts->SetPoint(i,x,y,z);
 
     // Is this point outside of the bounding box
@@ -542,7 +552,7 @@ int main(int argc, char *argv[])
   cout << "." << endl;
 
   // Read the number of cells
-  fin >> np;
+  fscanf(f_qh_out, "%d\n", &np);
 
   // Progress bar
   cout << "Selecting faces using pruning criteria (n = " << np << ")" << endl;
@@ -591,13 +601,18 @@ int main(int argc, char *argv[])
     bool isinf = false;
     bool isout = false;
     
-    size_t m; fin >> m; m-=2;
-    vtkIdType ip1, ip2; fin >> ip1; fin >> ip2;
+    int m;
+    vtkIdType ip1, ip2;
+    fscanf(f_qh_out, "%d %lld %lld", &m, &ip1, &ip2);
+    m-=2;
 
     vtkIdType *ids = new vtkIdType[m];
     for(size_t k = 0; k < m; k++)
       {
-      fin >> ids[k];
+      if(k < m - 1)
+        fscanf(f_qh_out, "%lld ", ids + k);
+      else
+        fscanf(f_qh_out, "%lld\n", ids + k);
 
       // Is this point at infinity?
       if(ids[k] == 0) isinf = true; else ids[k]--;
@@ -675,17 +690,10 @@ int main(int argc, char *argv[])
     delete[] ids;
     }
 
+  fclose(f_qh_out);
   cout << "." << endl;
   cout << "Edge contraint pruned " << npruned_edge << " faces." << endl;
   cout << "Geodesic to Euclidean distance ratio contraint (" << xPrune << ") pruned " << npruned_geo << " faces." << endl;
-
-  // Clean up files
-  if (fin.is_open()) 
-    {
-    fin.close();
-    remove(fnVoronoiOutput.c_str());
-    } 
-  remove(fnPoints);
 
   // Did we get tetrahedra?
   if(fnTetraMesh.size()) 
