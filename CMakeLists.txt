@@ -99,11 +99,8 @@ INCLUDE(${ITK_USE_FILE})
 
 # Get VTK
 FIND_PACKAGE(VTK 9 REQUIRED COMPONENTS
-  ChartsCore
-  CommonComputationalGeometry
   CommonCore
   CommonDataModel
-  CommonExecutionModel
   CommonMath
   CommonTransforms
   FiltersCore
@@ -112,15 +109,10 @@ FIND_PACKAGE(VTK 9 REQUIRED COMPONENTS
   FiltersModeling
   FiltersSources
   FiltersVerdict
-  IOExport
   IOGeometry
   IOImage
   IOLegacy
-  IOPLY
-  ImagingCore
-  ImagingGeneral
-  ViewsContext2D
-)
+  IOPLY)
 
 # Where to get additional modules
 SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake/")
