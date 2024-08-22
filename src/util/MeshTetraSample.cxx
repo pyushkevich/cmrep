@@ -14,57 +14,7 @@
 
 using namespace std;
 
-// Templated mesh IO methods
-template <class TMeshType>
-vtkSmartPointer<TMeshType> ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkSmartPointer<vtkUnstructuredGrid> ReadMesh<>(const char *fname)
-{
-  vtkNew<vtkUnstructuredGridReader> reader;
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkSmartPointer<vtkPolyData> ReadMesh<>(const char *fname)
-{
-  vtkNew<vtkPolyDataReader> reader;
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname, bool vtk_binary)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool vtk_binary)
-{
-  vtkNew<vtkUnstructuredGridWriter> writer;
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(vtk_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool vtk_binary)
-{
-  vtkNew<vtkPolyDataWriter> writer;
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(vtk_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
-int usage()
+int mesh_tetra_sample_usage()
 {
   cout << "mesh_tetra_sample: sample tetrahedral mesh using a surface mesh" << endl;
   cout << "Usage: mesh_tetra_sample [options] mesh.vtk tetra.vtk output.vtk array_name" << endl;
@@ -212,12 +162,12 @@ int MeshTetraSample(Parameters p)
 }
 
 
-int main(int argc, char *argv[])
+int mesh_tetra_sample_main(int argc, char *argv[])
 {
   Parameters p;
 
   if(argc < 5)
-    return usage();
+    return mesh_tetra_sample_usage();
 
   for(int ip = 1; ip < argc-4; ip++)
     {
@@ -241,7 +191,7 @@ int main(int argc, char *argv[])
     else
       {
       cerr << "error: unrecognized parameter " << arg << endl;
-      return usage();
+      return mesh_tetra_sample_usage();
       }
     }
 

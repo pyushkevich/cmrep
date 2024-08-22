@@ -1,7 +1,5 @@
 #include <iostream>
 #include <string>
-#include <sstream>
-#include <set>
 
 #include <vnl/vnl_inverse.h>
 
@@ -33,7 +31,7 @@
 using namespace std;
 using namespace itk;
 
-int usage()
+int tet_sample_image_usage()
 {
   cout << "tetsample - samples an image at points on a VTK mesh" << endl;
   cout << "usage: " << endl;
@@ -155,51 +153,6 @@ struct TetSampleParam
     }
 };
 
-template <class TMeshType> 
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType> 
-void WriteMesh(TMeshType *mesh, const char *fname)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
 template <class X> X mymode(X *data, int size)
 {
   int t, w;
@@ -237,12 +190,12 @@ public:
 
     // Set up the transforms
     ijk2ras = ConstructNiftiSform(
-      sampim->GetDirection().GetVnlMatrix(),
+      sampim->GetDirection().GetVnlMatrix().as_ref(),
       sampim->GetOrigin().GetVnlVector(),
       sampim->GetSpacing().GetVnlVector());
 
     vtk2ras = ConstructVTKtoNiftiTransform(
-      sampim->GetDirection().GetVnlMatrix(),
+      sampim->GetDirection().GetVnlMatrix().as_ref(),
       sampim->GetOrigin().GetVnlVector(),
       sampim->GetSpacing().GetVnlVector());
 
@@ -443,7 +396,7 @@ int TetSample(TetSampleParam &parm)
 int main(int argc, char **argv)
 {
   // Check the parameters
-  if(argc < 4) return usage();
+  if(argc < 4) return tet_sample_image_usage();
 
   // Parse the optional parameters
   int ch;
@@ -453,26 +406,26 @@ int main(int argc, char **argv)
     switch(ch)
       {
     case 'm': if(!scan_coord(optarg, parm.mesh_coord) || parm.mesh_coord==ANTS)
-                return usage(); 
+                return tet_sample_image_usage();
               break;
     case 'i': if(!scan_coord(optarg, parm.warp_coord))
-                return usage(); 
+                return tet_sample_image_usage();
               break;
     case 'r': if(!get_interp(optarg, parm.interptype))
-                return usage(); 
+                return tet_sample_image_usage();
               break;
     case 's': if(!get_interp_params(optarg, parm.interpsigma))
-                return usage(); 
+                return tet_sample_image_usage();
               break;
     case 'a': if(!get_interp_params(optarg, parm.interpalpha))
-                return usage(); 
+                return tet_sample_image_usage();
               break;
-    default: return usage();
+    default: return tet_sample_image_usage();
       }
     }
 
   // Parse the filenames
-  if(optind + 4 != argc) return usage();
+  if(optind + 4 != argc) return tet_sample_image_usage();
   parm.fnMeshIn = argv[optind++];
   parm.fnMeshOut = argv[optind++];
   parm.fnImage = argv[optind++];

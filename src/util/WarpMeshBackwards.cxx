@@ -1,7 +1,5 @@
 #include <iostream>
 #include <string>
-#include <sstream>
-#include <set>
 
 #include <vnl/vnl_inverse.h>
 
@@ -28,7 +26,7 @@
 using namespace std;
 using namespace itk;
 
-int usage()
+int warp_mesh_backwards_usage()
 {
   cout << "warpmesh - Applies a warp field (Brian's format) to a VTK mesh" << endl;
   cout << "usage: " << endl;
@@ -128,50 +126,6 @@ struct WarpMeshParam
     }
 };
 
-template <class TMeshType> 
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType> 
-void WriteMesh(TMeshType *mesh, const char *fname)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
 
 template<class TMeshType>
 int ComputeVolumeOrArea(TMeshType *mesh, vtkFloatArray *cellarray, vtkFloatArray *pointarray, double &totalvol)
@@ -278,12 +232,12 @@ int WarpMesh(WarpMeshParam &parm)
 
     // Set up the transforms
     ijk2ras = ConstructNiftiSform(
-      warp[0]->GetDirection().GetVnlMatrix(),
+      warp[0]->GetDirection().GetVnlMatrix().as_ref(),
       warp[0]->GetOrigin().GetVnlVector(),
       warp[0]->GetSpacing().GetVnlVector());
 
     vtk2ras = ConstructVTKtoNiftiTransform(
-      warp[0]->GetDirection().GetVnlMatrix(),
+      warp[0]->GetDirection().GetVnlMatrix().as_ref(),
       warp[0]->GetOrigin().GetVnlVector(),
       warp[0]->GetSpacing().GetVnlVector());
     }
@@ -448,7 +402,7 @@ int WarpMesh(WarpMeshParam &parm)
 int main(int argc, char **argv)
 {
   // Check the parameters
-  if(argc < 4) return usage();
+  if(argc < 4) return warp_mesh_backwards_usage();
 
   // Parse the optional parameters
   int ch;
@@ -458,17 +412,17 @@ int main(int argc, char **argv)
     switch(ch)
       {
     case 'm': if(!scan_coord(optarg, parm.mesh_coord) || parm.mesh_coord==ANTS)
-                return usage(); 
+                return warp_mesh_backwards_usage();
               break;
     case 'w': if(!scan_coord(optarg, parm.warp_coord))
-                return usage(); 
+                return warp_mesh_backwards_usage();
               break;
-    default: return usage();
+    default: return warp_mesh_backwards_usage();
       }
     }
 
   // Parse the filenames
-  if(optind + 5 != argc && optind + 3 != argc) return usage();
+  if(optind + 5 != argc && optind + 3 != argc) return warp_mesh_backwards_usage();
   parm.fnMeshIn = argv[optind++];
   parm.fnMeshOut = argv[optind++];
   if(optind + 3 == argc)

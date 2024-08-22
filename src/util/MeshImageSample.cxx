@@ -26,7 +26,7 @@
 
 using namespace std;
 
-int usage()
+int mesh_image_sample_usage()
 {
   cout << "Usage: mesh_image_sample [options] mesh.vtk sample.img output.vtk array_name" << endl;
   cout << "Options: " << endl;
@@ -42,55 +42,6 @@ int usage()
   cout << "   -b <value>     : Background value (when vertex falls outside of the image)" << endl;
   cout << "                    defaults to NaN" << endl;
   return -1;
-}
-
-template <class TMeshType>
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname, bool vtk_binary)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool vtk_binary)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(vtk_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool vtk_binary)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(vtk_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
 }
 
 vtkSmartPointer<vtkUnstructuredGrid> ThresholdMesh(
@@ -322,7 +273,7 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
     if(arrold == NULL)
       {
       cerr << "RMS with non-zero first parameter requires array " << arrname << " in the mesh" << endl;
-      return usage();
+      return mesh_image_sample_usage();
       }
 
     // Add the new data to the old data
@@ -374,10 +325,10 @@ int MeshImageSample(int argc, char *argv[], size_t irms, size_t nrms, int interp
   return EXIT_SUCCESS;
 }
 
-int main(int argc, char *argv[])
+int mesh_image_sample_main(int argc, char *argv[])
 {
   if(argc < 5)
-    return usage();
+    return mesh_image_sample_usage();
 
   // Read optional parameters
   size_t irms = 0, nrms = 0;
@@ -400,7 +351,7 @@ int main(int argc, char *argv[])
       else
         {
         cerr << "error: -i flag needs one parameter" << endl;
-        return usage();
+        return mesh_image_sample_usage();
         }
       }
     else if(strcmp(argv[ip], "-rms") == 0)
@@ -413,7 +364,7 @@ int main(int argc, char *argv[])
       else
         {
         cerr << "error: -rms flag needs two parameters" << endl;
-        return usage();
+        return mesh_image_sample_usage();
         }
       }
     else if(strcmp(argv[ip], "-t") == 0)
@@ -427,7 +378,7 @@ int main(int argc, char *argv[])
       else
         {
         cerr << "error: -t flag needs two parameters" << endl;
-        return usage();
+        return mesh_image_sample_usage();
         }
       }
     else if(strcmp(argv[ip], "-C") == 0)
@@ -449,7 +400,7 @@ int main(int argc, char *argv[])
     else
       {
       cerr << "error: unrecognized parameter " << argv[ip] << endl;
-      return usage();
+      return mesh_image_sample_usage();
       }
     }
   

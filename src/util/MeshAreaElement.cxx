@@ -9,53 +9,9 @@
 #include "vtkSmartPointer.h"
 #include <vtkPointData.h>
 #include "vtkTriangle.h"
+#include "ReadWriteVTK.h"
 
-template <class TMeshType>
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
-int usage()
+int mesh_area_element_usage()
 {
   cout << "Usage: mesh_area_element input.vtk output.vtk" << endl;
   return -1;
@@ -116,7 +72,7 @@ MeshAreaElement(const char *fin, const char *fout)
 int main(int argc, char **argv)
 {
   if(argc < 3)
-    return usage();
+    return mesh_area_element_usage();
 
   return MeshAreaElement<vtkPolyData>(argv[1], argv[2]);
 }

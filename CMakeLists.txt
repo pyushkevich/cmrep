@@ -15,7 +15,7 @@ INCLUDE(CTest)
 # Versioning
 SET(CMREP_VERSION_MAJOR 1)
 SET(CMREP_VERSION_MINOR 0)
-SET(CMREP_VERSION_PATCH 0)
+SET(CMREP_VERSION_PATCH 2)
 SET(CMREP_VERSION_FULL "${CMREP_VERSION_MAJOR}.${CMREP_VERSION_MINOR}.${CMREP_VERSION_PATCH}")
 
 # Variables that determine the needed packages
@@ -454,6 +454,16 @@ SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} bcmrep_main bcmrep_test)
 ENDIF()
 
 # Include the utilities
+
+# TODO: eventually all the utilities code should go to this library
+ADD_LIBRARY(cmrep_meshutil_api
+  src/util/MeshTetraSample.cxx
+  src/util/MeshImageSample.cxx
+  src/util/ReadWriteVTK.cxx
+)
+
+SET(CMREP_API_LIBRARIES ${CMREP_API_LIBRARIES} cmrep_meshutil_api)
+
 ADD_EXECUTABLE(sphere_splat
   src/util/SplatOntoSphere.cxx)
 
@@ -471,11 +481,11 @@ ADD_EXECUTABLE(mesh2img
   src/util/DrawTriangles.cpp
   src/util/ReadWriteVTK.cxx)
 
-ADD_EXECUTABLE(mesh_image_sample
-  src/util/MeshImageSample.cxx)
+ADD_EXECUTABLE(mesh_image_sample src/thinexe/mesh_image_sample.cxx)
+TARGET_LINK_LIBRARIES(mesh_image_sample cmrep_meshutil_api)
 
-ADD_EXECUTABLE(mesh_tetra_sample
-  src/util/MeshTetraSample.cxx)
+ADD_EXECUTABLE(mesh_tetra_sample src/thinexe/mesh_tetra_sample.cxx)
+TARGET_LINK_LIBRARIES(mesh_tetra_sample cmrep_meshutil_api)
 
 ADD_EXECUTABLE(mesh_merge_arrays
   src/util/MeshMergeArrays.cxx
@@ -587,10 +597,14 @@ TARGET_LINK_LIBRARIES(surf2tet ${CMREP_UTIL_LIBS} ${TETGEN_LIBRARY})
 SET(CMREP_BINARY_TOOLS ${CMREP_BINARY_TOOLS} tetgen2vtk surf2tet)
 ENDIF()
 
+# Link libraries for the API
+vtk_module_autoinit(TARGETS cmrep_meshutil_api MODULES ${VTK_LIBRARIES})
+TARGET_LINK_LIBRARIES(cmrep_meshutil_api ${CMREP_UTIL_LIBS})
+
 # Link libraries for the tools
 FOREACH(CMREP_TOOL ${CMREP_UTIL_TOOLS})
 vtk_module_autoinit(TARGETS ${CMREP_TOOL} MODULES ${VTK_LIBRARIES})
-TARGET_LINK_LIBRARIES(${CMREP_TOOL} ${CMREP_UTIL_LIBS})
+TARGET_LINK_LIBRARIES(${CMREP_TOOL} ${CMREP_UTIL_LIBS} cmrep_meshutil_api)
 ENDFOREACH(CMREP_TOOL)
 
 # Add to the list of binaries

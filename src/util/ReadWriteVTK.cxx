@@ -7,6 +7,9 @@
 #include <vtkPolyDataWriter.h>
 #include <vtkOBJReader.h>
 #include <vtkPLYReader.h>
+#include <vtkUnstructuredGrid.h>
+#include <vtkUnstructuredGridReader.h>
+#include <vtkUnstructuredGridWriter.h>
 
 using namespace std;
 
@@ -90,4 +93,53 @@ void WriteVTKData(vtkPolyData *data, string fn, bool force_binary)
     cerr << "Could not find a writer for " << fn << endl;
     return;
     }
+}
+
+// Templated mesh IO methods
+template <class TMeshType>
+vtkSmartPointer<TMeshType> ReadMesh(const char *fname)
+{ return NULL; }
+
+template <>
+vtkSmartPointer<vtkUnstructuredGrid> ReadMesh<>(const char *fname)
+{
+  vtkNew<vtkUnstructuredGridReader> reader;
+  reader->SetFileName(fname);
+  reader->Update();
+  return reader->GetOutput();
+}
+
+template <>
+vtkSmartPointer<vtkPolyData> ReadMesh<>(const char *fname)
+{
+  vtkNew<vtkPolyDataReader> reader;
+  reader->SetFileName(fname);
+  reader->Update();
+  return reader->GetOutput();
+}
+
+template <class TMeshType>
+void WriteMesh(TMeshType *mesh, const char *fname, bool vtk_binary)
+{ }
+
+template <>
+void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool vtk_binary)
+{
+  vtkNew<vtkUnstructuredGridWriter> writer;
+  writer->SetFileName(fname);
+  writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
+  writer->Update();
+}
+
+template <>
+void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool vtk_binary)
+{
+  vtkNew<vtkPolyDataWriter> writer;
+  writer->SetFileName(fname);
+  writer->SetInputData(mesh);
+  if(vtk_binary)
+    writer->SetFileTypeToBinary();
+  writer->Update();
 }

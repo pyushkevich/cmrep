@@ -12,7 +12,7 @@
 
 using namespace std;
 
-int usage()
+int mesh_merge_arrays_usage()
 {
   cout << "Usage: mesh_merge_arrays [options] output_mesh array_name input_meshes" << endl;
   cout << "Options: " << endl;
@@ -25,55 +25,6 @@ int usage()
   cout << "                 input array." << endl;
   cout << "  -m <file>      Read mesh filenames from a file instead of command line" << endl;
   return -1;
-}
-
-template <class TMeshType>
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname, bool flag_write_binary = false)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool flag_write_binary)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(flag_write_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool flag_write_binary)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(flag_write_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
 }
 
 struct Parameters {
@@ -208,7 +159,7 @@ int main(int argc, char *argv[])
   if(i > argc - n_req_args)
     {
     cerr << "Not enough arguments provided on the command line, see usage" << endl;
-    return usage();
+    return mesh_merge_arrays_usage();
     }
 
   // Get the output filename

@@ -189,55 +189,6 @@ struct Cluster
 
 typedef std::vector<Cluster> ClusterArray;
 
-// Templated IO classes to read mesh data
-template <class TMeshType>
-TMeshType * ReadMesh(const char *)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <class TMeshType>
-void WriteMesh(TMeshType *mesh, const char *fname, bool force_binary = false)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname, bool force_binary)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(force_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname, bool force_binary)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  if(force_binary)
-    writer->SetFileTypeToBinary();
-  writer->Update();
-}
-
 enum Domain { POINT, CELL };
 
 bool operator < (const vnl_vector_fixed<double,3> &a, const vnl_vector_fixed<double, 3> &b)

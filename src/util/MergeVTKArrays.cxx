@@ -12,6 +12,7 @@
 #include <vtkCellData.h>
 #include <vtkDataArray.h>
 #include <vtkFloatArray.h>
+#include "ReadWriteVTK.h"
 
 using namespace std;
 using namespace vtksys;
@@ -26,52 +27,6 @@ int usage()
     "  ref.vtk  Mesh that will be used as reference. Must match all inputs\n"
     "  out.vtk  Output filename\n";
   return -1;
-}
-
-
-template <class TMeshType> 
-TMeshType * ReadMesh(const char *fname)
-{ return NULL; }
-
-template <>
-vtkUnstructuredGrid *ReadMesh<>(const char *fname)
-{
-  vtkUnstructuredGridReader *reader = vtkUnstructuredGridReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-template <>
-vtkPolyData *ReadMesh<>(const char *fname)
-{
-  vtkPolyDataReader *reader = vtkPolyDataReader::New();
-  reader->SetFileName(fname);
-  reader->Update();
-  return reader->GetOutput();
-}
-
-
-template <class TMeshType> 
-void WriteMesh(TMeshType *mesh, const char *fname)
-{ }
-
-template <>
-void WriteMesh<>(vtkUnstructuredGrid *mesh, const char *fname)
-{
-  vtkUnstructuredGridWriter *writer = vtkUnstructuredGridWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
-}
-
-template <>
-void WriteMesh<>(vtkPolyData *mesh, const char *fname)
-{
-  vtkPolyDataWriter *writer = vtkPolyDataWriter::New();
-  writer->SetFileName(fname);
-  writer->SetInputData(mesh);
-  writer->Update();
 }
 
 template <class TMeshType>
