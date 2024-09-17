@@ -18,7 +18,7 @@
 #include "vtkTriangleFilter.h"
 #include "vtkCell.h"
 #include "vtkContourFilter.h"
-#include <vtkDiscreteMarchingCubes.h>
+#include "vtkDiscreteFlyingEdges3D.h"
 #include <vtkUnsignedShortArray.h>
 #include <vtkAppendPolyData.h>
 #include <vtkPolyDataNormals.h>
@@ -179,47 +179,33 @@ int main(int argc, char *argv[])
   ConnectITKToVTK(fltExport.GetPointer(), fltImport);
 
   // Run marching cubes on the input image
-  vtkPolyData *pipe_tail;
+  vtkSmartPointer<vtkPolyData> pipe_tail;
   if(preserveLabels)
     {
-      std::cout << "Preserving Labels Mode" << std::endl;
+      size_t lo = ceil(cut); // take the first label above cut
+      size_t hi = floor(imax); // take the last integral label below imax
+      size_t n = hi - lo + 1; // number of labels in the result
+      std::cout << "-- Preserving " << n << " labels from " << lo << " to " << hi << std::endl;
 
-      // Append filter for assembling labels
-      vtkAppendPolyData *fltAppend = vtkAppendPolyData::New();
+      vtkNew<vtkDiscreteFlyingEdges3D> fltDFE;
+      fltDFE->SetInputConnection(fltImport->GetOutputPort());
+      fltDFE->GenerateValues(n, lo, hi);
+      fltDFE->Update();
+      pipe_tail = fltDFE->GetOutput();
 
-      // Extracting one label at a time and assigning label value
-      for (float i = cut; i <= imax; i += 1.0)
-        {
-        float lbl = floor(i);
+      auto scalars = pipe_tail->GetPointData()->GetScalars();
+      auto normals = pipe_tail->GetPointData()->GetNormals();
 
-        std::cout << "  -- Processing Label: " << lbl << std::endl;
-
-        // Extract one label
-        vtkDiscreteMarchingCubes *fltDMC = vtkDiscreteMarchingCubes::New();
-        fltDMC->SetInputConnection(fltImport->GetOutputPort());
-        fltDMC->ComputeGradientsOff();
-        fltDMC->ComputeScalarsOff();
-        fltDMC->SetNumberOfContours(1);
-        fltDMC->ComputeNormalsOn();
-        fltDMC->SetValue(0, lbl);
-        fltDMC->Update();
-
-        vtkPolyData *labelMesh = fltDMC->GetOutput();
-
-        // Set scalar values for the label
-        vtkUnsignedShortArray *scalar = vtkUnsignedShortArray::New();
-        scalar->SetNumberOfComponents(1);
-        for (vtkIdType i = 0; i < labelMesh->GetNumberOfPoints(); ++i)
+      // set NaN element to 0 to prevent reader errors
+      for(int i = 0; i < normals->GetNumberOfTuples(); i++)
+        for(int j = 0; j < normals->GetNumberOfComponents(); j++)
           {
-          scalar->InsertNextTuple1(lbl);
+            if (isnan(normals->GetComponent(i, j)))
+              normals->SetComponent(i, j, 0);
           }
-        scalar->SetName("Label");
-        labelMesh->GetPointData()->SetScalars(scalar);
-        fltAppend->AddInputData(labelMesh);
-        }
 
-    fltAppend->Update();
-    pipe_tail = fltAppend->GetOutput();
+      scalars->SetName("Label");
+
     }
   else if(!flag_2d)
     {
