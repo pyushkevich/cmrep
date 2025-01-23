@@ -238,6 +238,22 @@ AddArrayToMesh(vtkDataSet *t, Domain dom, const string &name,
   unsigned int n_comp, float defval, bool make_active = false)
 { return AddArrayToMesh(t, dom, name.c_str(), n_comp, defval, make_active); }
 
+void CheckArrayConsistency(vtkDataSet *ds, vtkDataArray *arr, Domain dom, const char *name)
+{
+  int n_expected = dom == POINT ? ds->GetNumberOfPoints() : ds->GetNumberOfCells();
+  if(arr->GetNumberOfTuples() != n_expected) 
+    {
+    std::ostringstream oss;
+    oss
+      << "Number of tuples (" << arr->GetNumberOfTuples() 
+      << ") in data array '" << name << "' does not match "
+      << "the number of " << (dom == POINT ? "points" : "cells") 
+      << " (" << n_expected << ") in the mesh"
+      << std::endl;
+    throw MCException(oss.str().c_str());
+    }
+}
+
 vtkDataArray * GetArrayFromMesh(vtkDataSet *t, Domain dom, const char *name)
 {
   vtkDataArray * data;
@@ -245,6 +261,8 @@ vtkDataArray * GetArrayFromMesh(vtkDataSet *t, Domain dom, const char *name)
     data = t->GetPointData()->GetArray(name);
   else
     data = t->GetCellData()->GetArray(name);
+
+  CheckArrayConsistency(t, data, dom, name);
   return data;
 }
 vtkDataArray * GetArrayFromMesh(vtkDataSet *t, Domain dom, const string &name)
@@ -257,6 +275,8 @@ vtkDataArray * GetScalarsFromMesh(vtkDataSet *t, Domain dom)
     data = t->GetPointData()->GetScalars();
   else
     data = t->GetCellData()->GetScalars();
+
+  CheckArrayConsistency(t, data, dom, "scalars");
   return data;
 }
 
@@ -1329,8 +1349,10 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
       Xj.set_size(ns - n_nans, X.cols());
       for(int k = 0, p = 0; k < ns; k++)
         if(!vnl_math::isnan(Yperm(k,j)))
+          {
+          assert(p < Xj.rows());
           Xj.set_row(p++, X.get_row(k));
-
+          }
       // Compute A - should be Xj?
       A = vnl_matrix_inverse<double>(Xj.transpose() * Xj).pinverse(rank);
       AXjT = A * Xj.transpose();
@@ -1345,7 +1367,10 @@ GeneralLinearModel::ComputeWithMissingData(const vnl_matrix<double> &Yperm, bool
     // Copy the Y vector's elements into Yk
     for(int k = 0, p = 0; k < ns; k++)
       if(!vnl_math::isnan(Yperm(k,j)))
+        {
+        assert(p < Yj.size());
         Yj[p++] = Yperm(k,j);
+        }
     
     // Compute the estimated betas
     vnl_vector<double> beta_j = AXjT * Yj;
